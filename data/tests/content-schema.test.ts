@@ -1,18 +1,17 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ContentIndex, InterviewPage, Mindmap, ModuleDoc, OverviewPage, QuickOverview, Topic } from '../contracts/content.models.ts';
 
-const require = createRequire(import.meta.url);
+const require = createRequire(`${process.cwd()}/data/tests/content-schema.test.ts`);
 const Ajv2020 = require('ajv/dist/2020.js') as new (options?: object) => {
   addSchema: (schema: unknown) => void;
   compile: (schema: unknown) => ((data: unknown) => boolean) & { errors?: unknown };
 };
 const addFormats = require('ajv-formats') as (ajv: unknown) => void;
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const root = process.cwd();
 const dataRoot = path.join(root, 'data');
 const schemaDir = path.join(dataRoot, 'schemas');
 const csharpRoot = path.join(dataRoot, 'csharp');
