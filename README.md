@@ -55,11 +55,27 @@ C# is the first live track (18 modules, 109 topics). Other languages and framewo
 
 ## GitHub Pages
 
-1. Push to `main`.
-2. In the repo: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-3. The [`.github/workflows/pages.yml`](.github/workflows/pages.yml) workflow runs lint, typecheck, tests, `build:pages`, and deploys `dist/interview-adda/browser`.
+The build job succeeded; deploy fails with **404** until Pages is available for this repository.
 
-Published URL (default): `https://<username>.github.io/interview-adda/`
+### Why deploy failed
+
+This repo is **private**. GitHub Pages on a private repository requires **GitHub Pro** (or Team/Enterprise). On the free plan, Pages works only for **public** repositories.
+
+You can either:
+
+1. **Make the repo public** (recommended for interview docs): **Settings → General → Danger Zone → Change repository visibility → Public**
+2. **Upgrade to GitHub Pro** and keep the repo private
+3. **Use another host** (Netlify, Cloudflare Pages, etc.) and deploy the `dist/interview-adda/browser` folder from `npm run build:pages`
+
+### Enable Pages (after the repo is eligible)
+
+1. Open [Pages settings](https://github.com/amitpandey5670/interview-adda/settings/pages).
+2. Under **Build and deployment → Source**, choose **GitHub Actions** (not “Deploy from a branch”).
+3. Re-run the failed workflow, or push a new commit to `main`.
+
+The [`.github/workflows/pages.yml`](.github/workflows/pages.yml) workflow runs lint, typecheck, tests, `build:pages`, and deploys `dist/interview-adda/browser`.
+
+Published URL (default): `https://amitpandey5670.github.io/interview-adda/`
 
 ## Project structure
 
