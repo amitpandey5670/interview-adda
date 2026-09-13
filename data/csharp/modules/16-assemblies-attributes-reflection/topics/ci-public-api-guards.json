@@ -1,0 +1,78 @@
+{
+  "id": "csharp-16-ci-public-api-guards",
+  "slug": "ci-public-api-guards",
+  "title": "CI that blocks unapproved public APIs",
+  "moduleId": "csharp-16-assemblies-attributes-reflection",
+  "order": 5,
+  "hook": "A public method on a shared library is a promise. If CI does not see that promise as a file diff, someone will ship a breaking change inside a “tiny helper” PR.",
+  "sections": [
+    {
+      "heading": "Treat the public surface as reviewed text",
+      "prose": "Microsoft.CodeAnalysis.PublicApiAnalyzers (and similar tools) keep `PublicAPI.Shipped.txt` and `PublicAPI.Unshipped.txt` next to the project. Every public type and member must be listed. A new `public` method that is not in those files produces a diagnostic (commonly RS0016). CI fails. The author must add a line — that line is the review artifact, the same way an OpenAPI diff is the artifact for an HTTP contract. `Shipped` is what you already released; `Unshipped` is what this branch intends to release. At ship time you move lines from Unshipped to Shipped. InternalsVisibleTo (this module) exists so tests do not force `public` just to compile.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Unapproved public surface vs friend tests",
+          "code": "public sealed class AttemptCache\n{\n    public Task<string?> GetAsync(string key, CancellationToken ct) =>\n        Task.FromResult<string?>(null);\n\n    // Adding this without updating PublicAPI.Unshipped.txt fails CI:\n    // public Task RemoveAsync(string key, CancellationToken ct) => Task.CompletedTask;\n\n    internal Task EvictLocalAsync(string key) => Task.CompletedTask;\n}\n\n// Catalog.csproj package ref: Microsoft.CodeAnalysis.PublicApiAnalyzers\n// PublicAPI.Unshipped.txt must list GetAsync before the build is green.",
+          "explanation": "EvictLocalAsync can stay internal and tested via InternalsVisibleTo. GetAsync is the contract. CI, not memory, enforces that split."
+        }
+      ]
+    },
+    {
+      "heading": "Obsolete, Experimental, and analyzers together",
+      "prose": "`[Obsolete(\"…\", error: true)]` stops callers compiling against a dead path. `[Experimental(\"MyLib.AuthPreview\")]` (C# 12) makes use a warning unless the caller suppresses that diagnostic id — useful for an LTI token validator you are not ready to support. Neither replaces a public API file: an experimental public type is still public and still a trim/doc/binary contract. Analyzers packaged with your NuGet (Roslyn SDK guidance) teach consumers; public API files protect you from yourself. Code-style naming rules (identifier conventions) are orthogonal: they keep `IWorkerQueue` looking like .NET, they do not version your surface.",
+      "snippets": [
+        {
+          "language": "xml",
+          "label": "Fail the build on API drift",
+          "code": "<ItemGroup>\n  <PackageReference Include=\"Microsoft.CodeAnalysis.PublicApiAnalyzers\" Version=\"3.3.4\" PrivateAssets=\"all\" />\n</ItemGroup>\n<PropertyGroup>\n  <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  <WarningsAsErrors>$(WarningsAsErrors);RS0016</WarningsAsErrors>\n</PropertyGroup>",
+          "explanation": "PrivateAssets keeps the analyzer off your consumers. TreatWarningsAsErrors plus the RS diagnostic is what makes GitHub Actions block the merge."
+        }
+      ]
+    },
+    {
+      "heading": "What reviewers should look at",
+      "prose": "In a PR that adds `public`, read the `.txt` diff first, then the implementation. Ask: is this member returning a DTO or a domain type (module 18)? Does it allocate `string` copies of a CSV row that Span could have avoided (module 17)? Is the name PascalCase and free of double underscores reserved for the compiler (identifier-names guidance)? If the change is “make it public so the test project compiles,” reject and add InternalsVisibleTo. High-concurrency attempt-submit code that accidentally exposes a `public static` mutable dictionary is not a style issue; it is an API incident waiting for two Lambdas."
+    }
+  ],
+  "interviewTakeaways": [
+    "Public API text files are the reviewed contract; undeclared public members fail CI.",
+    "Keep tests on InternalsVisibleTo so you do not inflate the shipped surface.",
+    "Obsolete and Experimental communicate intent; they do not replace a baseline diff."
+  ],
+  "commonPitfalls": [
+    "Checking in Unshipped.txt growth forever and never promoting to Shipped at release.",
+    "Referencing the analyzer without PrivateAssets, so every consumer gets your RS diagnostics.",
+    "Making types public to silence tests instead of declaring a friend assembly."
+  ],
+  "relatedTopicIds": [
+    "csharp-16-assemblies-and-metadata",
+    "csharp-16-attributes",
+    "csharp-18-code-review-radar",
+    "csharp-04-access-modifiers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "api-extractor / public rollup",
+      "note": "api-extractor and `.d.ts` rollups fail CI when exported types drift. PublicAPI.Shipped.txt is the C# analogue for binary public surface, not for ambient types.",
+      "futureTopicSlug": "typescript/tooling/api-extractor"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Roslyn SDK: analyzers and team standards",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview"
+    },
+    {
+      "title": "Experimental attribute (C# 12)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-12"
+    },
+    {
+      "title": "Identifier names",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

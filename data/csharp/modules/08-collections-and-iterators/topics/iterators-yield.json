@@ -1,0 +1,79 @@
+{
+  "id": "csharp-08-iterators-yield",
+  "slug": "iterators-yield",
+  "title": "Iterators and yield",
+  "moduleId": "csharp-08-collections-and-iterators",
+  "order": 4,
+  "hook": "yield return does not run your method. It builds a state machine that runs on MoveNext. That is why a CSV importer can look instant and then blow up on the first foreach — or twice if you enumerate twice.",
+  "sections": [
+    {
+      "heading": "Deferred execution",
+      "prose": "An iterator method returns IEnumerable<T> or IEnumerator<T> (or the non-generic twins). The compiler generates a nested class that stores locals and a resume point. The first MoveNext runs until the first yield return; the next MoveNext continues after it. yield break ends the sequence. You cannot mix a normal return of a collection with yield in the same method. Exceptions from the iterator body surface when the consumer pulls the next item, not when you called ReadRows(path). That delay is the feature and the bug.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "CSV rows yielded, not buffered",
+          "code": "IEnumerable<string[]> ReadCsvRows(string path)\n{\n    using StreamReader reader = File.OpenText(path);\n    string? line;\n    while ((line = reader.ReadLine()) is not null)\n    {\n        yield return line.Split(',');\n    }\n}\n\nIEnumerable<string[]> rows = ReadCsvRows(\"attempts.csv\"); // file not read yet\nforeach (string[] row in rows) Import(row);              // first pass\nforeach (string[] row in rows) Audit(row);               // second pass reopens? No — this example\n// re-executes the iterator, which opens the file again.",
+          "explanation": "Each foreach creates a new enumerator and re-opens the file. To snapshot, materialize with ToList once, then walk the list."
+        }
+      ]
+    },
+    {
+      "heading": "Multiple enumeration and resources",
+      "prose": "LINQ is built on this model; composing Where/Select stacks iterators. Calling Count() then foreach enumerates twice. If the source is an open network stream or a non-rewindable SQS enumerator you invented, the second pass is empty or throws. using inside an iterator is valid: Dispose runs when the enumerator is disposed, which foreach does. Returning an iterator that closes over a Stream you dispose in the caller is a use-after-dispose. Materialize or keep the using around the foreach, not around the call that only constructed the iterator."
+    },
+    {
+      "heading": "Async iterators",
+      "prose": "yield return in an async IAsyncEnumerable<T> method is how you stream SQS pages without buffering the world. await foreach consumes it. That state machine, CancellationToken via [EnumeratorCancellation], and IAsyncDisposable are module 13. If an interviewer asks “can yield be async?,” say yes, IAsyncEnumerable, then point forward."
+    }
+  ],
+  "interviewTakeaways": [
+    "yield return is deferred; the method body runs during enumeration.",
+    "Two foreach calls mean two executions; ToList if you need a snapshot.",
+    "IAsyncEnumerable / await foreach is module 13."
+  ],
+  "commonPitfalls": [
+    "Disposing the StreamReader before the caller enumerates.",
+    "Using yield to wrap a List you already built — you added a state machine for no benefit.",
+    "Assuming iterator exceptions happen at the call site."
+  ],
+  "relatedTopicIds": [
+    "csharp-08-ienumerable-foreach",
+    "csharp-08-when-not-to-invent",
+    "csharp-08-list-dictionary-set-queue",
+    "csharp-13-async-enumerable",
+    "csharp-12-deferred-execution"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "function* and yield",
+      "note": "JS generators are the same deferred idea. for...of pulls. Re-iterating a generator that already finished is empty unless you call the factory again.",
+      "futureTopicSlug": "javascript/iteration/generators"
+    },
+    {
+      "language": "javascript",
+      "concept": "async generators",
+      "note": "async function* maps to IAsyncEnumerable in C# (module 13), not to Task<IEnumerable<T>>.",
+      "futureTopicSlug": "javascript/iteration/async-generators"
+    },
+    {
+      "language": "javascript",
+      "concept": "Generators",
+      "note": "function* and yield in JS are the closest analog to C# iterator methods.",
+      "futureTopicSlug": "javascript/async/generators"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Iterators",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/iterators"
+    },
+    {
+      "title": "Iterators (programming guide)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/iterators"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "csv-import"
+}

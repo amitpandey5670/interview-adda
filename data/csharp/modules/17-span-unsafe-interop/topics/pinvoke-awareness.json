@@ -1,0 +1,77 @@
+{
+  "id": "csharp-17-pinvoke-awareness",
+  "slug": "pinvoke-awareness",
+  "title": "P/Invoke awareness without becoming a C++ shop",
+  "moduleId": "csharp-17-span-unsafe-interop",
+  "order": 4,
+  "hook": "P/Invoke is how managed code calls a native export. It is a marshalling and lifetime problem. It is not a request to rewrite the worker in C++.",
+  "sections": [
+    {
+      "heading": "The boundary, not the language",
+      "prose": "A P/Invoke declares a native entry point, a calling convention, and how each argument becomes bits the other ABI understands. Strings, bools, and structs are where people lose days. You need to know: who allocates, who frees, whether the native API expects UTF-16 or UTF-8, and whether the handle is an `IntPtr` you must `Dispose`. SkiaSharp (and similar) wrap that handle in a managed object with `Dispose` — forgetting `using` leaks native heaps the CLR GC will never see. That is module 06’s `IDisposable` with teeth. You do not need to recite `stdcall` versus `cdecl` unless the signature is wrong; you need to own the wrapper project so the rest of the solution stays safe C#.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "LibraryImport instead of a hand-rolled DllImport stub",
+          "code": "using System.Runtime.InteropServices;\n\ninternal static partial class NativeCodec\n{\n    [LibraryImport(\"codec\", StringMarshalling = StringMarshalling.Utf8)]\n    internal static partial int Encode(ReadOnlySpan<byte> pixels, int length, int width);\n}\n\ninternal sealed class CodecSession : IDisposable\n{\n    public void Dispose() => /* release native session */ GC.SuppressFinalize(this);\n}",
+          "explanation": "LibraryImport is a source generator (module 16). The method is partial, the project allows unsafe blocks, marshalling is generated at compile time — including Native AOT — instead of a runtime IL stub from DllImport."
+        }
+      ]
+    },
+    {
+      "heading": "Span versus Memory at the native edge",
+      "prose": "Microsoft’s memory guidelines: wrap a synchronous native call with `Span<T>` (and `fixed` or generated marshalling). Wrap an asynchronous native call with `Memory<T>` and `Memory<T>.Pin`, because `fixed` cannot span an `await`. Never pass a pinned span without a length if the native side might walk until `\\0`. Prefer letting `LibraryImport` marshal `ReadOnlySpan<byte>` when the generator supports it. If the native library is a RabbitMQ C client you should not have chosen, stop — use the managed client. P/Invoke is for the library you cannot avoid (codec, OS, vendor SDK), not for fashion.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Wrong: span as a C string",
+          "code": "// WRONG: native walks until '\\0'; spans are not terminated.\n// NativeParse(p);\n\n// RIGHT: length is part of the contract.\n// NativeParse(p, payload.Length);",
+          "explanation": "The unsafe best-practices doc calls this out explicitly. Interviews like this because it shows you have read the boundary rules, not a C++ textbook."
+        }
+      ]
+    },
+    {
+      "heading": "What this track will not teach",
+      "prose": "This is not COM, C++/CLI, or how to write a vtable. If an interviewer dives into `MarshalAs`, answer with “I would look up the library’s ABI, generate LibraryImport, write interop tests, and keep the unsafe project tiny.” Then steer to lifetime: `IDisposable`, pinning duration, and AOT. Seniority here is containment."
+    }
+  ],
+  "interviewTakeaways": [
+    "P/Invoke is marshalling plus lifetime; prefer LibraryImport source generation over DllImport.",
+    "Synchronous native wrappers take Span; asynchronous ones take Memory and Pin.",
+    "Native handles need Dispose; the CLR will not collect a SkiaSharp-style unmanaged heap for you."
+  ],
+  "commonPitfalls": [
+    "Calling DllImport with CharSet mismatches and blaming the native vendor.",
+    "Pinning a buffer for the lifetime of a request instead of for the native call.",
+    "Spreading AllowUnsafeBlocks and native types into domain assemblies."
+  ],
+  "relatedTopicIds": [
+    "csharp-17-unsafe-pointers-fixed",
+    "csharp-17-span-memory",
+    "csharp-16-source-generators"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Node-API / ffi-napi",
+      "note": "Node native addons and bun:ffi are the same class of problem: ABI, strings, and who frees. JS still does not pin interior pointers the way fixed does.",
+      "futureTopicSlug": "javascript/native/ffi"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "P/Invoke source generation",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke-source-generation"
+    },
+    {
+      "title": "Memory<T> usage guidelines (rules 9–10)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
+    },
+    {
+      "title": "Unsafe code best practices",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/unsafe-code/best-practices"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "skiasharp-dispose"
+}

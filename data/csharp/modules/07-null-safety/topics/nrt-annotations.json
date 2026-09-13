@@ -1,0 +1,67 @@
+{
+  "id": "csharp-07-nrt-annotations",
+  "slug": "nrt-annotations",
+  "title": "NRT annotations, #nullable, and compiler warnings",
+  "moduleId": "csharp-07-null-safety",
+  "order": 2,
+  "hook": "Nullable reference types are a compiler conversation: you annotate intent, the compiler tracks not-null versus maybe-null, and it warns when the code disagrees. It does not rewrite IL to ban null.",
+  "sections": [
+    {
+      "heading": "Nullable context",
+      "prose": "SDK templates for modern .NET, including .NET 10, set <Nullable>enable</Nullable> in the project file. That turns on both the annotation context (string versus string?) and the warning context (CS8600-family diagnostics). Older libraries may still be nullable-oblivious: their string parameters are treated as neither annotated nor warned, which is why a Redis client or AWS SDK method can return string and still be null. File-level #nullable enable, disable, restore, and #nullable enable warnings let you migrate a large worker without boiling the ocean. Interviews want the project switch first, pragmas for islands, not a pile of !.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Annotate a cache lookup",
+          "code": "#nullable enable\nstring BuildKey(string tenantId, string userId) => $\"session:{tenantId}:{userId}\";\n\nstring? ReadSessionJson(IDatabase redis, string key)\n{\n    RedisValue value = redis.StringGet(key);\n    return value.HasValue ? value.ToString() : null;\n}\n\nint SessionLength(string? json) => json is not null ? json.Length : 0;",
+          "explanation": "BuildKey is non-nullable: a null tenantId is a warning. Redis miss is string?. Pattern matching updates null-state so json.Length is safe."
+        }
+      ]
+    },
+    {
+      "heading": "What the warnings actually mean",
+      "prose": "Null-state analysis labels each expression not-null or maybe-null as it walks the method. Warning on a non-nullable variable means you assigned something maybe-null (CS8600 / CS8601). Warning on a nullable variable means you dereferenced it while it was still maybe-null (CS8602). Both say the same thing: the code does not match the annotation. Fixes Microsoft documents are: add a check, fix the ? or !, add an analysis attribute, initialize the field, or verify the project setting. Silencing with #pragma warning disable CS8602 is not a strategy; it is how an auth header parser ships an NRE to production."
+    },
+    {
+      "heading": "Initialization and records",
+      "prose": "Non-nullable reference fields must be assigned by every constructor path. Object initializers do not count unless the member is required (next topic). A common Redis options class with public string Connection = null!; is a smell: you told the compiler to stop looking. Prefer a constructor, a required property, or string? until the config binder has run. C# 14 field-backed properties still obey the same null-state rules on the backing storage — new syntax, same analysis."
+    }
+  ],
+  "interviewTakeaways": [
+    "<Nullable>enable</Nullable> is the project-wide switch; #nullable is per file.",
+    "Warnings encode mismatched intent, not a runtime null ban.",
+    "if (x is not null) / is { } narrows null-state; the compiler is not psychic across helpers unless you annotate them."
+  ],
+  "commonPitfalls": [
+    "Leaving a library nullable-oblivious and trusting its string return as non-null.",
+    "Initializing with null! on every field to ‘make the build green.’",
+    "Dereferencing SQS Message.Body without a check because the AWS types were annotated loosely."
+  ],
+  "relatedTopicIds": [
+    "csharp-07-nullable-value-vs-reference",
+    "csharp-07-null-forgiving-and-checks",
+    "csharp-07-required-and-null-attributes",
+    "csharp-02-preprocessor",
+    "csharp-03-null-and-nullable-values"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "strictNullChecks and tsconfig",
+      "note": "strictNullChecks is the TS analogue of <Nullable>enable</Nullable>. Both are compiler modes, not runtime checks.",
+      "futureTopicSlug": "typescript/compiler/strict-null-checks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Nullable reference types (fundamentals)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/null-safety/nullable-reference-types"
+    },
+    {
+      "title": "Resolve nullable warnings",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/null-safety/resolve-warnings"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

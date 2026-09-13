@@ -1,0 +1,65 @@
+{
+  "id": "csharp-15-locks-and-interlocked",
+  "slug": "locks-and-interlocked",
+  "title": "lock, Interlocked, and primitives",
+  "moduleId": "csharp-15-concurrency-and-threading",
+  "order": 2,
+  "hook": "lock is mutual exclusion plus a memory barrier. Interlocked is a single atomic instruction. volatile is neither. On .NET 10 you should lock a dedicated System.Threading.Lock.",
+  "sections": [
+    {
+      "heading": "What lock compiles to",
+      "prose": "For a System.Threading.Lock target (C# 13 / .NET 9+), lock calls EnterScope and disposes the scope in finally. For any other reference, it is Monitor.Enter/Exit in a finally. Recursion on the same thread is allowed. Microsoft’s best practices: dedicated private instance, never typeof(T), never this, never a string interned by other code. Keep the body tiny and CPU-only. Mutex is a kernel, cross-process name; it is for a single-instance desktop tool, not for request-level Redis. SemaphoreSlim is a counting gate that has WaitAsync, so you can throttle 8 concurrent origin fills without blocking a pool thread while waiting to enter — still release in finally, still do not treat it as a substitute for unbounded I/O inside the gate without timeouts.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "C# 13 Lock for memory state; Interlocked for a counter",
+          "code": "public sealed class SubmitGate\n{\n    private readonly Lock _lock = new();\n    private int _inFlight;\n    private Dictionary<string, int> _scores = [];\n\n    public int Register(string attemptId, int delta)\n    {\n        Interlocked.Increment(ref _inFlight);\n        try\n        {\n            lock (_lock)\n            {\n                _scores[attemptId] = _scores.GetValueOrDefault(attemptId) + delta;\n                return _scores[attemptId];\n            }\n        }\n        finally\n        {\n            Interlocked.Decrement(ref _inFlight);\n        }\n    }\n}",
+          "explanation": "The dictionary needs mutual exclusion. The counter only needs Interlocked. Neither path calls Redis inside the lock."
+        }
+      ]
+    },
+    {
+      "heading": "volatile’s narrow, discouraged role",
+      "prose": "volatile tells the C# compiler and runtime not to cache a field in a register across reads in some cases. Microsoft’s current language reference warns that it is misunderstood: no atomic ++, no mutual exclusion, no guaranteed immediate visibility on every processor for every pattern. You cannot mark long or double volatile. Prefer Interlocked.Read/Exchange or a lock. The old Worker _shouldStop sample still appears in docs; in new code a CancellationToken or Interlocked.Exchange on an int flag is clearer. ReaderWriterLockSlim is for rare read-heavy in-memory maps; ConcurrentDictionary is usually simpler."
+    }
+  ],
+  "interviewTakeaways": [
+    "lock = exclusive section + barrier. Interlocked = atomic RMW. volatile = weak ordering hint.",
+    "Lock a private System.Threading.Lock (or object on older TFMs).",
+    "SemaphoreSlim.WaitAsync throttles; Mutex is cross-process."
+  ],
+  "commonPitfalls": [
+    "lock (this) or lock (typeof(MyType)).",
+    "await inside lock.",
+    "Using volatile int and ++ for a shared attempt counter."
+  ],
+  "introducedIn": "System.Threading.Lock with lock statement in C# 13 / .NET 9",
+  "relatedTopicIds": [
+    "csharp-15-races-deadlocks",
+    "csharp-15-high-concurrency-scenario",
+    "csharp-13-configureawait"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "SharedArrayBuffer and Atomics",
+      "note": "JS on one thread does not need lock for objects. Across workers, Atomics are the Interlocked analog. There is no language lock statement.",
+      "futureTopicSlug": "javascript/concurrency/atomics"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "The lock statement",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock"
+    },
+    {
+      "title": "volatile keyword",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/volatile"
+    },
+    {
+      "title": "Interlocked class",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked"
+    }
+  ],
+  "scenarioTag": "high-concurrency"
+}

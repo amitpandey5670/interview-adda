@@ -1,0 +1,74 @@
+{
+  "id": "csharp-17-stackalloc-csv",
+  "slug": "stackalloc-csv",
+  "title": "stackalloc and slicing a large CSV",
+  "moduleId": "csharp-17-span-unsafe-interop",
+  "order": 2,
+  "hook": "A bulk CSV import that `Split(',')`s every row is a GC test, not a parser. Slice the line; allocate only the values you must keep.",
+  "sections": [
+    {
+      "heading": "The allocation shape of a naive import",
+      "prose": "A file with a million rows and twelve columns, parsed with `line.Split(',')`, produces about twelve million strings plus the array per row. Those strings live on the heap even if you only needed three integer columns. `Substring` is the same tax. The import job then competes with the 199-to-999 concurrent attempt-submit path for GEN0. The language already gives you `ReadOnlySpan<char>` over the line, `IndexOf`, `Slice`, and `int.TryParse(ReadOnlySpan<char>, …)` (and UTF-8 `Utf8Parser` on `ReadOnlySpan<byte>`). Retain a `string` only when the domain entity must own the name after the buffer is recycled.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Slice cells without Split",
+          "code": "static bool TryReadScore(ReadOnlySpan<char> line, out int userId, out int score)\n{\n    userId = 0;\n    score = 0;\n    var comma = line.IndexOf(',');\n    if (comma < 0) return false;\n    if (!int.TryParse(line[..comma], out userId)) return false;\n    var rest = line[(comma + 1)..];\n    var comma2 = rest.IndexOf(',');\n    var scoreCell = comma2 < 0 ? rest : rest[..comma2];\n    return int.TryParse(scoreCell, out score);\n}",
+          "explanation": "Range operators on span are slices, not new strings. Only userId and score survive as values. Add a string field only if you persist a name."
+        }
+      ]
+    },
+    {
+      "heading": "stackalloc as a bounded scratch pad",
+      "prose": "`stackalloc T[n]` allocates on the stack and yields a `Span<T>` (safe) or a pointer (unsafe). It is not `new T[n]`. The stack is small; a per-row `stackalloc byte[1_000_000]` will blow the stack in a recursive or deeply async worker. Use it for a fixed upper bound you can defend: decode at most 256 bytes of a normalized key, format a cache key, or unescape one cell. C# 12 collection expressions can create spans; they still need somewhere to live — a stackalloc or an array. Prefer `ArrayPool<byte>.Shared.Rent` when the size is unknown or large, and return the buffer. `stackalloc` inside a loop is fine when `n` is tiny; it is not a replacement for a pooled scratch buffer on a 2 GB file.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Bounded stack scratch, pool for the file",
+          "code": "Span<char> scratch = stackalloc char[64];\nstatic string FormatAttemptKey(int tenantId, int attemptId, Span<char> scratch)\n{\n    if (!scratch.TryWrite($\"attempt:{tenantId}:{attemptId}\", out var written))\n    {\n        return $\"attempt:{tenantId}:{attemptId}\";\n    }\n    return new string(scratch[..written]);\n}",
+          "explanation": "The format lives on the stack until you decide to promote it to a Redis key string. The CSV file itself stays in a rented byte buffer, not on the stack."
+        }
+      ]
+    },
+    {
+      "heading": "When slicing is not enough",
+      "prose": "Quoted CSV fields, embedded newlines, and encodings that are not UTF-16 force a real parser. You can still feed it `ReadOnlySpan<byte>` from a pipeline (`System.IO.Pipelines`) instead of `File.ReadAllText`. Do not mix `stackalloc` with an `async` method across `await` — the span would refer to a dead frame. Parse one chunk synchronously, then await the next read with `Memory<byte>`. That is the same Span-versus-Memory split as the previous topic, applied to import."
+    }
+  ],
+  "interviewTakeaways": [
+    "Split and Substring allocate; IndexOf plus Slice plus span TryParse do not retain cells.",
+    "stackalloc is bounded stack memory, not a heap array and not a 2 GB file strategy.",
+    "Promote to string only for data the domain must own after the buffer is reused."
+  ],
+  "commonPitfalls": [
+    "stackalloc with a size taken from the CSV line length — a long line becomes a stack overflow.",
+    "Returning a Span that pointed at stackalloc to the caller.",
+    "Parsing with string Split “just for the import job” and then wondering why GEN0 spiked beside live traffic."
+  ],
+  "relatedTopicIds": [
+    "csharp-17-span-memory",
+    "csharp-18-domain-dto-record",
+    "csharp-16-source-generators",
+    "csharp-08-iterators-yield"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "string split allocation",
+      "note": "`line.split(',')` in Node allocates an array of strings the same way. Buffer/Uint8Array index scanning is the closer analogue to ReadOnlySpan<byte>.",
+      "futureTopicSlug": "javascript/binary/buffer-slicing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "stackalloc operator",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/stackalloc"
+    },
+    {
+      "title": "Memory<T> usage guidelines",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "csv-import"
+}

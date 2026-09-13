@@ -1,0 +1,71 @@
+{
+  "id": "csharp-07-null-forgiving-and-checks",
+  "slug": "null-forgiving-and-checks",
+  "title": "Null-forgiving operator and ArgumentNullException",
+  "moduleId": "csharp-07-null-safety",
+  "order": 3,
+  "hook": "The postfix ! does nothing at run time. ArgumentNullException.ThrowIfNull does. Interviews listen for which one you reach for at an SQS or auth boundary.",
+  "sections": [
+    {
+      "heading": "Operators that keep you honest",
+      "prose": "?. and ?[] skip the member or indexer when the receiver is null. ?? and ??= supply a fallback. is not null / is { } is the preferred test; == null still works but loses pattern narrowing in some generic cases. These operators change control flow. The postfix null-forgiving operator x! does not: Microsoft’s language reference is explicit that x! evaluates as x and only suppresses warnings. Use it when you are writing a unit test that must pass null into a non-nullable parameter, or when you have a proof the analyzer cannot see and you cannot add an attribute. Do not use it on RedisValue.ToString() because ‘the key usually exists.’",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Guard an SQS record, do not bang it",
+          "code": "void Handle(Message message)\n{\n    ArgumentNullException.ThrowIfNull(message);\n    ArgumentException.ThrowIfNullOrWhiteSpace(message.Body);\n\n    string body = message.Body; // null-state is not-null after the throws\n    string? correlation = message.MessageAttributes.TryGetValue(\"correlationId\", out var attr)\n        ? attr.StringValue\n        : null;\n    string key = correlation ?? message.MessageId;\n}",
+          "explanation": "ThrowIfNull is a runtime guard and a null-state update. Optional attributes stay string?. No ! required."
+        }
+      ]
+    },
+    {
+      "heading": "ThrowIfNull versus handwritten if",
+      "prose": "ArgumentNullException.ThrowIfNull(argument) uses CallerArgumentExpression so the parameter name is captured without nameof. After the call, analysis treats the argument as not-null — the BCL annotates it with [NotNull]. ThrowIfNullOrWhiteSpace covers tokens and header values. A handwritten if (x is null) throw new ArgumentNullException(nameof(x)) is still correct on older TFMs; on .NET 10 prefer the helpers. Guards belong at the public edge of a worker: deserialized SQS body, JWT subject, config connection string. Internal helpers can assume non-null once the edge has thrown."
+    },
+    {
+      "heading": "When ! is legitimate",
+      "prose": "Tests that assert a constructor throws on null need Person(null!). DI or source generators sometimes produce a non-null value the analyzer cannot follow. If you control the helper, prefer [NotNullWhen(true)] on IsPresent so callers never write !. A codebase where every Redis lookup ends with cache.Get(key)! is a map of places you will page at 2 a.m."
+    }
+  ],
+  "interviewTakeaways": [
+    "x! is warning suppression with identity semantics at run time.",
+    "ThrowIfNull is a real throw plus a [NotNull] post-condition the compiler understands.",
+    "?. ?? is not null are the everyday operators; ! is the exception."
+  ],
+  "commonPitfalls": [
+    "Using ! to satisfy CS8602 instead of fixing the annotation or adding a check.",
+    "Catching NullReferenceException instead of throwing ArgumentNullException at the boundary.",
+    "Forgetting that message.Body can be empty even when the Message object is non-null."
+  ],
+  "relatedTopicIds": [
+    "csharp-07-nrt-annotations",
+    "csharp-07-required-and-null-attributes",
+    "csharp-07-nrt-vs-typescript"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Non-null assertion operator !",
+      "note": "TS value! is the same idea: compile-time only. JS still throws if you read .length of null.",
+      "futureTopicSlug": "typescript/operators/non-null-assertion"
+    },
+    {
+      "language": "javascript",
+      "concept": "optional chaining and nullish coalescing",
+      "note": "?. and ?? exist in JS and C# with similar short-circuit rules. C# also has ThrowIfNull as a standard library guard.",
+      "futureTopicSlug": "javascript/operators/optional-chaining"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Null-forgiving operator",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/null-forgiving"
+    },
+    {
+      "title": "ArgumentNullException.ThrowIfNull",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.argumentnullexception.throwifnull"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

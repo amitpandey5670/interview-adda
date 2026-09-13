@@ -1,0 +1,57 @@
+{
+  "id": "csharp-14-roots-mark-compact",
+  "slug": "roots-mark-compact",
+  "title": "Roots, mark, and compact",
+  "moduleId": "csharp-14-memory-and-gc",
+  "order": 3,
+  "hook": "The GC never asks ‘who still needs this object?’ It asks ‘what can still be reached from roots?’ Then it marks, fixes pointers, and slides survivors together.",
+  "sections": [
+    {
+      "heading": "Roots are the starting set",
+      "prose": "Microsoft lists the usual roots: stack locals the JIT reports as live, CPU registers, static fields, GC handles, and the finalizer queue. Anything not reachable from that graph is garbage, even if some other dead object still points at it. Static caches of attempt payloads are roots until you remove the entry — a classic leak that looks like ‘the GC is broken.’ A static event handler holding a lambda over a large graph is the same bug. Before a collection, managed threads are suspended (with background/workstation variants overlapping some work). That is a stop-the-world phase for marking, even when much of the work is concurrent in modern runtimes.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "A static root that outlives every request",
+          "code": "public static class AttemptScratch\n{\n    private static readonly Dictionary<string, byte[]> Payloads = [];\n\n    public static void Remember(string attemptId, byte[] payload) =>\n        Payloads[attemptId] = payload;\n}",
+          "explanation": "Every byte[] stays reachable from a static dictionary. Gen 2 will never reclaim it. Use a sized MemoryCache with expiration instead."
+        }
+      ]
+    },
+    {
+      "heading": "Mark, relocate, compact",
+      "prose": "Marking builds the live set. Relocating updates references to where objects will live after they move. Compacting copies survivors toward the older end of the segment so allocation can bump a pointer again. If almost nothing died, compacting can be skipped. LOH compaction is the exception, not the rule. Interior pointers (refs into the middle of an object) are why the GC must update every managed reference, including those on stacks. After compact, the next allocation pointer sits after the last survivor. This is the picture you should draw on a whiteboard: roots → graph → dead holes → slide live objects → patch pointers."
+    }
+  ],
+  "interviewTakeaways": [
+    "Reachability from roots, not ‘I am done with this variable in my head.’",
+    "Statics, caches, and event handlers are the leaks that survive gen 2.",
+    "Compact restores bump allocation; LOH often skips that copy."
+  ],
+  "commonPitfalls": [
+    "Growing a static Dictionary as a Redis ‘backup’ and blaming GC for RSS.",
+    "Assuming unused fields are collected while the parent object is still rooted.",
+    "Pinning large buffers across an await, which blocks compact for that object."
+  ],
+  "relatedTopicIds": [
+    "csharp-14-stack-heap-layout",
+    "csharp-14-generations-soh-loh",
+    "csharp-14-finalizers-vs-dispose"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Mark-sweep / mark-compact in V8",
+      "note": "V8 also marks from roots (stack, handles, globals). Old-space compaction and concurrent marking exist, but you do not get CLR-style generations 0/1/2 as a public tuning model.",
+      "futureTopicSlug": "javascript/runtime/gc"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Fundamentals of garbage collection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

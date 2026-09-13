@@ -1,0 +1,69 @@
+{
+  "id": "csharp-16-source-generators",
+  "slug": "source-generators",
+  "title": "Source generators: compile-time code, not runtime magic",
+  "moduleId": "csharp-16-assemblies-attributes-reflection",
+  "order": 4,
+  "hook": "A source generator extra-sources your compilation. It is Roslyn looking at your tree, not the CLR inventing types after `Main` starts.",
+  "sections": [
+    {
+      "heading": "What a generator is allowed to do",
+      "prose": "A source generator is a compiler component that can read the compilation (syntax, symbols, additional files) and add C# files. Incremental generators (`IIncrementalGenerator`) cache work so a keystroke does not re-walk the whole solution. They must not mutate existing files; they only add. Interceptors (C# 12, still experimental) are the narrow exception that can redirect a call site — treat them as preview, not a design default. Generators run on the build agent; if CI cannot load your analyzer package, the generated types do not exist and the product project fails to compile. That is the point: fail closed at compile time instead of `GetTypes()` at 2 a.m.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Attribute as a generator trigger, not a runtime scan",
+          "code": "[AttributeUsage(AttributeTargets.Class)]\npublic sealed class SqsMessageAttribute(string typeName) : Attribute\n{\n    public string TypeName { get; } = typeName;\n}\n\n[SqsMessage(\"OrderSubmitted\")]\npublic sealed class OrderSubmitted\n{\n    public required string OrderId { get; init; }\n}\n\n// Generator emits something like:\n// partial class SqsDispatch\n// {\n//     public static Task HandleAsync(string type, ReadOnlySpan<byte> json, ...)\n// }",
+          "explanation": "The attribute is a compile-time marker. The generated dispatcher is ordinary C# the rest of the app calls. No Assembly.GetTypes on each message."
+        }
+      ]
+    },
+    {
+      "heading": "Platform generators you already depend on",
+      "prose": "You do not have to write Roslyn to benefit. `System.Text.Json` source generation, regex source generation, `LibraryImport` P/Invoke generation (module 17), and logging source generators are the same idea: inspect attributes, emit partial methods. C# 13 partial properties and C# 14 partial constructors/events exist partly so generators can fill in implementations without fighting auto-properties. `field`-backed properties (C# 14) and extension members are language features; generators may emit them, they are not generators themselves. When an interviewer asks “how would you avoid reflection for mapping?”, name incremental generators or a JSON context — not “a faster Invoke.”"
+    },
+    {
+      "heading": "Operational constraints",
+      "prose": "Generated files show up under analyzers in the IDE; do not check them in unless your team has a documented reason. Determinism matters: two machines must emit the same text for the same input or your public API baseline (next topic) flaps. Generators that parse additional files (proto, OpenAPI, CSV column maps) should treat those files as part of the compilation inputs. Debugging a generator is a second process — you debug the generator project, not the consumer, unless you attach to `VBCSCompiler`. If a feature needs runtime data (the live Redis schema), a generator cannot see it; keep that as configuration, not generated code."
+    }
+  ],
+  "interviewTakeaways": [
+    "Generators add source to the compilation; they do not rewrite your existing files (interceptors aside, and those are experimental).",
+    "Prefer incremental generators and platform ones (JSON, regex, LibraryImport) over runtime reflection.",
+    "Partial members in C# 13/14 exist so generated implementations can coexist with your declarations."
+  ],
+  "commonPitfalls": [
+    "Writing a non-incremental generator that walks every syntax node on each keystroke.",
+    "Checking in generated files that then drift from the generator, doubling the public surface.",
+    "Trying to generate code from data that only exists at run time (live cache keys, current tenant list)."
+  ],
+  "relatedTopicIds": [
+    "csharp-16-reflection",
+    "csharp-16-ci-public-api-guards",
+    "csharp-17-pinvoke-awareness"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "codegen in the compile pipeline",
+      "note": "TS transformers and tools like tsc-plus-plugins add files before emit. Roslyn source generators are first-class in the C# compilation, with symbol access, not a pre-step that rewrites `.ts` on disk.",
+      "futureTopicSlug": "typescript/compiler/transformers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Roslyn SDK and source generators",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview"
+    },
+    {
+      "title": "What's new in C# 13 (partial properties)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-13"
+    },
+    {
+      "title": "What's new in C# 14 (partial events and constructors)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

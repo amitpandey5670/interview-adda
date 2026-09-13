@@ -1,0 +1,59 @@
+{
+  "id": "csharp-13-why-async",
+  "slug": "why-async",
+  "title": "Why async: I/O versus blocking",
+  "moduleId": "csharp-13-async-await",
+  "order": 1,
+  "hook": "A blocked thread waiting on SQS is paid-for capacity doing nothing. await is how C# lets that thread serve the next message while the network is still thinking.",
+  "sections": [
+    {
+      "heading": "I/O wait is not CPU work",
+      "prose": "Microsoft’s TAP model is explicit: breakfast cooking is asynchronous without being parallel. One cook starts the toaster and moves to the eggs. The toast still cooks while the cook is elsewhere. That is I/O. Parallelism would be two cooks, which is extra threads and extra cores. In a .NET 10 worker, HttpClient.GetAsync and SQS ReceiveMessage spend milliseconds to seconds off-CPU. If you call a synchronous Receive or .Wait(), you occupy a thread-pool thread for the whole wait. Under 199 concurrent submitters that already hurts. At 999 it is how you starve the pool before the CPU is busy. async methods that only await I/O do not magically use more cores; they return threads to the pool so the same cores can start more waits.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Blocking receive versus awaited receive",
+          "code": "public sealed class SqsPoller(IAmazonSQS sqs)\n{\n    public Message ReceiveBlocking(string queueUrl)\n    {\n        var response = sqs.ReceiveMessageAsync(queueUrl).GetAwaiter().GetResult();\n        return response.Messages[0];\n    }\n\n    public async Task<Message?> ReceiveAsync(string queueUrl, CancellationToken cancellationToken)\n    {\n        var response = await sqs.ReceiveMessageAsync(queueUrl, cancellationToken);\n        return response.Messages.Count > 0 ? response.Messages[0] : null;\n    }\n}",
+          "explanation": "GetResult holds the worker thread until SQS answers. await registers a continuation and releases the thread for other polls."
+        }
+      ]
+    },
+    {
+      "heading": "Start independent I/O, then compose",
+      "prose": "Awaiting A then B is still A’s duration plus B’s duration. If Redis GET and the auth-token introspection are independent, start both, then await Task.WhenAll. That is concurrent I/O on one thread at a time, not two CPU-bound loops. Do not wrap blocking ADO.NET or a sync Redis client in Task.Run just to ‘make it async’; you still pay a thread for the wait and you hide the blocking from the next reader. Prefer truly async APIs. CPU-bound work such as SkiaSharp raster on a large CSV-derived image is the opposite case: it should not sit on the request thread, but that decision is scheduling, covered with the thread pool in module 15."
+    }
+  ],
+  "interviewTakeaways": [
+    "async/await is a scalability tool for waits, not a speed-up for CPU.",
+    "Blocking on Task in a worker is how you run out of threads with idle CPUs.",
+    "WhenAll is for independent I/O; sequential await is for true data dependencies."
+  ],
+  "commonPitfalls": [
+    "Calling .Result or .Wait() on async I/O ‘just this once’ in a library used by ASP.NET Core.",
+    "Assuming async methods run in parallel on multiple cores.",
+    "Using Task.Run to wrap a blocking SQS receive and calling that async."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-task-async-await",
+    "csharp-13-promises-vs-tasks",
+    "csharp-15-thread-pool-task-parallel",
+    "csharp-10-delegates-func-action",
+    "csharp-06-using-and-idisposable"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Non-blocking I/O on a single thread",
+      "note": "Node’s event loop also frees the JS thread during I/O. C# await does the same for a pool thread. Neither turns CPU-heavy work into free concurrency.",
+      "futureTopicSlug": "javascript/async/event-loop"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Asynchronous programming with async and await",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "sqs-consumer"
+}

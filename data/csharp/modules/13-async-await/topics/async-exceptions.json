@@ -1,0 +1,58 @@
+{
+  "id": "csharp-13-async-exceptions",
+  "slug": "async-exceptions",
+  "title": "Exceptions in async methods",
+  "moduleId": "csharp-13-async-await",
+  "order": 3,
+  "hook": "A throw after await does not unwind the original caller’s stack in the way a sync method does. It faults the Task. async void has no Task, so the exception has nowhere safe to go.",
+  "sections": [
+    {
+      "heading": "Faulted tasks are the observation point",
+      "prose": "When an async Task method throws, the exception is stored on the returned Task. The first await of that Task rethrows (preserving the original exception, not wrapping in AggregateException the way Task.Wait does). Task.WhenAll faults with an AggregateException containing every inner exception if you inspect the task object; awaiting WhenAll throws the first one unless you observe task.Exception. Catch OperationCanceledException separately from business failures so a shutting-down consumer does not look like a poison CSV row. Do not swallow exceptions in a fire-and-forget ContinueWith unless you log; unobserved task exceptions no longer crash the process by default, but they still mean lost acks and silent data loss.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Observe faults; never async void in a consumer",
+          "code": "public sealed class RabbitConsumer(IModel channel)\n{\n    public async Task HandleAsync(BasicDeliverEventArgs delivery, CancellationToken cancellationToken)\n    {\n        try\n        {\n            await ProcessPayloadAsync(delivery.Body, cancellationToken);\n            channel.BasicAck(delivery.DeliveryTag, multiple: false);\n        }\n        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)\n        {\n            channel.BasicNack(delivery.DeliveryTag, multiple: false, requeue: true);\n        }\n        catch (Exception)\n        {\n            channel.BasicNack(delivery.DeliveryTag, multiple: false, requeue: false);\n            throw;\n        }\n    }\n}",
+          "explanation": "The host can await HandleAsync and log. An async void Received handler would ack or nack after an exception the host never saw."
+        }
+      ]
+    },
+    {
+      "heading": "async void is for events only",
+      "prose": "UI event handlers are void. That is the historical reason async void exists. The exception is posted to SynchronizationContext.Post if one exists, or to the thread pool. In a Windows service or Kestrel process there is often no UI context, so you get a process-level crash or a logged unobserved exception depending on the host. In RabbitMQ client callbacks that are void, schedule `= HandleAsync(...)` only if you attach a continuation that logs faults, or better, use the client’s async consumer APIs. Interview answer: async void only for events; libraries and workers return Task so exceptions stay on the graph of awaited work."
+    }
+  ],
+  "interviewTakeaways": [
+    "await rethrows the inner exception; Wait/Result wrap in AggregateException.",
+    "async void cannot be awaited or unit-tested as a Task and is banned outside events.",
+    "Cancellation is an exception type; treat it as shutdown, not as a poison message by default."
+  ],
+  "commonPitfalls": [
+    "async void on a RabbitMQ Received event, then wondering why the process dies on a JSON error.",
+    "catch (Exception) around an await that also swallows OperationCanceledException during SIGTERM.",
+    "Assuming try/catch around Task.Run without await observes the inner exception."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-task-async-await",
+    "csharp-13-cancellation-tokens",
+    "csharp-13-configureawait",
+    "csharp-06-what-is-an-exception",
+    "csharp-10-events"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Unhandled Promise rejection",
+      "note": "An async JS function always returns a Promise, so a throw becomes a rejection you can await. async void is closer to an unhandled rejection with no Promise handle — worse than JS because the caller cannot attach .catch.",
+      "futureTopicSlug": "javascript/async/error-handling"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Asynchronous programming with async and await",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    }
+  ],
+  "scenarioTag": "rabbitmq"
+}

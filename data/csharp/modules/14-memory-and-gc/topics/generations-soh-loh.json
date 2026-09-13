@@ -1,0 +1,56 @@
+{
+  "id": "csharp-14-generations-soh-loh",
+  "slug": "generations-soh-loh",
+  "title": "Generations, SOH, and LOH",
+  "moduleId": "csharp-14-memory-and-gc",
+  "order": 2,
+  "hook": "Most objects die young. The CLR bets on that with three generations on the small object heap, and a side door — the large object heap — for buffers that would be expensive to shuffle.",
+  "sections": [
+    {
+      "heading": "Generational hypothesis on the SOH",
+      "prose": "New small objects are generation 0. A gen-0 collection inspects only the nursery plus remembered references from older generations. Survivors promote to gen 1, then gen 2. Gen 0 and 1 are ephemeral. A gen-2 collection is a full GC: all generations, including the LOH (sometimes called generation 3 physically, collected logically with gen 2). Workstation GC uses a single heap and is tuned for UI latency. Server GC allocates a heap per logical processor so a 8-core API process can allocate in parallel and collect with more GC threads. ASP.NET Core on .NET 10 defaults to server GC. In a tiny sidecar container, workstation GC can use less memory. Do not recite segment sizes from an old table as constants; Microsoft documents them as implementation details that change.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "SOH versus LOH in a CSV buffer",
+          "code": "public sealed class CsvChunkReader\n{\n    public byte[] RentPage() => GC.AllocateUninitializedArray<byte>(64 * 1024);\n\n    public byte[] RentGiant(int length)\n    {\n        return new byte[length];\n    }\n}",
+          "explanation": "64 KiB stays on the SOH (under 85,000 bytes). A 200 KiB row buffer is LOH: gen-2 lifetime tax and fragmentation risk."
+        }
+      ]
+    },
+    {
+      "heading": "Large object heap rules of thumb",
+      "prose": "The default LOH threshold is 85,000 bytes. Double arrays can land on the LOH slightly below that because of alignment; interviews usually want ‘about 85 KB.’ LOH objects are not compacted on every collection because memmove of megabytes is expensive. Free holes remain. A Redis payload cache that allocates a new 200 KB byte[] per miss will fragment. ArrayPool<byte>.Shared, recycle buffers, or compact LOH explicitly (GCSettings.LargeObjectHeapCompactionMode) when you must. Container hard limits can force LOH compaction. Server versus workstation does not change the 85 KB rule; it changes how many heaps and how pauses are scheduled (background GC versus blocking)."
+    }
+  ],
+  "interviewTakeaways": [
+    "Gen 0 is frequent and cheap; gen 2 is the pause you feel in a service.",
+    "LOH ≈ 85 KB+, collected with gen 2, compacted only when configured or under hard limits.",
+    "Server GC is one heap per CPU for throughput; workstation is the desktop default."
+  ],
+  "commonPitfalls": [
+    "Allocating one giant string or byte[] per CSV file in a request.",
+    "Calling GC.Collect(2) to ‘clean the LOH’ in production.",
+    "Assuming server GC always has shorter pauses (it often has higher throughput and different pause shapes)."
+  ],
+  "relatedTopicIds": [
+    "csharp-14-stack-heap-layout",
+    "csharp-14-roots-mark-compact",
+    "csharp-14-gc-modes-microservices"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "V8 young and old space",
+      "note": "V8 also uses a nursery (new space) and old space. There is no official 85 KB LOH switch you set in app code; large typed arrays are handled separately from JS objects.",
+      "futureTopicSlug": "javascript/runtime/gc"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Fundamentals of garbage collection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+    }
+  ],
+  "scenarioTag": "csv-import"
+}

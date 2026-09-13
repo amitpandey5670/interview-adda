@@ -1,0 +1,57 @@
+{
+  "id": "csharp-14-finalizers-vs-dispose",
+  "slug": "finalizers-vs-dispose",
+  "title": "Finalizers versus Dispose",
+  "moduleId": "csharp-14-memory-and-gc",
+  "order": 4,
+  "hook": "GC reclaims managed memory. It does not know how to free a SkiaSharp native bitmap. That is Dispose. A finalizer is a delayed, non-deterministic backup that makes the object live longer.",
+  "sections": [
+    {
+      "heading": "Deterministic cleanup is IDisposable",
+      "prose": "If a type wraps OS handles, pooled sockets, or native Skia objects, it should implement IDisposable or IAsyncDisposable. using and await using compile to try/finally. Dispose runs at the end of the block even when an exception flies. IAsyncDisposable is for cleanup that itself awaits — flushing a pipe, returning a Redis connection with async teardown. The classic dispose pattern also calls GC.SuppressFinalize(this) so the finalizer queue does not resurrect the object for a second pass. In C# 8+, a simple sealed type can implement Dispose without a finalizer if SafeHandle owns the native resource. Prefer SafeHandle over writing ~MyType().",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "SkiaSharp bitmap must leave the using block disposed",
+          "code": "public static async Task<byte[]> RasterPreviewAsync(\n    Stream csvDerivedPng,\n    CancellationToken cancellationToken)\n{\n    await using var input = csvDerivedPng;\n    using var bitmap = SKBitmap.Decode(input);\n    if (bitmap is null)\n    {\n        return [];\n    }\n\n    using var image = SKImage.FromBitmap(bitmap);\n    cancellationToken.ThrowIfCancellationRequested();\n    return image.Encode(SKEncodedImageFormat.Webp, 80).ToArray();\n}",
+          "explanation": "SKBitmap holds native memory. Waiting for a finalizer under 999 concurrent renders will exhaust native RAM while the managed heap still looks small."
+        }
+      ]
+    },
+    {
+      "heading": "What a finalizer actually does",
+      "prose": "If you declare a destructor (~Foo), the instance is placed on the finalizer queue when it becomes otherwise unreachable. A dedicated finalizer thread runs ~Foo later. The object survives the collection that discovered it (it was a root from that queue) and is collected on a later pass after SuppressFinalize or after the finalizer runs. Finalizers can run in parallel to your requests, must not take locks that request threads hold, and must not assume ordering. Microsoft’s guidance: you almost never write one; wrap native handles in SafeHandle. Interview sentence: Dispose for prompt native release; finalizers as last chance; never use a finalizer for business logic or for returning a pooled byte[]."
+    }
+  ],
+  "interviewTakeaways": [
+    "using is try/finally plus Dispose — deterministic.",
+    "Finalizers delay collection by at least one extra GC and run on another thread.",
+    "IAsyncDisposable is for async teardown; SkiaSharp bitmaps are typically sync Dispose."
+  ],
+  "commonPitfalls": [
+    "Letting SKBitmap fall out of scope in a hot API without using.",
+    "Throwing from a finalizer or taking a lock that a request thread holds.",
+    "Implementing a finalizer but forgetting SuppressFinalize in Dispose, doubling the work."
+  ],
+  "relatedTopicIds": [
+    "csharp-14-roots-mark-compact",
+    "csharp-14-allocation-traps",
+    "csharp-13-async-enumerable",
+    "csharp-06-using-and-idisposable"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "FinalizationRegistry versus explicit close",
+      "note": "JS FinalizationRegistry is also non-deterministic. Node streams and file handles still need explicit .close() or await using in modern JS — the same lesson as SkiaSharp.",
+      "futureTopicSlug": "javascript/runtime/finalization"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Cleaning up unmanaged resources",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/unmanaged"
+    }
+  ],
+  "scenarioTag": "skiasharp-dispose"
+}

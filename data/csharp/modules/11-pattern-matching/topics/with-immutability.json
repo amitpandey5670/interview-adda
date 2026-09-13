@@ -1,0 +1,71 @@
+{
+  "id": "csharp-11-with-immutability",
+  "slug": "with-immutability",
+  "title": "with expressions and immutability",
+  "moduleId": "csharp-11-pattern-matching",
+  "order": 4,
+  "hook": "Under high concurrency, copy a policy record with with and hand the snapshot to the worker. Do not mutate a shared scoring object while 999 submits land.",
+  "sections": [
+    {
+      "heading": "Records, copy, with",
+      "prose": "A record (class or struct) gives you value-based equality, a Deconstruct, and a copy constructor. with uses that copy constructor, then assigns the properties you name. The original instance is unchanged. init-only properties are settable during with. Ordinary classes do not get with unless you provide the copy machinery yourself. record struct copies the struct; there is no extra heap object unless nested references exist.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Snapshot a scoring policy for a submit burst",
+          "code": "public sealed record ScoringPolicy(int PassMark, bool AllowLate, DateTimeOffset? ClosesAt);\n\npublic ScoringPolicy FreezeForSubmit(ScoringPolicy live, DateTimeOffset utc)\n    => live with\n    {\n        AllowLate = false,\n        ClosesAt = utc\n    };\n\n// live is unchanged; workers receive frozen.",
+          "explanation": "Each submit path reads frozen. Updating live later does not change in-flight copies. That is the immutability bargain."
+        }
+      ]
+    },
+    {
+      "heading": "Shallow copy is the trap",
+      "prose": "If a record contains a List<string> of allowed LMS domains, with copies the reference. Mutating that list from two attempts is still a race. Nested records can be nested with expressions. For collections, prefer immutable types or copy the list explicitly in the with initializer. Pattern matching pairs with with: match a policy, then produce the next state as a new record instead of setting fields.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Nested with plus a copied list",
+          "code": "public sealed record LtiConsumer(string Issuer, List<string> Audiences);\n\npublic LtiConsumer GrantAudience(LtiConsumer consumer, string audience)\n    => consumer with\n    {\n        Audiences = [.. consumer.Audiences, audience]\n    };",
+          "explanation": "Collection expressions copy into a new list. consumer.Audiences.Add(audience) would mutate the shared list and defeat with."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "with copies a record (or copyable struct) and sets named properties.",
+    "The copy is shallow; nested mutable collections stay shared.",
+    "Use snapshots for concurrent attempt-submit instead of locking field writes on a live object.",
+    "Ordinary classes do not support with by default."
+  ],
+  "commonPitfalls": [
+    "Calling with and then mutating a nested List on the new instance.",
+    "Assuming record equality compares nested lists by value — List equality is referential unless you customize.",
+    "Using with on a class and expecting a compiler error to be the only issue — it simply does not compile."
+  ],
+  "relatedTopicIds": [
+    "csharp-11-pattern-kinds",
+    "csharp-11-auth-provider-branching",
+    "csharp-12-deferred-execution",
+    "csharp-05-records"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Object spread",
+      "note": "const next = { ...live, allowLate: false } is a shallow copy, same trap as with. JS has no compiler-generated value equality on that object.",
+      "futureTopicSlug": "javascript/objects/spread"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Records — with expressions",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record"
+    },
+    {
+      "title": "with expression (language reference)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/with-expression"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "high-concurrency"
+}

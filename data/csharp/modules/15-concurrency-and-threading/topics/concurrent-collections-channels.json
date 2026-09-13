@@ -1,0 +1,62 @@
+{
+  "id": "csharp-15-concurrent-collections-channels",
+  "slug": "concurrent-collections-channels",
+  "title": "Concurrent collections and Channels",
+  "moduleId": "csharp-15-concurrency-and-threading",
+  "order": 4,
+  "hook": "A locked List is the wrong default once two threads touch it. ConcurrentDictionary and System.Threading.Channels give you maps and queues whose internals already use fine-grained synchronization.",
+  "sections": [
+    {
+      "heading": "Concurrent* types are not magic immunity",
+      "prose": "ConcurrentDictionary.GetOrAdd is atomic per call, but GetOrAdd(key, k => Expensive()) can still run Expensive twice if two threads miss. Pass a factory that is cheap, or single-flight a Task (next topic). ConcurrentQueue and ConcurrentBag drop the need for lock around Enqueue/TryDequeue. ConcurrentBag is thread-local optimized and unordered — wrong for FIFO RabbitMQ offload. BlockingCollection adds blocking Take; in async workers prefer Channel. Immutable collections give you snapshot publish with Interlocked.Exchange of the reference: readers never lock, writers replace the whole graph. Choose based on whether readers can see a slightly old map.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Channel as a RabbitMQ offload buffer",
+          "code": "public sealed class OffloadPipeline\n{\n    private readonly Channel<string> _channel = Channel.CreateBounded<string>(\n        new BoundedChannelOptions(256) { FullMode = BoundedChannelFullMode.Wait });\n\n    public ValueTask QueueAsync(string payload, CancellationToken cancellationToken) =>\n        _channel.Writer.WriteAsync(payload, cancellationToken);\n\n    public async Task RunWorkerAsync(CancellationToken cancellationToken)\n    {\n        await foreach (var payload in _channel.Reader.ReadAllAsync(cancellationToken))\n        {\n            await PublishAsync(payload, cancellationToken);\n        }\n    }\n}",
+          "explanation": "Producers never lock a List. Bound 256 applies backpressure instead of unbounded RAM when 999 users burst."
+        }
+      ]
+    },
+    {
+      "heading": "Channels versus IAsyncEnumerable",
+      "prose": "IAsyncEnumerable is a pull stream from one producer’s iterator. A Channel is a thread-safe buffer with one or many writers and readers. Use a channel when Kestrel threads must hand work to a dedicated SkiaSharp worker without blocking the request beyond WriteAsync. Complete the writer on shutdown so ReadAllAsync ends. Unbounded channels will eat the heap under a stampede; bounded plus Wait or DropWrite is a capacity decision you should name in the interview."
+    }
+  ],
+  "interviewTakeaways": [
+    "GetOrAdd can still invoke the factory twice; that matters if the factory hits Redis.",
+    "Bounded Channel is backpressure; unbounded Channel is a hidden list.",
+    "ConcurrentBag is not a FIFO queue."
+  ],
+  "commonPitfalls": [
+    "Using ConcurrentDictionary and then enumerating it while assuming a stable snapshot.",
+    "BlockingCollection.Take on an ASP.NET request thread.",
+    "Unbounded channels for CSV import buffers."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-async-enumerable",
+    "csharp-15-thread-pool-task-parallel",
+    "csharp-15-high-concurrency-scenario",
+    "csharp-08-when-not-to-invent",
+    "csharp-08-list-dictionary-set-queue"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "async queues and SharedMap",
+      "note": "A JS array as a queue is safe on one thread. Across workers you need Atomics or a message channel. .NET Channel is the in-process analog of a worker message port with backpressure.",
+      "futureTopicSlug": "javascript/concurrency/message-channels"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "System.Threading.Channels",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/channels"
+    },
+    {
+      "title": "Thread-safe collections",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/"
+    }
+  ],
+  "scenarioTag": "rabbitmq"
+}

@@ -1,0 +1,59 @@
+{
+  "id": "csharp-14-allocation-traps",
+  "slug": "allocation-traps",
+  "title": "Allocation traps",
+  "moduleId": "csharp-14-memory-and-gc",
+  "order": 5,
+  "hook": "Gen-0 storms are rarely ‘the GC is slow.’ They are usually closures, LINQ materialization, string work, and boxing on a path that already runs 199 to 999 times a second.",
+  "sections": [
+    {
+      "heading": "The usual suspects on a hot path",
+      "prose": "A lambda that captures this or a local allocates a display class. Passing that lambda into a Redis retry or a LINQ Where inside a loop allocates per call. Box an enum or struct when you store it as object. string + in a loop allocates intermediate strings; use StringBuilder or string interpolation into a pooled writer. LINQ is lazy until a consuming foreach, ToList, or Count; then it allocates enumerators and delegates. params arrays and collection expressions still allocate unless the compiler can elide. async methods allocate a state machine when they actually yield. None of these are forbidden; they are what you look at when dotnet-counters shows high allocation rate on the attempt-submit endpoint.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Closure and string churn on a cache key",
+          "code": "public async Task<string?> LoadAttemptAsync(string examId, string userId, CancellationToken cancellationToken)\n{\n    var key = $\"attempt:{examId}:{userId}\";\n    return await _redis.GetDatabase().StringGetAsync(key);\n}\n\npublic List<string> NaiveFilter(IEnumerable<string> rows, string prefix)\n{\n    return rows.Where(r => r.StartsWith(prefix)).Select(r => r.ToUpperInvariant()).ToList();\n}",
+          "explanation": "The interpolated key allocates one string (acceptable). NaiveFilter allocates iterator, two delegates, a List, and a new string per match — painful inside a per-request loop over CSV lines."
+        }
+      ]
+    },
+    {
+      "heading": "What to do instead of folklore",
+      "prose": "Measure with EventCounters, alloc profiles, or BenchmarkDotNet. ArrayPool for buffers. FrozenDictionary for startup data. SearchValues for parsing. Keep lambdas static (no capture) on hot LINQ. Prefer foreach over LINQ on the 999-RPS path if the profiler points there. Do not micro-optimize every ToString on a cold admin page. Do not cache SKBitmap instances without a dispose policy. The interview signal is: you know which allocations are implicit (boxing, closure, await, ToList) and you change them only with evidence."
+    }
+  ],
+  "interviewTakeaways": [
+    "Capturing lambdas, boxing, string concat, and ToList are invisible newobj calls.",
+    "async state machines allocate when they yield, not when the method is declared.",
+    "Fix allocation rate with a profiler, not with GC.Collect."
+  ],
+  "commonPitfalls": [
+    "Building Redis keys with repeated + in a loop.",
+    "Using LINQ Count() when you already have a List.Count.",
+    "Creating a new JsonSerializerOptions per request (it caches internally and is expensive to construct)."
+  ],
+  "relatedTopicIds": [
+    "csharp-14-stack-heap-layout",
+    "csharp-14-generations-soh-loh",
+    "csharp-13-task-async-await",
+    "csharp-15-high-concurrency-scenario",
+    "csharp-10-lambdas-and-closures",
+    "csharp-12-deferred-execution"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Hidden allocations in closures and string concat",
+      "note": "JS also allocates a closure per callback and new strings on +. V8’s nursery makes this cheap until old-space promotion, same operational story as gen 0 to gen 2.",
+      "futureTopicSlug": "javascript/runtime/allocations"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": ".NET garbage collection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/"
+    }
+  ],
+  "scenarioTag": "redis-cache"
+}

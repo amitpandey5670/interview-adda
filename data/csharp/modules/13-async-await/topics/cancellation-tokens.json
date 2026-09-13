@@ -1,0 +1,56 @@
+{
+  "id": "csharp-13-cancellation-tokens",
+  "slug": "cancellation-tokens",
+  "title": "CancellationToken in consumers",
+  "moduleId": "csharp-13-async-await",
+  "order": 4,
+  "hook": "CancellationToken is a cooperative flag plus callbacks. SQS and RabbitMQ shutdown only works if every await observes the same token the host cancelled.",
+  "sections": [
+    {
+      "heading": "Cooperative, not preemptive",
+      "prose": "CancellationToken is a struct view over a CancellationTokenSource. Cancel sets IsCancellationRequested and runs registered callbacks. It does not abort a thread. HttpClient, StackExchange.Redis, and AWS SDK calls that take a token will complete early or throw OperationCanceledException. A tight CPU loop must call ThrowIfCancellationRequested itself. For a RabbitMQ or SQS consumer, the generic host’s StoppingToken is the process lifetime. Pass it into the receive loop. When Kubernetes sends SIGTERM, you stop fetching, finish or nack the in-flight message according to policy, then exit before the grace period. Do not create a token source per message and forget to dispose it; use `await using` on linked sources.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "SQS loop with host token and per-message timeout",
+          "code": "public async Task RunAsync(string queueUrl, CancellationToken stoppingToken)\n{\n    while (!stoppingToken.IsCancellationRequested)\n    {\n        using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);\n        linked.CancelAfter(TimeSpan.FromSeconds(25));\n\n        try\n        {\n            var response = await _sqs.ReceiveMessageAsync(queueUrl, linked.Token);\n            foreach (var message in response.Messages)\n            {\n                await HandleAsync(message, stoppingToken);\n                await _sqs.DeleteMessageAsync(queueUrl, message.ReceiptHandle, stoppingToken);\n            }\n        }\n        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n        {\n            break;\n        }\n        catch (OperationCanceledException)\n        {\n            continue;\n        }\n    }\n}",
+          "explanation": "Linked tokens expire a hung receive without treating host shutdown and a 25-second timeout as the same condition."
+        }
+      ]
+    },
+    {
+      "heading": "What to ack when cancelled",
+      "prose": "If stoppingToken fires mid-handle, decide explicitly. Requeue (SQS: skip DeleteMessage, let visibility timeout expire; RabbitMQ: nack requeue true) when the work is idempotent. Drop or send to a DLQ when a partial side effect already committed. Never ignore the token in a Redis SET that is part of the same unit of work you will retry. Register callbacks for non-async resources (a raw socket abort) with token.Register, and dispose the registration. Passing CancellationToken.None in a public library method is a smell unless the operation truly cannot stop."
+    }
+  ],
+  "interviewTakeaways": [
+    "Cancellation is cooperative: unused tokens do nothing.",
+    "Link host lifetime tokens with per-operation timeouts.",
+    "Distinguish shutdown cancellation from timeout when deciding ack versus nack."
+  ],
+  "commonPitfalls": [
+    "Catching Exception and nacking cancellation as a poison message during deploy.",
+    "Forgetting to pass the token into nested Redis and HTTP calls.",
+    "Leaking CancellationTokenSource instances in a 999-message/second loop."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-why-async",
+    "csharp-13-async-exceptions",
+    "csharp-15-high-concurrency-scenario"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "AbortController",
+      "note": "AbortSignal is the JS cousin: fetch observes it, CPU loops must poll aborted. C# tokens also multicast to many operations through linked sources.",
+      "futureTopicSlug": "javascript/async/abortcontroller"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Cancellation in managed threads",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads"
+    }
+  ],
+  "scenarioTag": "sqs-consumer"
+}

@@ -1,0 +1,68 @@
+{
+  "id": "csharp-10-lambdas-and-closures",
+  "slug": "lambdas-and-closures",
+  "title": "Lambdas, closures, and static lambdas",
+  "moduleId": "csharp-10-delegates-events-lambdas",
+  "order": 2,
+  "hook": "On the 199-to-999 concurrent attempt-submit path, an innocent lambda that captures this pins the whole request graph until the Task completes.",
+  "sections": [
+    {
+      "heading": "Expression lambdas, statement lambdas, conversion",
+      "prose": "A lambda is an anonymous function: (parameters) => expression or a block. The compiler converts it to a delegate type (Action, Func, or a named delegate) or, when the target is Expression<TDelegate>, to an expression tree. Statement lambdas cannot become expression trees. Natural types let you assign var Increment = (int x) => x + 1. C# 12 added default parameter values on explicitly typed lambdas. C# 14 lets you write modifiers (ref, in, out, scoped, ref readonly) on implicitly typed parameters; params still requires a typed list.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "C# 14 modifiers on a simple lambda",
+          "code": "delegate bool TryParseId(string text, out int attemptId);\n\nTryParseId parse = (text, out id) => int.TryParse(text, out id);\n\nif (parse(\"41827\", out var attemptId))\n{\n    Console.WriteLine(attemptId);\n}",
+          "explanation": "Before C# 14 this required (string text, out int id). The delegate type still supplies the types; the lambda no longer repeats them."
+        }
+      ]
+    },
+    {
+      "heading": "Closures, this, and static lambdas",
+      "prose": "A lambda that reads a local, a parameter, or instance state is rewritten as a display class. Capturing this (even by touching a field) keeps the enclosing object alive for as long as the delegate is reachable. static on a lambda or anonymous function forbids capture; the compiler errors if you touch instance members or outer locals. Use static on hot-path filters and on anything stored in a static event. Shared mutable captures across parallel Task.WhenAll submissions are data races, not clever reuse.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "static lambda versus capturing the request",
+          "code": "public Task CacheAttemptAsync(string attemptId, byte[] payload, IMemoryCache cache)\n{\n    // Captures this + cache + payload — the request object lives until the callback runs.\n    cache.GetOrCreate(attemptId, _ => payload);\n\n    return cache.GetOrCreateAsync(\n        attemptId,\n        static entry =>\n        {\n            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);\n            return Task.FromResult(ReadOnlyMemory<byte>.Empty);\n        });\n}",
+          "explanation": "The factory marked static cannot close over payload. That is the point: you pass data through the cache API instead of accidentally pinning the worker."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Lambdas convert to delegates or to Expression<T>; statement bodies cannot be trees.",
+    "Capture allocates a closure class; capturing this extends object lifetime.",
+    "static lambdas (C# 9) are the compiler-enforced no-capture form.",
+    "C# 14: parameter modifiers without repeating types; params still needs types."
+  ],
+  "commonPitfalls": [
+    "Subscribing a capturing lambda to a static event and never unsubscribing.",
+    "Mutating a captured int from parallel attempt-submit tasks.",
+    "Expecting a statement lambda to be translated by an IQueryable provider."
+  ],
+  "relatedTopicIds": [
+    "csharp-10-delegates-func-action",
+    "csharp-10-local-functions-vs-lambdas",
+    "csharp-12-ienumerable-vs-iqueryable",
+    "csharp-14-allocation-traps",
+    "csharp-12-query-vs-method-syntax"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Closures and lexical this vs arrow functions",
+      "note": "JS arrows capture lexical this. C# lambdas capture this only if you reference instance members; static forbids it. JS has no static lambda equivalent.",
+      "futureTopicSlug": "javascript/functions/closures-this"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Lambda expressions",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "high-concurrency"
+}

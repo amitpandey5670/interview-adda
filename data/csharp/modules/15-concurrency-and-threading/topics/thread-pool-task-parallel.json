@@ -1,0 +1,58 @@
+{
+  "id": "csharp-15-thread-pool-task-parallel",
+  "slug": "thread-pool-task-parallel",
+  "title": "Thread pool, TPL, and PLINQ",
+  "moduleId": "csharp-15-concurrency-and-threading",
+  "order": 1,
+  "hook": "The thread pool is a process-wide queue of work items. TPL Tasks are the usual ticket. PLINQ and Parallel are how you spend extra cores on CPU — not how you call SQS.",
+  "sections": [
+    {
+      "heading": "Pool threads are a scarce, shared resource",
+      "prose": "Kestrel, Task.Run, Timer callbacks, and many I/O completions share System.Threading.ThreadPool. The pool injects extra threads when work sits in the queue, but that injection is slow compared with a sudden jump from 199 to 999 blocked calls. Blocking Redis or .Result on the pool is how you starve ASP.NET. async I/O completions also use the pool, but they do not occupy a thread during the wait. Task.Run(Func<Task>) is a trap: it queues a method that immediately hits more I/O. Use Task.Run for CPU: hashing, CPU-bound CSV transforms, SkiaSharp raster you moved off the request. Set MaxDegreeOfParallelism when you Parallel.ForEach a CPU loop so you do not nest 999 workers on an 4-vCPU pod.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "CPU parallel, I/O sequential-await",
+          "code": "public async Task<byte[]> RasterBatchAsync(IReadOnlyList<Stream> pages, CancellationToken cancellationToken)\n{\n    var encoded = new byte[pages.Count][];\n    await Parallel.ForEachAsync(\n        Enumerable.Range(0, pages.Count),\n        new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },\n        async (index, token) =>\n        {\n            encoded[index] = await RasterOneCpuBoundAsync(pages[index], token);\n        });\n    return Combine(encoded);\n}\n\npublic IEnumerable<int> ScoreRows(IEnumerable<int> raw) =>\n    raw.AsParallel().WithDegreeOfParallelism(4).Select(static n => n * 2).ToList();",
+          "explanation": "Parallel.ForEachAsync bounds CPU workers. PLINQ AsParallel is for in-memory CPU projections, not for HttpClient inside Select."
+        }
+      ]
+    },
+    {
+      "heading": "PLINQ is not LINQ-to-Redis",
+      "prose": "AsParallel partitions the enumerable across pool threads. WithDegreeOfParallelism, AsOrdered, and merging have costs. A Select that awaits I/O inside PLINQ will block those workers unless you have already materialized data. Prefer async channels or Parallel.ForEachAsync with async bodies for mixed work. Dedicated Thread objects are for rare STA or long-lived specialists; they do not scale to request counts. ThreadPool.SetMinThreads can reduce injection delay after a quiet period, but it is a last-ditch ops knob, not an application design."
+    }
+  ],
+  "interviewTakeaways": [
+    "Thread pool: shared. Blocking it hurts everyone in the process.",
+    "Task.Run is CPU offload. async/await is I/O composition (module 13).",
+    "PLINQ and Parallel need a degree cap in containers."
+  ],
+  "commonPitfalls": [
+    "HttpClient.GetAsync inside a PLINQ Select.",
+    "Unbounded Parallel.ForEach over every CSV row on a 2-core pod.",
+    "new Thread per SQS message."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-why-async",
+    "csharp-13-promises-vs-tasks",
+    "csharp-15-high-concurrency-scenario",
+    "csharp-15-concurrent-collections-channels",
+    "csharp-13-task-async-await"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Worker threads versus the event loop",
+      "note": "Node worker_threads are closer to Task.Run/Parallel than to await. await in JS never uses extra JS threads; C# Task.Run explicitly does.",
+      "futureTopicSlug": "javascript/async/worker-threads"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Task Parallel Library (TPL)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-parallel-library-tpl"
+    }
+  ],
+  "scenarioTag": "csv-import"
+}

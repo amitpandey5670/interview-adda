@@ -1,0 +1,66 @@
+{
+  "id": "csharp-08-when-not-to-invent",
+  "slug": "when-not-to-invent",
+  "title": "When not to invent a collection",
+  "moduleId": "csharp-08-collections-and-iterators",
+  "order": 6,
+  "hook": "The BCL already has the pipe, the set, and the list. A custom “AsyncQueue” in a worker is usually Channel<T> with extra bugs. Name it, then wait for module 15.",
+  "sections": [
+    {
+      "heading": "Use the type that already exists",
+      "prose": "Need a growable buffer? List<T>. Need lookup? Dictionary<TKey, TValue> or FrozenDictionary after startup. Need uniqueness? HashSet<T>. Need FIFO in one thread? Queue<T>. Need a snapshot for many readers? ImmutableArray or ImmutableDictionary. Need a bounded in-memory producer/consumer between async methods? Channel<T> in System.Threading.Channels. Channel<T> is the standard library answer for “I have SQS-poll tasks producing Message and a processor consuming them inside the process.” Concurrency, WaitToReadAsync, and bounded capacity are module 15 (concurrency and threading). This topic exists so you do not spend an interview writing a lock around Queue<T> from first principles when the interviewer wanted Channel.CreateBounded<Message>(10).",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Name Channel, do not implement it",
+          "code": "// In-process pipe between a poller and a processor:\n// Channel<Message> channel = Channel.CreateBounded<Message>(new BoundedChannelOptions(32)\n// {\n//     SingleReader = true,\n//     SingleWriter = false\n// });\n// Full API, backpressure, and threading rules: module 15.\n\nList<Message> thisProcessBatch = []; // this module: a simple buffer is still a List",
+          "explanation": "If the data never leaves the process and producers are async, Channel<T> is the type. If you just accumulated one ReceiveMessage page, List is enough."
+        }
+      ]
+    },
+    {
+      "heading": "Do not wrap Redis or SQS in a fake IList",
+      "prose": "A Dictionary is not Redis. A Queue is not SQS. Implementing IEnumerable on a type that silently talks to the network on MoveNext hides latency and retries. Prefer an explicit client method that returns IReadOnlyList<T> or IAsyncEnumerable<T> (module 13) so the caller sees the I/O. Custom collections are justified when you have a domain-specific invariant (a ring buffer you measured, a specialized graph). They are not justified because you wanted a class named MessageBag."
+    },
+    {
+      "heading": "Interview cue",
+      "prose": "If asked “how would you coordinate producers in one process?”, say Channel<T>, then ConcurrentQueue if they constrain you to older APIs, then lock+Queue as the last sketch. If asked “how would you store tenant feature flags for the lifetime of a Lambda?”, say Dictionary or FrozenDictionary loaded at startup, backed by Redis if it must be shared across instances. Inventing a new collection type is a smell unless you can name the invariant List cannot express."
+    }
+  ],
+  "interviewTakeaways": [
+    "Prefer BCL generic collections; ArrayList and Hashtable are legacy.",
+    "Channel<T> is the in-process async queue — details in module 15.",
+    "Do not disguise I/O as IEnumerable unless the contract is explicitly a stream (module 13)."
+  ],
+  "commonPitfalls": [
+    "Writing a thread-safe list with public lock fields.",
+    "Exposing ConcurrentQueue as a substitute for SQS and losing durability.",
+    "Building a custom enumerator that hits Redis on every MoveNext."
+  ],
+  "relatedTopicIds": [
+    "csharp-08-list-dictionary-set-queue",
+    "csharp-08-iterators-yield",
+    "csharp-09-generic-result-wrapper",
+    "csharp-15-concurrent-collections-channels"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "streams vs arrays",
+      "note": "Node streams / async iterators are the analogue of IAsyncEnumerable and Channel, not of Array.push in a loop.",
+      "futureTopicSlug": "javascript/streams/async-iteration"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Collections in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/collections/"
+    },
+    {
+      "title": "Generic types and methods",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "high-concurrency"
+}

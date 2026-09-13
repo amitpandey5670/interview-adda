@@ -1,0 +1,77 @@
+{
+  "id": "csharp-16-attributes",
+  "slug": "attributes",
+  "title": "Attributes the compiler and CLR actually honor",
+  "moduleId": "csharp-16-assemblies-attributes-reflection",
+  "order": 2,
+  "hook": "Attributes are not comments. Some are baked into IL by the compiler; others wait for reflection or a generator. Interviews fail when you treat `[Obsolete]` like a sticky note.",
+  "sections": [
+    {
+      "heading": "Compiler-interpreted versus user data",
+      "prose": "An attribute is a type derived from `System.Attribute`, applied with `[Name]` or `[assembly: Name]`. The compiler already understands a set of them: `Obsolete`, `Conditional`, `CallerMemberName`, `CallerFilePath`, `CallerLineNumber`, `CallerArgumentExpression`, `Experimental` (C# 12), `SkipLocalsInit`, and others listed in the language reference. Those change warnings, emitted IL, or which methods exist under `#define`. Your `[AuthScheme(\"lti\")]` on a token validator is inert until an analyzer, generator, or `GetCustomAttributes` reads it. `AttributeUsage` on the attribute class restricts targets (`Method`, `Class`, `Assembly`, …) and whether it is `AllowMultiple`. Attribute constructors run when reflection instantiates them — not when the annotated method runs.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Obsolete versus a custom marker",
+          "code": "[Obsolete(\"Use ValidateJwtAsync; HMAC header path retired.\", error: true)]\npublic static bool ValidateLegacyHmac(string token) => false;\n\n[AttributeUsage(AttributeTargets.Method, Inherited = false)]\nsealed class AuthSchemeAttribute(string name) : Attribute\n{\n    public string Name { get; } = name;\n}\n\n[AuthScheme(\"lti-1.3\")]\npublic Task<bool> ValidateLtiAsync(string jwt, CancellationToken ct) =>\n    Task.FromResult(jwt.Length > 0);",
+          "explanation": "Obsolete with error: true is a compiler error for callers. AuthSchemeAttribute is metadata for a generator or a one-time scan — the CLR will not enforce it."
+        }
+      ]
+    },
+    {
+      "heading": "Caller information is compile-time",
+      "prose": "Caller-info attributes decorate optional parameters. The compiler substitutes the call site: member name, source path at compile time, line number, or the argument expression as text (`CallerArgumentExpression`). That is not `Environment.StackTrace`. Obfuscation does not strip these literals. Callers may still pass the optional arguments and lie. `CallerMemberName` is the reason `OnPropertyChanged()` without a string survives rename. `CallerArgumentExpression` is how a guard can say `func is not null` failed instead of a generic “argument invalid.” C# 14 `nameof` also accepts unbound generic types (`nameof(List<>)` is `\"List\"`), which is a language change, not an attribute — keep them distinct in an interview.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Guard with CallerArgumentExpression",
+          "code": "public static void Require(bool condition, [CallerArgumentExpression(nameof(condition))] string? expr = null)\n{\n    if (!condition)\n    {\n        throw new ArgumentException($\"Failed: {expr}\");\n    }\n}\n\npublic void ConsumeSqs(string? body)\n{\n    Require(body is not null);\n}",
+          "explanation": "The compiler injects the text `body is not null`. A runtime stack walk would not give you that expression."
+        }
+      ]
+    },
+    {
+      "heading": "Assembly-level attributes",
+      "prose": "Global attributes use the `assembly` or `module` target and must appear after usings and before type declarations. SDK-style projects no longer generate a large `AssemblyInfo.cs`; version and informational attributes often live in the csproj (`<Version>`, `<Description>`). You still write `[assembly: InternalsVisibleTo(...)]` and `[assembly: Experimental(\"MyLib.Preview\")]` in source when the compiler must see them. Multiple files in one compilation may all contribute assembly attributes. Do not sprinkle `[assembly:]` inside a namespace — that is a compile error. Treat assembly attributes as the manifest of policy: friends, experimental surface, COM visibility — not a dumping ground for every constant."
+    }
+  ],
+  "interviewTakeaways": [
+    "Obsolete and Experimental change compilation; custom attributes are data until something reads them.",
+    "Caller-info values are IL literals on omitted optional arguments, not a stack walk.",
+    "Assembly-level attributes belong after usings; SDK projects often map version info through the csproj instead of AssemblyInfo.cs."
+  ],
+  "commonPitfalls": [
+    "Applying caller-info attributes to required parameters — they only affect omitted optional arguments.",
+    "Expecting GetCustomAttribute to return the same instance twice; each call constructs a new object.",
+    "Using [assembly:] inside a namespace or after a type declaration."
+  ],
+  "relatedTopicIds": [
+    "csharp-16-assemblies-and-metadata",
+    "csharp-16-reflection",
+    "csharp-16-ci-public-api-guards"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "decorators vs attributes",
+      "note": "TS/JS decorators wrap values at runtime (or emit metadata if enabled). C# attributes are stored in assembly metadata and may never run unless reflection or the compiler interprets them.",
+      "futureTopicSlug": "typescript/decorators/metadata"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Caller information attributes",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/attributes/caller-information"
+    },
+    {
+      "title": "Global attributes",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/attributes/global"
+    },
+    {
+      "title": "Attributes and reflection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/reflection-and-attributes/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
+}

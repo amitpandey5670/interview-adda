@@ -1,0 +1,68 @@
+{
+  "id": "csharp-11-auth-provider-branching",
+  "slug": "auth-provider-branching",
+  "title": "LTI and auth-provider branching",
+  "moduleId": "csharp-11-pattern-matching",
+  "order": 5,
+  "hook": "LTI 1.3, an OIDC bearer, and a leftover API key are three shapes of one inbound token. Pattern matching is how you branch without a stringly-typed if pile.",
+  "sections": [
+    {
+      "heading": "Model the token as data, then switch",
+      "prose": "Interviews that mention LTI want to hear that you treat the provider as a closed set of records, not as a boolean isLti next to a nullable jwt. Each provider carries the fields it actually has: issuer and deployment id for LTI, tenant and expiry for OIDC, prefix and hash for an API key. A switch expression over that union (abstract record + derived records, or a single record with a discriminator plus property patterns) returns a normalized AuthDecision. Keep HTTP and ASP.NET out of the method; this is language-level branching you can unit test with records.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Property patterns on an inbound token",
+          "code": "public sealed record InboundToken(\n    string Scheme,\n    string? Version,\n    string? Issuer,\n    DateTimeOffset? ExpiresAt,\n    string? ApiKeyPrefix);\n\npublic static AuthDecision Decide(InboundToken token, DateTimeOffset utc) => token switch\n{\n    { Scheme: \"LTI\", Version: \"1.3\", Issuer: { Length: > 0 } issuer }\n        => new AuthDecision(\"lti13\", issuer, Roles: [\"learner\"]),\n    { Scheme: \"Bearer\", ExpiresAt: DateTimeOffset exp } when exp > utc\n        => new AuthDecision(\"oidc\", token.Issuer ?? \"unknown\", Roles: [\"user\"]),\n    { Scheme: \"ApiKey\", ApiKeyPrefix: \"sk_live\" }\n        => new AuthDecision(\"api-key\", \"legacy\", Roles: [\"service\"]),\n    { Scheme: \"Bearer\" }\n        => throw new InvalidOperationException(\"Bearer token expired or missing exp.\"),\n    _ => throw new InvalidOperationException($\"Unsupported token {token.Scheme}.\")\n};\n\npublic sealed record AuthDecision(string Provider, string Subject, string[] Roles);",
+          "explanation": "LTI requires issuer. Bearer requires a future exp. ApiKey matches a prefix. Unknown schemes throw. No default that returns admin."
+        }
+      ]
+    },
+    {
+      "heading": "Combine with, list patterns, and exhaustiveness",
+      "prose": "After Decide, you may copy the decision with with { Roles = [.. decision.Roles, \"proctor\"] } for an LTI instructor launch. Incoming LTI custom claims often arrive as a string array; a list pattern can require a non-empty context id as the first element. Put relational checks on exp in the arm or in when, not in a later if that every caller must remember. The production failure mode is a new LMS that sends Version = \"1.3.0\" and misses the \"1.3\" constant pattern — match StartsWith in a when, or normalize before the switch.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "when-guard for LTI version prefixes",
+          "code": "public static bool IsLti13(InboundToken token) => token is\n{\n    Scheme: \"LTI\",\n    Version: { } version,\n    Issuer: { Length: > 0 }\n} && version.StartsWith(\"1.3\", StringComparison.Ordinal);",
+          "explanation": "Constant \"1.3\" is too brittle for patch versions. is plus property patterns plus a boolean method keeps the switch arms thin."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Encode providers as data; switch on shape, not on scattered booleans.",
+    "Unknown or expired tokens throw or return a failed decision — never a privileged default.",
+    "when and helper predicates handle prefix versions that constants miss.",
+    "with copies the decision for extra roles without mutating the original."
+  ],
+  "commonPitfalls": [
+    "Matching Scheme strings with different casing from the wire.",
+    "A _ arm that authenticates as guest.",
+    "Mutating Roles on a shared AuthDecision across concurrent requests."
+  ],
+  "relatedTopicIds": [
+    "csharp-11-switch-expressions",
+    "csharp-11-pattern-kinds",
+    "csharp-11-with-immutability",
+    "csharp-05-interfaces",
+    "csharp-07-nrt-vs-typescript"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Discriminated union narrowing",
+      "note": "type Token = { kind: 'lti'; issuer: string } | { kind: 'bearer'; exp: number }. TS narrows on kind. C# property patterns are the equivalent without a required tag if you match several fields.",
+      "futureTopicSlug": "typescript/types/discriminated-unions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Pattern matching overview",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/functional/pattern-matching"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

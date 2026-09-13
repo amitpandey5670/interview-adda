@@ -1,0 +1,71 @@
+{
+  "id": "csharp-16-reflection",
+  "slug": "reflection",
+  "title": "Reflection: power, cost, and when it is the wrong tool",
+  "moduleId": "csharp-16-assemblies-attributes-reflection",
+  "order": 3,
+  "hook": "Reflection is how the runtime describes types that already exist in metadata. Using it as a mapper on every SQS message is how a worker misses its SLA and then fails Native AOT.",
+  "sections": [
+    {
+      "heading": "What reflection is for",
+      "prose": "The `System.Reflection` APIs (`Type`, `Assembly`, `MethodInfo`, `PropertyInfo`) let you inspect and, if you insist, invoke members by name. `object.GetType()` is the cheap entry. `GetCustomAttributes` materializes attribute instances lazily and a new instance per call. Dynamic invocation (`Invoke`, `Activator.CreateInstance`) boxes, skips some compile-time checks, and is orders of magnitude slower than a direct call. Legitimate uses: plugin hosts that load a known interface from a folder, diagnostic dumps, test frameworks, serializers that you did not write. Illegitimate uses in this codebase: discovering every `IRequestHandler` on each message, building Redis DTOs by walking properties in a loop, calling private setters to “fix” a domain entity.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Prefer a compiled map over Invoke",
+          "code": "public interface ISqsHandler\n{\n    Task HandleAsync(string body, CancellationToken ct);\n}\n\npublic sealed class HandlerRegistry(IReadOnlyDictionary<string, ISqsHandler> handlers)\n{\n    public Task DispatchAsync(string type, string body, CancellationToken ct) =>\n        handlers.TryGetValue(type, out var handler)\n            ? handler.HandleAsync(body, ct)\n            : throw new InvalidOperationException(type);\n}\n\n// Wrong on the hot path:\n// typeof(Program).Assembly.GetTypes()...GetMethod(\"Handle\")!.Invoke(null, [body]);",
+          "explanation": "A dictionary of interfaces is wired at composition time. GetTypes plus Invoke on every message allocates, misses trimming, and hides missing methods until production."
+        }
+      ]
+    },
+    {
+      "heading": "Closed world: AOT, trim, and linking",
+      "prose": "Native AOT and the IL trimmer assume they can see every call. `GetMethod(\"Handle\")` is a string; the trimmer may remove `Handle`. You then get `MissingMethodException` or a trim warning you ignored. Source generators and `[DynamicallyAccessedMembers]` exist because of this. If a worker publishes with `PublishAot`, treat reflection as a feature you must justify with roots, not a default architecture. Module 01 already warned that file-based apps default AOT on publish — this is where that warning bites. JSON source generation and regex source generation are the platform’s answer: inspect at compile time, emit typed code, run with no `Type.GetProperties` in the loop."
+    },
+    {
+      "heading": "Privacy is not a suggestion",
+      "prose": "Reflection can call `non-public` members if the runtime permits it. That does not make it a supported API. A private constructor on a domain entity exists so invariants run; `ConstructorInfo.Invoke` is how you create an invalid invoice and then blame the model. Interview answer: “We could, we should not, and AOT may stop us.” Prefer InternalsVisibleTo for tests that need to construct awkward states, or public test-only factory methods marked `Experimental`."
+    }
+  ],
+  "interviewTakeaways": [
+    "Reflection reads metadata that is already in the assembly; it is not a substitute for a composition root.",
+    "String-named members are invisible to the trimmer; Native AOT makes that a ship blocker.",
+    "Do not use reflection to bypass constructors that enforce invariants."
+  ],
+  "commonPitfalls": [
+    "Caching Type but still calling GetCustomAttributes every request — those allocate new attribute instances.",
+    "Scanning all types in the entry assembly on startup in a Lambda — cold start pays for every unused controller-shaped class you accidentally compiled in.",
+    "Assuming BindingFlags.NonPublic is acceptable in production because tests used it."
+  ],
+  "relatedTopicIds": [
+    "csharp-16-source-generators",
+    "csharp-16-assemblies-and-metadata",
+    "csharp-17-pinvoke-awareness"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "runtime property access vs metadata",
+      "note": "`obj[handlerName]()` is normal JS. C# equivalent GetMethod/Invoke is a slow, trim-hostile escape hatch because types were supposed to be known at compile time.",
+      "futureTopicSlug": "javascript/objects/dynamic-access"
+    },
+    {
+      "language": "javascript",
+      "concept": "Runtime introspection",
+      "note": "JS objects are open at runtime. C# reflection is explicit, slower, and often replaced by source generators.",
+      "futureTopicSlug": "javascript/objects/property-descriptors"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Attributes and reflection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/reflection-and-attributes/"
+    },
+    {
+      "title": "Reflection overview",
+      "url": "https://learn.microsoft.com/en-us/dotnet/fundamentals/reflection/overview"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "sqs-consumer"
+}

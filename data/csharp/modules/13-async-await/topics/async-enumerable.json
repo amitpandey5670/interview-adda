@@ -1,0 +1,58 @@
+{
+  "id": "csharp-13-async-enumerable",
+  "slug": "async-enumerable",
+  "title": "IAsyncEnumerable and await foreach",
+  "moduleId": "csharp-13-async-await",
+  "order": 6,
+  "hook": "IEnumerable cannot await between items. IAsyncEnumerable is the language’s way to pull the next SQS page or CSV chunk without buffering the whole stream.",
+  "sections": [
+    {
+      "heading": "await foreach is the consumer syntax",
+      "prose": "C# 8 introduced IAsyncEnumerable<T> and await foreach. The iterator method is async IAsyncEnumerable<T> and uses yield return. Between yields you can await I/O. The compiler generates a state machine that implements IAsyncEnumerator. Cancellation uses [EnumeratorCancellation] CancellationToken so the foreach can pass a token into the iterator. CancellationToken on the method without that attribute is easy to get wrong — the token from await foreach WithCancellation is what you want. DisposeAsync runs when the foreach exits, including on break and exceptions, which is how you close a RabbitMQ cursor or a file stream.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Paging SQS with await foreach",
+          "code": "public async IAsyncEnumerable<Message> ReceiveAllAsync(\n    string queueUrl,\n    [EnumeratorCancellation] CancellationToken cancellationToken)\n{\n    while (!cancellationToken.IsCancellationRequested)\n    {\n        var response = await _sqs.ReceiveMessageAsync(queueUrl, cancellationToken);\n        if (response.Messages.Count == 0)\n        {\n            yield break;\n        }\n\n        foreach (var message in response.Messages)\n        {\n            yield return message;\n        }\n    }\n}\n\npublic async Task DrainAsync(string queueUrl, CancellationToken cancellationToken)\n{\n    await foreach (var message in ReceiveAllAsync(queueUrl).WithCancellation(cancellationToken))\n    {\n        await HandleAsync(message, cancellationToken);\n    }\n}",
+          "explanation": "Each page is awaited. Callers see a stream of messages, not a List allocated for the whole drain."
+        }
+      ]
+    },
+    {
+      "heading": "When not to stream",
+      "prose": "If the next step needs the full CSV in memory for a sort, IAsyncEnumerable buys nothing. If you need LINQ over async sequences, System.Linq.Async (or the newer BCL async LINQ APIs as they land) is the toolkit; the in-box LINQ-to-objects operators are synchronous. Do not mix yield return with yield break after you have already committed a side effect you cannot undo unless the consumer contract is clear. For Channels (module 15) the producer/consumer is a different shape: IAsyncEnumerable is pull, ChannelReader.ReadAllAsync is also pull but backed by a thread-safe buffer."
+    }
+  ],
+  "interviewTakeaways": [
+    "await foreach pulls; it does not run the producer on a new thread by itself.",
+    "Use EnumeratorCancellation so host shutdown actually stops the iterator.",
+    "Streaming pages avoids a giant List on CSV or SQS drains."
+  ],
+  "commonPitfalls": [
+    "Forgetting [EnumeratorCancellation] so WithCancellation is ignored.",
+    "Calling .ToListAsync() on a huge import and recreating the memory problem.",
+    "Yielding after disposing the resource the next MoveNext still needs."
+  ],
+  "introducedIn": "C# 8.0",
+  "relatedTopicIds": [
+    "csharp-13-why-async",
+    "csharp-13-cancellation-tokens",
+    "csharp-15-concurrent-collections-channels",
+    "csharp-08-iterators-yield"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "for await...of and async generators",
+      "note": "JS async generators (async function*) plus for await...of are the same pull-stream idea. C# yield return in async IAsyncEnumerable is the closest language twin.",
+      "futureTopicSlug": "javascript/async/async-iterators"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Asynchronous programming with async and await",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    }
+  ],
+  "scenarioTag": "csv-import"
+}

@@ -1,0 +1,59 @@
+{
+  "id": "csharp-13-task-async-await",
+  "slug": "task-async-await",
+  "title": "Task, async, await, and ValueTask",
+  "moduleId": "csharp-13-async-await",
+  "order": 2,
+  "hook": "async is not a runtime daemon. The C# compiler rewrites your method into a state machine that parks on await and resumes when a Task or ValueTask completes.",
+  "sections": [
+    {
+      "heading": "The compiler’s state machine",
+      "prose": "An async method returns quickly with a Task (or ValueTask) that represents the rest of the method. At each await, if the awaited awaitable is already completed, execution continues synchronously — a cache hit path. If not, the state machine captures locals, hooks a continuation, and returns. When the I/O completes, the continuation runs the next state. That is why you can write linear code for Redis then HTTP then a RabbitMQ publish. Locals that look like stack variables may live on a heap-allocated state-machine box for the duration of the awaits. Naming methods with the Async suffix is convention, not a compiler rule; the compiler only cares about the async modifier and the return type: void, Task, Task<T>, ValueTask, or ValueTask<T>.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Hot cache path with ValueTask",
+          "code": "public sealed class AttemptCache(IMemoryCache memory, IConnectionMultiplexer redis)\n{\n    public async ValueTask<string?> GetPayloadAsync(string attemptId, CancellationToken cancellationToken)\n    {\n        if (memory.TryGetValue(attemptId, out string? cached))\n        {\n            return cached;\n        }\n\n        var db = redis.GetDatabase();\n        var payload = await db.StringGetAsync(attemptId);\n        cancellationToken.ThrowIfCancellationRequested();\n        if (payload.IsNullOrEmpty)\n        {\n            return null;\n        }\n\n        memory.Set(attemptId, payload.ToString(), TimeSpan.FromSeconds(30));\n        return payload.ToString();\n    }\n}",
+          "explanation": "A memory hit completes without allocating a Task. A Redis miss still awaits. Callers must await the ValueTask at most once."
+        }
+      ]
+    },
+    {
+      "heading": "Task versus ValueTask in .NET 10",
+      "prose": "Task is a reference type with a rich API: WhenAll, WhenAny, ContinueWith (prefer await), and exception aggregation. It is the default return type for public APIs. ValueTask is a struct that can hold a result, a Task, or an IValueTaskSource used by pooled pipes and sockets. Use ValueTask when a profiler shows Task allocations on a path that usually finishes synchronously. Never store a ValueTask to await it later twice; the underlying source may have been reused. If you need to pass the operation to WhenAll, call .AsTask() once. async Task still allocates a Task on every slow path; that is normal and cheaper than blocking a thread."
+    }
+  ],
+  "interviewTakeaways": [
+    "await is a compiler transformation, not a new thread.",
+    "ValueTask is an allocation optimization for completed-sync paths; await it once.",
+    "Public surface area should usually return Task unless you have measured otherwise."
+  ],
+  "commonPitfalls": [
+    "Awaiting the same ValueTask instance twice after a cache miss that used IValueTaskSource.",
+    "Using async on a method that never awaits — the compiler warns, and you still pay a state machine.",
+    "Confusing Task.Run (queue CPU work) with async (compose waits)."
+  ],
+  "introducedIn": "C# 5 (async/await); ValueTask in .NET Core 2.0 / C# 7",
+  "relatedTopicIds": [
+    "csharp-13-why-async",
+    "csharp-13-async-exceptions",
+    "csharp-13-promises-vs-tasks",
+    "csharp-14-allocation-traps"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "async functions always return a Promise",
+      "note": "A JS async function boxes a Promise even on a sync return. C# can return ValueTask to skip a heap object on the sync path; JS has no equivalent struct awaitable.",
+      "futureTopicSlug": "javascript/async/promises"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Task asynchronous programming model",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/task-asynchronous-programming-model"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

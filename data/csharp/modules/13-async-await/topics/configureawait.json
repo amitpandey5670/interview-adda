@@ -1,0 +1,57 @@
+{
+  "id": "csharp-13-configureawait",
+  "slug": "configureawait",
+  "title": "ConfigureAwait and SynchronizationContext",
+  "moduleId": "csharp-13-async-await",
+  "order": 5,
+  "hook": "await captures a context if one exists. In UI apps that context is the UI thread. In ASP.NET Core and background workers, it usually is not — but libraries you share still need ConfigureAwait(false).",
+  "sections": [
+    {
+      "heading": "What SynchronizationContext is for",
+      "prose": "SynchronizationContext is a hook that says ‘resume this continuation here.’ WinForms and WPF install one so that after an HTTP await you can touch a control. Classic ASP.NET (not Core) had one that re-entered the request. ASP.NET Core and generic hosts do not install a request SynchronizationContext; continuations run on thread-pool threads. That is why ConfigureAwait(false) does not change much inside a .NET 10 API controller, but it still matters in a NuGet library that might be called from a UI or from a custom context. ConfigureAwait(false) means: do not marshal back; run the continuation on the completing thread (typically the pool). ConfigureAwait(true) is the default for a naked await.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Library Redis helper without capturing context",
+          "code": "public static class TokenCache\n{\n    public static async Task<string?> GetAuthPayloadAsync(\n        IDatabase redis,\n        string sessionId,\n        CancellationToken cancellationToken)\n    {\n        var value = await redis.StringGetAsync(sessionId)\n            .ConfigureAwait(false);\n        cancellationToken.ThrowIfCancellationRequested();\n        return value.IsNullOrEmpty ? null : value.ToString();\n    }\n}",
+          "explanation": "A reusable helper must not resume on a captured UI or legacy ASP.NET context. The worker and Kestrel hosts already have none."
+        }
+      ]
+    },
+    {
+      "heading": "Deadlocks that still appear in interviews",
+      "prose": "The textbook deadlock is: UI or ASP.NET classic thread calls .Result on a Task whose continuation needs that same context to finish. The thread is blocked in Result; the continuation never runs. ASP.NET Core does not have that deadlock, which is why ‘we never ConfigureAwait’ is a common and incomplete answer. Say: Core apps have no sync context, so blocking is still a scalability bug, not that classic deadlock. Libraries targeting both UI and servers should ConfigureAwait(false) after every await that does not need the caller’s context. Do not sprinkle it in application code that immediately uses request-scoped ambient state unless you understand the hop."
+    }
+  ],
+  "interviewTakeaways": [
+    "SynchronizationContext, if present, is where await resumes by default.",
+    "ASP.NET Core has no request SynchronizationContext; blocking is still wrong.",
+    "Reusable libraries should ConfigureAwait(false) unless they must return to the caller’s context."
+  ],
+  "commonPitfalls": [
+    "Claiming ConfigureAwait(false) is required in every ASP.NET Core controller method.",
+    "Using .Result in a library that later gets called from WinForms, recreating the classic deadlock.",
+    "Capturing HttpContext after ConfigureAwait(false) and assuming you are still on the request thread (you need to capture values first)."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-task-async-await",
+    "csharp-13-async-exceptions",
+    "csharp-15-races-deadlocks"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Microtasks always resume on the same JS thread",
+      "note": "There is no ConfigureAwait in the browser: a Promise continuation is a microtask on the same event loop. C# can hop threads; JS cannot hop the JS thread without workers.",
+      "futureTopicSlug": "javascript/async/microtasks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Asynchronous programming with async and await",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

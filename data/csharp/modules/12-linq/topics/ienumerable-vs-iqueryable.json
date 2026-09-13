@@ -1,0 +1,71 @@
+{
+  "id": "csharp-12-ienumerable-vs-iqueryable",
+  "slug": "ienumerable-vs-iqueryable",
+  "title": "IEnumerable versus IQueryable",
+  "moduleId": "csharp-12-linq",
+  "order": 4,
+  "hook": "The lambda looks the same. On IEnumerable it is a Func the JIT runs. On IQueryable it is an expression tree a provider must understand — or throw.",
+  "sections": [
+    {
+      "heading": "Delegates versus expression trees",
+      "prose": "Enumerable.Where takes Func<T,bool>. Queryable.Where takes Expression<Func<T,bool>>. The C# compiler picks the overload from the source type. An expression tree is an immutable data structure of nodes (calls, binaries, constants). A provider walks it. Microsoft documents hard limits: no statement lambdas, no await, no local functions, no assignment, incomplete support for newer language surface. That is all you need in this language track. You do not need DbContext, tracking, or Include.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Same lambda, two compile-time types",
+          "code": "IEnumerable<Attempt> inMemory = attempts;\nIQueryable<Attempt> remote = /* some IQueryProvider */; // interview-level: not EF setup\n\nvar local = inMemory.Where(a => a.Score >= 50);  // Func, runs here\nvar tree = remote.Where(a => a.Score >= 50);     // Expression, maybe SQL later\n\nExpression<Func<Attempt, bool>> explicitTree = a => a.Score >= 50;",
+          "explanation": "Writing the lambda as Expression<...> forces a tree even without IQueryable. You can Compile() it back to a Func for in-process use."
+        }
+      ]
+    },
+    {
+      "heading": "AsQueryable is not a database, ToList is a wall",
+      "prose": "list.AsQueryable() wraps an in-memory sequence. Operators still execute locally after the tree is compiled. The method exists so APIs can accept IQueryable uniformly. Calling ToList (or AsEnumerable) in the middle of a remote chain is the wall: everything after runs as LINQ to Objects on the pulled data. That is the interview answer for “why did this filter not hit the index” without teaching EF. Custom instance methods in a Where are fine on IEnumerable and usually fatal on a provider.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "AsEnumerable as the in-process boundary",
+          "code": "IQueryable<Attempt> q = remote.Where(a => a.Tenant == tenant);\n\n// From here, lambdas may use any in-memory C# — they will not be translated.\nIEnumerable<Attempt> local = q.AsEnumerable()\n    .Where(a => CustomScoreCurve(a) > 0.8);",
+          "explanation": "AsEnumerable switches overload resolution to Enumerable. The first Where may still run in the provider. CustomScoreCurve never has to be translatable."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IEnumerable: Func delegates, process memory.",
+    "IQueryable: expression trees plus a provider; capabilities vary.",
+    "AsQueryable on a List is still in-memory.",
+    "AsEnumerable/ToList is the boundary after which C# runs locally."
+  ],
+  "commonPitfalls": [
+    "Believing AsQueryable sends a List to SQL.",
+    "Putting a statement lambda or local function in a provider Where.",
+    "Turning this topic into an EF Core session — out of scope for this track."
+  ],
+  "relatedTopicIds": [
+    "csharp-12-deferred-execution",
+    "csharp-12-linq-to-objects",
+    "csharp-10-lambdas-and-closures",
+    "csharp-09-generic-types-and-methods"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "No expression-tree split",
+      "note": "JS passes functions. There is no compiler-built AST for array.filter that a SQL engine consumes. ORMs in Node parse functions as strings or use a DSL. C# uniquely has Expression<T> in the language.",
+      "futureTopicSlug": "javascript/functions/first-class"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Language Integrated Query (LINQ) — IQueryable providers",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/linq/"
+    },
+    {
+      "title": "Expression trees",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/expression-trees/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "sqs-consumer"
+}

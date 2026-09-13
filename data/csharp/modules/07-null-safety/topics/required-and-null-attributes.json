@@ -1,0 +1,66 @@
+{
+  "id": "csharp-07-required-and-null-attributes",
+  "slug": "required-and-null-attributes",
+  "title": "required members and MaybeNull / NotNull",
+  "moduleId": "csharp-07-null-safety",
+  "order": 4,
+  "hook": "required is about definite assignment. MaybeNull and NotNull are about teaching flow analysis a contract the signature cannot spell. Neither is a runtime null shield by itself.",
+  "sections": [
+    {
+      "heading": "required (C# 11+)",
+      "prose": "The required modifier on a property or field forces every object initializer (and every constructor that does not opt out) to set that member. Microsoft is explicit: you can still initialize it to null; if the type is a non-nullable reference, that assignment is a warning, not an error. required string AuthorizationHeader { get; init; } is the right shape for an auth options record that must be filled in at construction. required string? OptionalAudience is allowed but usually confused — required means “the caller wrote the property,” not “the value is present.” Types with required members cannot be used as T where T : new() because the compiler cannot run object initializers inside the generic. SetsRequiredMembers on a constructor disables the check; treat that attribute as a loaded gun.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Auth options with required plus attributes",
+          "code": "public sealed class TokenOptions\n{\n    public required string Issuer { get; init; }\n    public required string Audience { get; init; }\n    public string? TenantClaim { get; init; }\n}\n\npublic static bool TryReadBearer(\n    string? header,\n    [NotNullWhen(true)] out string? token)\n{\n    token = null;\n    if (header is not { Length: > 7 } || !header.StartsWith(\"Bearer \", StringComparison.Ordinal))\n        return false;\n    token = header[\"Bearer \".Length..];\n    return token.Length > 0;\n}",
+          "explanation": "required Issuer cannot be omitted. TryReadBearer uses NotNullWhen(true) so callers can use token without ! after a true return."
+        }
+      ]
+    },
+    {
+      "heading": "The analysis attribute set",
+      "prose": "When T is generic, T? is messy. [return: MaybeNull] on Find<T> says the method may return default even though the return type is T — callers must check. [NotNull] on a parameter says that after the method returns, the argument is not null (ThrowWhenNull). [NotNullWhen(true)] / [NotNullWhen(false)] power Try* and IsNullOrEmpty-style APIs. [NotNullIfNotNull(nameof(input))] says the return is null exactly when input is. [MaybeNullWhen], [DoesNotReturn], [DoesNotReturnIf], [MemberNotNull], and [MemberNotNullWhen] cover helpers that set fields. These live in System.Diagnostics.CodeAnalysis. They change warnings, not IL. A Redis TryGet that returns bool and sets out T value should use [MaybeNullWhen(false)] so a false result keeps value maybe-null."
+    },
+    {
+      "heading": "Production cache lookup",
+      "prose": "A generic cache wrapper often wants T? Get<T>(string key). If T is a struct, you just invented Nullable confusion; if T is a class, a miss is null. Prefer TryGet<T>(key, [MaybeNullWhen(false)] out T value) or a Result<T> (module 09). Attributes document the bool; they do not deserialize JSON for you. After a true TryGet, still validate the payload — NRT will not catch a missing nested claim."
+    }
+  ],
+  "interviewTakeaways": [
+    "required enforces initialization in object initializers; it does not forbid null.",
+    "MaybeNull / NotNull / NotNullWhen exist because generic signatures cannot always say T?.",
+    "SetsRequiredMembers and null! both turn the compiler off — use them as last resorts."
+  ],
+  "commonPitfalls": [
+    "Marking a property required string? and believing the value cannot be omitted and cannot be null.",
+    "Returning T from Find without MaybeNull, so callers think a miss is a valid T.",
+    "Forgetting [NotNullWhen(true)] on a custom IsPresent, then sprinkling ! at every call site."
+  ],
+  "introducedIn": "C# 11",
+  "relatedTopicIds": [
+    "csharp-07-nrt-annotations",
+    "csharp-07-null-forgiving-and-checks",
+    "csharp-09-generic-result-wrapper"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "definite assignment and definite assignment assertions",
+      "note": "TS definite assignment (!) on fields is cousin to C# required and to field-level !. required is a language error; TS ! is an assertion.",
+      "futureTopicSlug": "typescript/classes/definite-assignment"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "required modifier",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/required"
+    },
+    {
+      "title": "Nullable analysis attributes",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/attributes/nullable-analysis"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

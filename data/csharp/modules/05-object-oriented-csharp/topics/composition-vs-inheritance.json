@@ -1,0 +1,66 @@
+{
+  "id": "csharp-05-composition-vs-inheritance",
+  "slug": "composition-vs-inheritance",
+  "title": "Composition versus inheritance",
+  "moduleId": "csharp-05-object-oriented-csharp",
+  "order": 1,
+  "hook": "A microservice host is a composition root: it owns collaborators, not a family tree. Inheritance is a scalpel for one is-a relationship with a virtual surface. C# forces the choice because you get only one base class.",
+  "sections": [
+    {
+      "heading": "What composition looks like in production",
+      "prose": "An SQS consumer that grades attempts does not inherit from RedisCache and RabbitPublisher. It receives IAttemptStore, IBus, and IClock through a constructor (module 04) and calls them. That is composition: has-a, replaceable in tests, versioned independently. Inheritance couples your type to a constructor chain and a protected surface you must keep forever. Across service boundaries, composition is how you stay deployable."
+    },
+    {
+      "heading": "When inheritance still wins",
+      "prose": "Use a base class when many types share algorithm steps with variation points — a Template Method with protected abstract hooks — and you control all derived types in one assembly. A family of auth providers that only differ in how they parse a token can share validation and clock skew in a base, with sealed derived LtiProvider and OidcProvider. If the variation is a dependency (HTTP vs in-memory), inject it instead of subclassing.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Compose a worker; inherit only the parser family",
+          "code": "sealed class AttemptWorker(\n    IAttemptStore store,\n    IBus bus,\n    TokenParser parser)\n{\n    public async Task HandleAsync(string messageId, string body, CancellationToken ct)\n    {\n        var token = parser.Parse(body);\n        await store.SaveAsync(token.AttemptId, ct);\n        await bus.PublishAsync(token.AttemptId, ct);\n    }\n}\n\nabstract class TokenParser\n{\n    public AuthToken Parse(string raw) => ParseCore(raw);\n    protected abstract AuthToken ParseCore(string raw);\n}",
+          "explanation": "The worker is sealed and composed. TokenParser is a narrow hierarchy for parsing variation. Redis and the bus stay interfaces, not base classes."
+        }
+      ]
+    },
+    {
+      "heading": "Interview phrasing",
+      "prose": "Say: “I inherit for polymorphism I own; I compose for infrastructure I replace.” Follow with C#’s single base class and interfaces for extra capabilities (next topics). Do not recite the GoF book; point at a worker you have shipped."
+    }
+  ],
+  "interviewTakeaways": [
+    "Composition is has-a via constructor injection; inheritance is is-a with one base.",
+    "Microservices stay composition-heavy; hierarchies stay small and in-process.",
+    "Interfaces (later topic) are how C# adds extra roles without a second base class."
+  ],
+  "commonPitfalls": [
+    "BaseService that becomes a dumping ground for logging, HTTP, and caching.",
+    "Subclassing to tweak one method when a delegate or strategy object would do."
+  ],
+  "relatedTopicIds": [
+    "csharp-05-inheritance",
+    "csharp-05-interfaces",
+    "csharp-04-constructors-and-required"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "prototype chains versus composition",
+      "note": "JS historically piled behavior on prototypes. Modern JS/TS services compose modules the same way C# workers compose interfaces.",
+      "futureTopicSlug": "javascript/objects/prototypes"
+    },
+    {
+      "language": "typescript",
+      "concept": "mixins",
+      "note": "TS mixins fake multiple inheritance. C# uses interfaces plus composition; there is no mixin keyword.",
+      "futureTopicSlug": "typescript/classes/mixins"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Object-oriented programming in C#",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/object-oriented/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "sqs-consumer"
+}

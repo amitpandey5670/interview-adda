@@ -1,0 +1,42 @@
+{
+  "moduleId": "csharp-13-async-await",
+  "title": "Async/await interview drills",
+  "items": [
+    {
+      "question": "Why does a .NET worker use async for SQS or RabbitMQ I/O instead of blocking Receive?",
+      "answer": "Receive and HTTP calls spend most of their time waiting on the network. A blocking call holds a thread-pool thread for the entire wait. await registers a continuation and returns the thread so other messages can start. Throughput is about concurrent in-flight I/O, not spinning more threads. CPU-bound hashing is a different problem and belongs in Task.Run or a dedicated pipeline, not in the async keyword itself.",
+      "followUps": [
+        "What happens if you call .Result on that receive task from a thread-pool thread?",
+        "How is this different from cooking breakfast in parallel with multiple threads?"
+      ],
+      "sixtySeconds": "async is for I/O wait. await frees the thread. Blocking Receive wastes pool threads. Parallel CPU work is a separate decision."
+    },
+    {
+      "question": "When would you return ValueTask instead of Task from a cache lookup?",
+      "answer": "When the common path is already complete — Redis hit deserialized in memory, or a memory cache hit — and you want to skip allocating a Task object. ValueTask is a struct that can wrap a result or a Task. You await it once, then forget it. If callers might await twice, or you need Task combinators like WhenAll without conversion, stick with Task. Measure; the allocation only matters on a hot path.",
+      "followUps": [
+        "Why is awaiting the same ValueTask twice undefined?",
+        "How does IValueTaskSource relate to pooled sockets?"
+      ],
+      "sixtySeconds": "ValueTask is for sync-complete hot paths. Await once. Prefer Task unless you have measured allocations."
+    },
+    {
+      "question": "Why is async void only acceptable for event handlers?",
+      "answer": "async void cannot be awaited, so callers cannot observe completion or exceptions. The exception is posted to the current SynchronizationContext or the thread pool and can take down a process. Events in WinForms or WPF are void-returning by contract, so async void is the escape hatch. In workers and APIs, return Task so the host can await, log, and nack the message.",
+      "followUps": [
+        "How does an exception from async Task differ from async void?",
+        "What should a RabbitMQ Received handler return instead?"
+      ],
+      "sixtySeconds": "async void swallows the caller's ability to await. Exceptions go unobserved. Events only. Everywhere else return Task."
+    },
+    {
+      "question": "How do you cancel an in-flight SQS consumer shutdown?",
+      "answer": "The host supplies a CancellationToken that fires on SIGTERM. Pass that token into Receive, HTTP, and Redis calls. Catch OperationCanceledException and stop the loop without treating it as a poison message. Use CreateLinkedTokenSource if a per-message timeout should cancel independently of process shutdown. Cancellation is cooperative: a library that never observes the token will keep running.",
+      "followUps": [
+        "What is the difference between CancelAfter and a linked source?",
+        "Should you ack a message you cancelled midway?"
+      ],
+      "sixtySeconds": "Pass the host token down. Cooperative only. On shutdown, stop the loop; do not nack cancellation as failure unless the business says so."
+    }
+  ]
+}

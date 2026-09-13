@@ -1,0 +1,69 @@
+{
+  "id": "csharp-18-code-review-radar",
+  "slug": "code-review-radar",
+  "title": "Code-review radar for interviews",
+  "moduleId": "csharp-18-version-style-performance",
+  "order": 5,
+  "hook": "Interviewers do not want a compiler. They want the order you notice danger. This page is that order, citing the modules behind it.",
+  "sections": [
+    {
+      "heading": "Pass 1: lifetime and asynchrony",
+      "prose": "Look for `IDisposable` that never got `using` — SkiaSharp, `HttpClient` misuse, `IMemoryOwner` (modules 06 and 17). Look for `async void` except event handlers, discarded `Task`s on an SQS handler, and `lock` around `await` (modules 13 and 15). Look for `Span` stored on a field or used after `await` (module 17). Look for `fixed` pointers that escape the block. If the snippet is a consumer, ask where cancellation token flows. This pass finds production outages. Style can wait.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Radar hits in one method",
+          "code": "async Task HandleAsync(string json)\n{\n    var span = json.AsSpan();\n    await Task.Delay(1); // SPAN WOULD BE ILLEGAL if we used span after this\n    var dto = JsonSerializer.Deserialize<AttemptCacheDto>(json);\n    _cache[dto!.Id] = dto; // public mutable dictionary, no token, no Dispose story\n}",
+          "explanation": "Call out: no CancellationToken, possible null dto, shared mutable cache, deserialize allocating on a hot path. Do not start with “Id should be camelCase.”"
+        }
+      ]
+    },
+    {
+      "heading": "Pass 2: allocations and closed world",
+      "prose": "CSV `Split`, LINQ `ToList` on a hot path already enumerated (module 12), `+` string loops instead of `string.Create`/`TryWrite`, reflection `GetTypes` on each message (module 16), extra DTO clones (previous topic). Ask whether Native AOT is in play (module 01). If yes, string-named `GetMethod` is a trim bug, not a style nit. Prefer a generated dispatcher. High-concurrency attempt-submit (199 → 999) makes these nits into incidents."
+    },
+    {
+      "heading": "Pass 3: surface, then style",
+      "prose": "New `public` on a library without PublicAPI.Unshipped.txt (module 16) is a contract change. `InternalsVisibleTo` missing so someone made the parser public. `[Obsolete]` without a replacement. Then naming: `_` vs `s_`, interface `I`, record properties PascalCase (identifier-names). Then language-version toys used for no reason: interceptors, unexplained `unsafe`, `dynamic`. In a live interview, say the pass number. It shows you will not bikeshed while a native handle leaks. Tie the recap together: C# 8–14 (this module) is how you date a construct; modules 14–17 are how you decide if it is safe at run time."
+    }
+  ],
+  "interviewTakeaways": [
+    "Review lifetime and async before allocations, public API, and naming.",
+    "Cite module-level rules (Span, Dispose, InternalsVisibleTo) instead of vague “best practices.”",
+    "Treat unapproved public surface as a product bug, not a formatter issue."
+  ],
+  "commonPitfalls": [
+    "Spending the interview on brace style while async void ships.",
+    "Demanding Span in a once-a-day admin tool — wrong pass, wrong intensity.",
+    "Failing to mention CI public API files when the prompt is a shared library PR."
+  ],
+  "relatedTopicIds": [
+    "csharp-18-csharp-8-to-14-map",
+    "csharp-16-ci-public-api-guards",
+    "csharp-17-span-memory"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "review order in Node PRs",
+      "note": "A senior Node review also starts with resource leaks (streams) and unhandled promises, then allocations, then exports. The C#-specific radar is pinning, ref structs, and assembly public surface.",
+      "futureTopicSlug": "javascript/process/code-review"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Identifier names",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names"
+    },
+    {
+      "title": "Memory<T> usage guidelines",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
+    },
+    {
+      "title": "What's new in C# 14",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

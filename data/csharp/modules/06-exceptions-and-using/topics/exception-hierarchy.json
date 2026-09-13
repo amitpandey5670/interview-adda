@@ -1,0 +1,70 @@
+{
+  "id": "csharp-06-exception-hierarchy",
+  "slug": "exception-hierarchy",
+  "title": "Exception hierarchy",
+  "moduleId": "csharp-06-exceptions-and-using",
+  "order": 3,
+  "hook": "Everything hangs off System.Exception. The skill is choosing what a worker swallows, what it retries, and what it lets kill the message versus the process.",
+  "sections": [
+    {
+      "heading": "Types you actually name",
+      "prose": "SystemException is a historical bucket; you catch more specific types: ArgumentException (and ArgumentNullException, ArgumentOutOfRangeException), InvalidOperationException, IOException, HttpRequestException, JsonException, OperationCanceledException, TimeoutException. ApplicationException is obsolete as a policy. Custom exceptions should be rare, serializable in spirit (message + inner), and named for the domain (LeaseExpiredException), not for every if."
+    },
+    {
+      "heading": "Worker versus bubble",
+      "prose": "An SQS or RabbitMQ consumer is a boundary. At HandleAsync you may catch known transient faults, retry, then fail the message to a DLQ. Unknown failures should bubble to the host so visibility stays honest — metrics, poison-message counts, process health. Catching Exception, logging, and returning as success is silent data loss. Static constructors that throw become TypeInitializationException wrapping the inner cause; you cannot “retry” that type in-process without unloading. High-concurrency submit paths should fail fast on cancellation and on invariant breaks, not wrap every call in Exception.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Message boundary: retry known, bubble unknown",
+          "code": "async Task ConsumeAsync(string body, CancellationToken ct)\n{\n    try\n    {\n        await HandleAsync(body, ct);\n    }\n    catch (OperationCanceledException) when (ct.IsCancellationRequested)\n    {\n        throw;\n    }\n    catch (TimeoutException ex)\n    {\n        Log(ex);\n        throw; // host: retry / DLQ policy\n    }\n}",
+          "explanation": "Timeout is a known worker failure: log and rethrow so the queue infrastructure retries. There is no catch (Exception). Argument bugs bubble untouched."
+        }
+      ]
+    },
+    {
+      "heading": "Process-level facts",
+      "prose": "If no catch exists, the thread dies. In ASP.NET or a Worker Service the host may crash or log depending on configuration — still not a reason to catch everything. Unobserved Task exceptions used to crash processes on later .NET; the modern default logs them. That policy is module 13. Finalizer exceptions abort the finalizer — module 14."
+    }
+  ],
+  "interviewTakeaways": [
+    "Catch specific types; Exception only at a true boundary.",
+    "Workers: retry/DLQ policy versus bubble. Do not succeed after a swallowed failure.",
+    "TypeInitializationException means the type is done for this process."
+  ],
+  "commonPitfalls": [
+    "catch (Exception) { return; } in an SQS handler.",
+    "Custom exception types that add no extra data and are never caught by name."
+  ],
+  "relatedTopicIds": [
+    "csharp-06-try-catch-finally",
+    "csharp-06-throw-vs-throw-ex",
+    "csharp-04-static-members",
+    "csharp-13-async-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Error subclasses",
+      "note": "JS has Error, TypeError, and user subclasses, but many libraries throw plain objects. C# culture is a real hierarchy under Exception.",
+      "futureTopicSlug": "javascript/errors/error-types"
+    },
+    {
+      "language": "typescript",
+      "concept": "never a closed exception union",
+      "note": "TS cannot exhaustively type thrown errors. C# catch lists are the closest thing to an exhaustive failure story.",
+      "futureTopicSlug": "typescript/errors/hierarchy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Using exceptions",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/exceptions/using-exceptions"
+    },
+    {
+      "title": "System.Exception",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.exception"
+    }
+  ],
+  "scenarioTag": "sqs-consumer"
+}

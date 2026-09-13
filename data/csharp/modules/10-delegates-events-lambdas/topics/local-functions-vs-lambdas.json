@@ -1,0 +1,66 @@
+{
+  "id": "csharp-10-local-functions-vs-lambdas",
+  "slug": "local-functions-vs-lambdas",
+  "title": "Local functions versus lambdas",
+  "moduleId": "csharp-10-delegates-events-lambdas",
+  "order": 3,
+  "hook": "A SkiaSharp render helper that yields tiles wants a local function: argument checks run now, yield lives in the nested iterator, and you never allocate a Func.",
+  "sections": [
+    {
+      "heading": "What local functions are",
+      "prose": "A local function is a named method nested in another member. It has no access modifier. It may be async, unsafe, static, or extern (extern must be static). It can carry attributes on itself and on parameters. It cannot sit inside an expression-bodied member. Non-static locals see enclosing locals and this. static locals cannot capture, which is the same guarantee as a static lambda, with method syntax.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Validate then iterate — local function + IDisposable",
+          "code": "public IEnumerable<byte[]> RasterPages(Stream fontStream, int pageCount)\n{\n    ArgumentNullException.ThrowIfNull(fontStream);\n    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageCount);\n\n    return Pages();\n\n    IEnumerable<byte[]> Pages()\n    {\n        using var surface = SkiaSurface.Create(); // IDisposable stand-in for SKSurface\n        for (var i = 0; i < pageCount; i++)\n        {\n            yield return surface.EncodePage(i);\n        }\n    }\n}",
+          "explanation": "If Pages were the outer iterator, a bad pageCount would throw only when the caller first MoveNext. The local function pattern throws at the call site, then disposes the surface as the enumerator is disposed."
+        }
+      ]
+    },
+    {
+      "heading": "Where lambdas lose",
+      "prose": "Lambdas are anonymous, must be definitely assigned before recursive use, always become delegates when stored, and cannot contain yield return. Local functions can be called as methods with no delegate, so the JIT may skip a heap closure when nothing else captures the same locals. Recursion is natural. Prefer a lambda when the API takes Func or Action (LINQ, Task.Run, events). Prefer a local function when you would otherwise write a private method that only one caller should see, especially iterators and async methods that must validate first.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Recursion without a dummy Func",
+          "code": "static int Factorial(int n)\n{\n    return Inner(n);\n\n    static int Inner(int k) => k < 2 ? 1 : k * Inner(k - 1);\n}",
+          "explanation": "A lambda factorial needs Func<int,int> inner = null!; then assignment. The local function is already in scope and static so it cannot capture n by accident."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Local functions: named, attributes, yield, recursion, optional delegate conversion.",
+    "Put argument validation in the outer method; put yield/async state machine in the local function.",
+    "static local function = no capture, same idea as static lambda.",
+    "Lambdas win at APIs that demand a delegate type."
+  ],
+  "commonPitfalls": [
+    "Writing yield return in the same method that validates arguments, so exceptions appear late.",
+    "Converting a local function to a delegate in a loop and losing the allocation win.",
+    "Declaring a local function inside an expression-bodied property — illegal."
+  ],
+  "relatedTopicIds": [
+    "csharp-10-lambdas-and-closures",
+    "csharp-10-delegates-func-action",
+    "csharp-12-deferred-execution"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Nested function declarations versus arrows",
+      "note": "JS nested function foo() {} is hoisted in its scope and can recurse by name. C# local functions are also in scope throughout the containing member, unlike a const fn = () => that is temporal-dead before initialization.",
+      "futureTopicSlug": "javascript/functions/nested-declarations"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Local functions",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/classes-and-structs/local-functions"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "skiasharp-dispose"
+}

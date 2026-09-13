@@ -1,0 +1,71 @@
+{
+  "id": "csharp-12-linq-to-objects",
+  "slug": "linq-to-objects",
+  "title": "LINQ to Objects versus later SQL",
+  "moduleId": "csharp-12-linq",
+  "order": 5,
+  "hook": "Bulk CSV import is LINQ to Objects: the rows are already in a List. Later SQL is a different provider with a smaller language. Do not write one query and expect both to mean the same.",
+  "sections": [
+    {
+      "heading": "What LINQ to Objects is",
+      "prose": "LINQ to Objects is Enumerable’s implementation over any IEnumerable<T> already in the process: arrays, List, Dictionary, the result of File.ReadLines, a parsed CSV. Lambdas may call any C# you could call in a foreach. Deferred execution still applies. This is the right default for import pipelines, in-memory reporting after you already loaded attempts, and Redis payloads you deserialized. It is not slower than foreach by some law; allocations from delegates, closures, and intermediate iterators are the real cost, measurable on the submit hot path.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "CSV import with LINQ to Objects",
+          "code": "public static IReadOnlyList<AttemptRow> ParseAttempts(IEnumerable<string> lines) =>\n    lines\n        .Skip(1)\n        .Select(line => line.Split(','))\n        .Where(cols => cols.Length >= 3 && cols[0] is not \"\")\n        .Select(cols => new AttemptRow(cols[0], cols[1], int.Parse(cols[2])))\n        .ToList();\n\npublic sealed record AttemptRow(string AttemptId, string Status, int Score);",
+          "explanation": "Skip/Select/Where run in process. ToList materializes before the file enumerator is lost. Pattern cols[0] is not \"\" is ordinary C# in a Func."
+        }
+      ]
+    },
+    {
+      "heading": "What changes if a SQL provider shows up later",
+      "prose": "A future IQueryable source will reject or mis-translate: DateTime.Now in a filter (often evaluated locally by accident), string.Format, your extension properties from C# 14, collection expressions, and switch expressions. The interview-level move is to keep translatable predicates boring (property, constant, a few string methods) and to pull to objects with ToList before you use the rest of C#. This module will not walk EF Core translations. Your answer is: LINQ to Objects is the full language; a SQL provider is a subset plus a server. Mixing them without a wall is how import code “worked on a list” and then timed out on a table.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Keep the wall explicit",
+          "code": "IReadOnlyList<AttemptRow> imported = ParseAttempts(lines);\n\n// Full C# from here — including C# 14 extension properties.\nvar retry = imported.Where(r => r.Status.Equals(\"fail\", StringComparison.OrdinalIgnoreCase)\n                                && r.Score < 50);",
+          "explanation": "OrdinalIgnoreCase is trivial in memory and historically awkward for some SQL providers. Doing it after ParseAttempts.ToList is honest."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "LINQ to Objects = Enumerable + in-memory sequences + full C# in lambdas.",
+    "CSV, Redis JSON, and already-loaded attempts belong here.",
+    "A later SQL provider is a different contract, not a faster List.",
+    "Materialize, then use rich C#, when translation is not guaranteed."
+  ],
+  "commonPitfalls": [
+    "Copy-pasting an in-memory query onto IQueryable and shipping it.",
+    "Leaving a query over File.ReadLines un-materialized after the stream closes.",
+    "Micro-optimizing LINQ versus foreach before measuring allocations on the submit path."
+  ],
+  "relatedTopicIds": [
+    "csharp-12-deferred-execution",
+    "csharp-12-ienumerable-vs-iqueryable",
+    "csharp-11-pattern-kinds",
+    "csharp-08-ienumerable-foreach"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "In-memory array transforms versus SQL builders",
+      "note": "rows.filter is LINQ to Objects. knex/prisma query builders are closer to IQueryable: a DSL, not your full JS, runs on the server.",
+      "futureTopicSlug": "javascript/arrays/map-filter"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Introduction to LINQ queries — LINQ to Objects",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/linq/get-started/introduction-to-linq-queries"
+    },
+    {
+      "title": "LINQ to Objects (overview)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/linq/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "csv-import"
+}

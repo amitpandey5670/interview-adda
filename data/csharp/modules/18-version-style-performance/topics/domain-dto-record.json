@@ -1,0 +1,75 @@
+{
+  "id": "csharp-18-domain-dto-record",
+  "slug": "domain-dto-record",
+  "title": "Domain, DTO, and record — allocation-aware",
+  "moduleId": "csharp-18-version-style-performance",
+  "order": 4,
+  "hook": "A record is a language feature. A DTO is a serialization shape. A domain type is where invariants live. Collapsing the three is how Redis JSON becomes your business model.",
+  "sections": [
+    {
+      "heading": "Three jobs, three types",
+      "prose": "A domain `Attempt` has an id that does not change when scores change, a constructor that rejects empty tenant ids, and methods that apply events. Equality is identity, or an explicit value object nested inside. A DTO (`AttemptCacheDto`) exists to round-trip JSON to Redis or an SQS body: public init properties, no behavior, no invariants beyond “serializer succeeded.” A `record` (module 04) gives positional syntax, value equality, and `with`. That is a gift for DTOs and for small value objects (`record struct Money`, `readonly record struct RedisKey`). It is a trap for entities: `attempt with { Score = 0 }` clones without running `ApplyScore`. RabbitMQ messages are DTOs. The consumer maps them into domain commands. Do not share one type across the bus and the aggregate.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Split the cache shape from the entity",
+          "code": "public sealed class Attempt\n{\n    public Attempt(string id, string tenantId)\n    {\n        if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException(\"id\");\n        Id = id;\n        TenantId = tenantId;\n    }\n\n    public string Id { get; }\n    public string TenantId { get; }\n    public int Score { get; private set; }\n    public void ApplyScore(int score) => Score = score >= 0 ? score : throw new ArgumentOutOfRangeException(nameof(score));\n}\n\npublic sealed record AttemptCacheDto(string Id, string TenantId, int Score);\n\npublic static Attempt ToDomain(this AttemptCacheDto dto)\n{\n    var attempt = new Attempt(dto.Id, dto.TenantId);\n    attempt.ApplyScore(dto.Score);\n    return attempt;\n}",
+          "explanation": "The record is the Redis JSON contract. ToDomain runs the constructor and ApplyScore. A with-expression on AttemptCacheDto never bypasses that if you do not map blindly."
+        }
+      ]
+    },
+    {
+      "heading": "Allocation: what to copy, what to slice",
+      "prose": "CSV import (module 17) should parse into primitives and only then construct a DTO or entity. Holding `ReadOnlySpan<char>` inside a class is illegal; you either intern a `string` the domain must own or you keep the row as a stack-local parse. `record struct` DTOs avoid a heap object per row if the fields are small and you do not box them. `record class` DTOs are fine for Redis payloads you already allocate. Collection expressions (C# 12) that build `List<AttemptCacheDto>` from a million rows still allocate a million objects — the syntax did not make it free. Map at the boundary once; do not map DTO → anonymous type → record → entity on every property get.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Parse then allocate once",
+          "code": "static bool TryMapRow(ReadOnlySpan<char> line, out AttemptCacheDto dto)\n{\n    dto = default!;\n    if (!TryReadScore(line, out var id, out var score)) return false;\n    dto = new AttemptCacheDto(id.ToString(), tenantId: \"import\", score);\n    return true;\n}",
+          "explanation": "The span dies at the method end. The DTO owns strings it must store. Do not keep a span-based “flyweight entity” on a class field."
+        }
+      ]
+    },
+    {
+      "heading": "Auth tokens and other secrets",
+      "prose": "An auth token DTO may be a `record` with `string AccessToken` for logging boundaries you must never log. The domain validator (module 16 attributes on the method, not on the record) consumes it and returns a principal. Do not put `Validate()` on the DTO so every serializer instance becomes a security API. Keep behavior on types you version as public API with CI guards (module 16); keep DTOs boring."
+    }
+  ],
+  "interviewTakeaways": [
+    "Domain types enforce invariants; DTOs serialize; records supply value equality and with-expressions.",
+    "Do not with-clone an entity to skip its methods.",
+    "Promote span slices to strings only when a heap object must own the data."
+  ],
+  "commonPitfalls": [
+    "Using the same record for EF-shaped domain, Redis, and SQS “to save mapping.”",
+    "record struct that contains a List — the struct copy is shallow; you thought you were safe.",
+    "Parsing CSV into List<string> then into a record — you paid Split and then paid the DTO."
+  ],
+  "relatedTopicIds": [
+    "csharp-17-stackalloc-csv",
+    "csharp-18-idiomatic-csharp",
+    "csharp-16-ci-public-api-guards",
+    "csharp-05-records",
+    "csharp-09-generic-result-wrapper"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "interface DTO vs class entity",
+      "note": "TS interfaces vanish at runtime, so teams often use one type for JSON and behavior. C# types survive in metadata; you can and should keep a class entity distinct from a record DTO.",
+      "futureTopicSlug": "typescript/types/interfaces-vs-classes"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Records",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record"
+    },
+    {
+      "title": "Identifier names (record primary constructor parameters)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "csv-import"
+}

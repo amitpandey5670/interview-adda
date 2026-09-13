@@ -1,0 +1,63 @@
+{
+  "id": "csharp-13-promises-vs-tasks",
+  "slug": "promises-vs-tasks",
+  "title": "JavaScript Promises versus Task",
+  "moduleId": "csharp-13-async-await",
+  "order": 7,
+  "hook": "Both models let you write linear async code. The scheduling underneath is not the same: Promises settle into the microtask queue on one JS thread; Tasks resume on a .NET thread-pool thread unless a SynchronizationContext says otherwise.",
+  "sections": [
+    {
+      "heading": "What maps, and what does not",
+      "prose": "A JS Promise is a thenable object that is pending, fulfilled, or rejected. A .NET Task is a thenable in spirit: incomplete, ran-to-completion, faulted, or canceled. await promise in JS schedules a microtask; those microtasks drain before the next macrotask (timers, I/O callbacks). await task in C# schedules a continuation that may run on another thread. There is no microtask queue in the CLR. That is why a long CPU loop in a JS async function freezes the UI or the Node event loop, while a long CPU loop inside a C# async method after an await still freezes that thread but other pool threads can proceed. JS has no ValueTask; every async function allocates a Promise. JS has no CancellationToken on the language Promise; AbortSignal is bolted onto fetch and friends.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Same composition, different scheduler",
+          "code": "public async Task<string> LoadSessionAsync(string sessionId, CancellationToken cancellationToken)\n{\n    var redisTask = _redis.GetDatabase().StringGetAsync(sessionId);\n    var introspectTask = _http.GetStringAsync($\"/oauth/introspect/{sessionId}\", cancellationToken);\n    await Task.WhenAll(redisTask, introspectTask);\n    return redisTask.Result.ToString() ?? introspectTask.Result;\n}",
+          "explanation": "WhenAll is Promise.all. Continuations may hop threads. In JS, the then callbacks still run on the single JS thread via microtasks."
+        }
+      ]
+    },
+    {
+      "heading": "Interview trap: ‘async means parallel’",
+      "prose": "In both languages, awaiting A then B is sequential. Starting both then combining is concurrent wait. Parallel CPU in JS requires Worker threads or a native addon; in C# it requires extra threads (Task.Run, Parallel, PLINQ) which is module 15, not this language TAP module. TypeScript’s Promise types erase; Task<T> remains in IL and is awaited by the state machine. Do not say ‘Task is just a Promise.’ Say ‘same programmer model, different execution engine.’"
+    }
+  ],
+  "interviewTakeaways": [
+    "Promise continuations are microtasks on one thread; Task continuations are pool threads unless marshaled.",
+    "Promise.all ≈ Task.WhenAll; neither is data parallelism.",
+    "AbortController is the practical JS analog of CancellationToken, not a hidden field on Promise."
+  ],
+  "commonPitfalls": [
+    "Claiming C# await uses a microtask queue.",
+    "Using Task.Result in a WhenAll continuation and thinking it is as safe as awaiting (it is OK after WhenAll completes, but the style hides faults if WhenAll is skipped).",
+    "Equating Node worker_threads with C# async/await."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-why-async",
+    "csharp-13-task-async-await",
+    "csharp-15-thread-pool-task-parallel"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Promises and the microtask queue",
+      "note": "queueMicrotask and Promise.then always run on the JS thread before rendering or I/O macrotasks. Map this against Task continuations that can run on any pool thread.",
+      "futureTopicSlug": "javascript/async/microtasks"
+    },
+    {
+      "language": "typescript",
+      "concept": "Promise<T> versus Task<T>",
+      "note": "TypeScript’s Promise<T> is a compile-time annotation around a JS Promise. Task<T> is a real CLR type with status, cancellation, and exception storage.",
+      "futureTopicSlug": "typescript/async/promises"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Asynchronous programming with async and await",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
+}

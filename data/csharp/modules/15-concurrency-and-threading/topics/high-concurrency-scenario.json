@@ -1,0 +1,64 @@
+{
+  "id": "csharp-15-high-concurrency-scenario",
+  "slug": "high-concurrency-scenario",
+  "title": "199 to 999 users and Redis stampede",
+  "moduleId": "csharp-15-concurrency-and-threading",
+  "order": 5,
+  "hook": "The attempt-submit path that was fine at 199 concurrent users fails at 999 in a specific way: every request misses the cache together, stampedes Redis or the origin, and if you ‘fixed’ it with a lock around I/O, you serialized the entire fleet.",
+  "sections": [
+    {
+      "heading": "What breaks at 999",
+      "prose": "At 199 concurrent submits, a 5 ms Redis GET and a rare miss to the origin hide a lot of sins: a static Dictionary, a lock around the miss, a sync-over-async client. At 999, misses cluster after TTL expiry (especially a deploy that flushes keys). Thread-pool injection lags. Server GC sees a gen-0 spike from per-request buffers. A lock(_gate) around StringGetAsync either deadlocks on await or, if you block, makes 999 users share one round-trip at a time. The fix is single-flight per cache key: the first miss creates a Task that fills Redis; everyone else awaits that Task. Mutation of the in-flight map uses ConcurrentDictionary or a tiny lock that does not include the I/O. TTL jitter (expiry plus random 0–30s) stops lockstep expiry. SemaphoreSlim(8) can cap origin load if the fill is a database, still without holding a Monitor during the query.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Single-flight Redis fill without locking I/O",
+          "code": "public sealed class AttemptCache(IDatabase redis)\n{\n    private readonly ConcurrentDictionary<string, Task<string?>> _inflight = new();\n\n    public Task<string?> GetAsync(string attemptId, CancellationToken cancellationToken)\n    {\n        return _inflight.GetOrAdd(attemptId, id => FillAsync(id, cancellationToken));\n    }\n\n    private async Task<string?> FillAsync(string attemptId, CancellationToken cancellationToken)\n    {\n        try\n        {\n            var hit = await redis.StringGetAsync(attemptId);\n            if (!hit.IsNullOrEmpty)\n            {\n                return hit.ToString();\n            }\n\n            var origin = await LoadOriginAsync(attemptId, cancellationToken);\n            await redis.StringSetAsync(attemptId, origin, TimeSpan.FromSeconds(30 + Random.Shared.Next(30)));\n            return origin;\n        }\n        finally\n        {\n            _inflight.TryRemove(attemptId, out _);\n        }\n    }\n}",
+          "explanation": "GetOrAdd still can start two fills in a tight race; for interviews mention CompareExchange of a Task or a keyed SemaphoreSlim(1) if the origin must run exactly once. Never lock around the awaits."
+        }
+      ]
+    },
+    {
+      "heading": "How this sits next to async and GC",
+      "prose": "Module 13 already told you to await Redis and pass CancellationToken so a shutdown at 999 in-flight submits cancels cleanly. Module 14 told you not to allocate a 200 KB payload per miss on the LOH. This module adds: do not serialize those awaits with a lock, do not Task.Run the GET, and do not use a process-wide Mutex. If SkiaSharp preview generation is on the same path, push it through a bounded Channel so CPU work cannot take all pool threads from I/O completions. The senior sentence: scale from 199 to 999 is cache coherency plus pool health plus GC, not ‘add more locks.’"
+    }
+  ],
+  "interviewTakeaways": [
+    "Stampede: thundering herd on TTL or cold cache. Single-flight a shared Task per key.",
+    "Never lock across Redis. Lock or ConcurrentDictionary only for the in-flight map.",
+    "Jitter TTLs, bound CPU offload, watch thread-pool starvation and LOH together."
+  ],
+  "commonPitfalls": [
+    "lock around the entire GetOrCreate including HTTP.",
+    "MemoryCache without stampede protection (GetOrCreate is not single-flight across all versions/patterns).",
+    "Flushing all Redis keys on deploy, guaranteeing a herd."
+  ],
+  "relatedTopicIds": [
+    "csharp-13-cancellation-tokens",
+    "csharp-14-allocation-traps",
+    "csharp-14-gc-modes-microservices",
+    "csharp-15-locks-and-interlocked",
+    "csharp-15-concurrent-collections-channels",
+    "csharp-12-deferred-execution"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Promise memoization for in-flight fetches",
+      "note": "A Map<string, Promise<T>> in Node is the same single-flight idea. The JS version cannot data-race the Map on one thread, but it can still stampede if you forget to store the Promise before awaiting.",
+      "futureTopicSlug": "javascript/async/inflight-cache"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Managed threading best practices",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
+    },
+    {
+      "title": "Asynchronous programming with async and await",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

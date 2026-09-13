@@ -1,0 +1,70 @@
+{
+  "id": "csharp-05-equality-and-hashing",
+  "slug": "equality-and-hashing",
+  "title": "Equality and hashing",
+  "moduleId": "csharp-05-object-oriented-csharp",
+  "order": 6,
+  "hook": "Equals without GetHashCode is a Dictionary bug waiting for a cache miss. IEquatable<T> avoids boxing. Records generate a consistent pair; hand-rolled DTOs often do not.",
+  "sections": [
+    {
+      "heading": "Reference equality versus value equality",
+      "prose": "object.ReferenceEquals and the default class == test identity. Value equality asks whether the data matches. Structs default to field-by-field equality (slow, reflection-ish historically, now more generated but still easy to get wrong with floats and unused fields). Records generate value equality including the runtime type, so a derived record is not equal to a base record with the same properties. Strings are the model citizen: immutable, value-equal, stable hash."
+    },
+    {
+      "heading": "Dictionaries, Redis keys, and IEquatable",
+      "prose": "Dictionary<TKey, TValue> buckets with GetHashCode then confirms with Equals. The contract: if Equals is true, hashes must match; hashes matching does not imply Equals. Mutating a key after insert orphans the entry. IEquatable<T> gives a typed Equals that does not box T when T is a struct — implement it alongside overrides of Object.Equals and GetHashCode. For Redis cache keys, prefer a readonly record struct or a string you own; do not use a mutable class.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "IEquatable cache key used in a dictionary",
+          "code": "readonly struct AttemptKey(string tenant, string attemptId) : IEquatable<AttemptKey>\n{\n    public string Tenant { get; } = tenant;\n    public string AttemptId { get; } = attemptId;\n\n    public bool Equals(AttemptKey other) =>\n        Tenant == other.Tenant && AttemptId == other.AttemptId;\n\n    public override bool Equals(object? obj) =>\n        obj is AttemptKey other && Equals(other);\n\n    public override int GetHashCode() => HashCode.Combine(Tenant, AttemptId);\n}\n\nvar inflight = new Dictionary<AttemptKey, int>();\ninflight[new AttemptKey(\"acme\", \"a-1\")] = 1;\nvar n = inflight[new AttemptKey(\"acme\", \"a-1\")]; // 1 — value equality, not identity",
+          "explanation": "Two different struct copies lookup the same slot because Equals and GetHashCode agree. HashCode.Combine is the .NET helper; keep the fields identical to Equals."
+        }
+      ]
+    },
+    {
+      "heading": "Operators and records",
+      "prose": "If you overload ==, overload !=, and keep them consistent with Equals (module 04 operators). Records already do this. For classes that stay identity-based, do not overload == or you will confuse every reviewer who writes if (handler == null) versus if (handler is null) — the latter still uses a different pattern in modern C#. EqualityComparer<T>.Default is what collections use; custom comparers belong at the dictionary constructor, not hidden inside GetHashCode with randomness."
+    }
+  ],
+  "interviewTakeaways": [
+    "Equals and GetHashCode are a pair; collections depend on it.",
+    "IEquatable<T> avoids boxing for value types.",
+    "Never mutate a dictionary key; records help only if they stay immutable."
+  ],
+  "commonPitfalls": [
+    "Overriding Equals on a class but leaving the default reference GetHashCode.",
+    "Using a mutable DTO as a HashSet element across a high-concurrency submit path."
+  ],
+  "relatedTopicIds": [
+    "csharp-05-records",
+    "csharp-04-structs-vs-classes",
+    "csharp-04-operator-overloading",
+    "csharp-08-list-dictionary-set-queue"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "=== versus Object.is",
+      "note": "JS objects compare by reference; there is no IEquatable. Map keys use SameValueZero. C# dictionaries use the type’s equality contract.",
+      "futureTopicSlug": "javascript/equality/triple-equals"
+    },
+    {
+      "language": "typescript",
+      "concept": "no runtime equality protocol",
+      "note": "TS cannot generate Equals/GetHashCode. You write your own or use a library. C# records generate both.",
+      "futureTopicSlug": "typescript/types/nominal-equality"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "How to define value equality for a type",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/statements-expressions-operators/how-to-define-value-equality-for-a-type"
+    },
+    {
+      "title": "Object.GetHashCode",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.object.gethashcode"
+    }
+  ],
+  "scenarioTag": "redis-cache"
+}

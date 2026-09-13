@@ -1,0 +1,74 @@
+{
+  "id": "csharp-12-deferred-execution",
+  "slug": "deferred-execution",
+  "title": "Deferred execution and hot-path traps",
+  "moduleId": "csharp-12-linq",
+  "order": 3,
+  "hook": "On a 199-to-999 concurrent attempt-submit path, enumerating the same filtered query twice is two CPU passes and two different snapshots if the list is still growing.",
+  "sections": [
+    {
+      "heading": "Immediate versus deferred, streaming versus buffering",
+      "prose": "Operators that return a scalar (Count, Any, First, Max, Sum) execute immediately. Operators that return IEnumerable typically defer. Deferred operators split into streaming (Where, Select, SelectMany, Take) and non-streaming (OrderBy, GroupBy, Reverse). Streaming yields as it reads. Buffering reads everything first. ToList and ToArray freeze a snapshot. Microsoft’s classification table is the thing to cite, not a vague “LINQ is lazy.”",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Double enumeration on a live submit buffer",
+          "code": "var pending = new List<Attempt>(); // mutated by other tasks\n\nIEnumerable<Attempt> late =\n    pending.Where(a => a.SubmittedAt > cutoff);\n\nvar count = late.Count();          // pass 1\nforeach (var a in late)            // pass 2 — different membership\n{\n    Report(a);\n}\n\nvar snapshot = late.ToList();      // one pass, then reuse snapshot",
+          "explanation": "Count and foreach each run Where. Inserts between them change the report. ToList once is the hot-path fix."
+        }
+      ]
+    },
+    {
+      "heading": "Captured variables and accidental work",
+      "prose": "The query closes over cutoff, tenantId, and sometimes this. Changing cutoff after the query is built and before it is enumerated uses the new value — deferred by design. In high concurrency, that is a race unless the captured locals are snapshots. Chaining two Where clauses is still one pass when you finally enumerate; chaining Where after ToList is a second pass on a copy. Logging .ToList() in a diagnostic build inside a library method that then returns IEnumerable surprises callers who enumerate again.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Capture of a loop variable that moves",
+          "code": "IEnumerable<IEnumerable<Attempt>> queries = [];\nfor (var tenant = 0; tenant < tenantCount; tenant++)\n{\n    var id = tenant; // snapshot\n    queries = queries.Append(attempts.Where(a => a.TenantId == id));\n}",
+          "explanation": "Without id, every query would see the final tenantCount value (C# no longer has the old foreach capture bug for foreach, but for-loop ints still need a copy if you close over the iterator)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Declaration is a plan; enumeration is work.",
+    "Scalar operators and ToList/ToArray are immediate; most sequence operators defer.",
+    "GroupBy/OrderBy defer but buffer; they are not cheap streaming.",
+    "Enumerate once on hot paths; snapshot captured filters."
+  ],
+  "commonPitfalls": [
+    "Calling Count then foreach on the same IEnumerable.",
+    "Returning a query over a using-disposed enumerator (yield after dispose).",
+    "Putting expensive Select lambdas in a query that reporting enumerates three times."
+  ],
+  "relatedTopicIds": [
+    "csharp-12-linq-to-objects",
+    "csharp-12-ienumerable-vs-iqueryable",
+    "csharp-10-lambdas-and-closures",
+    "csharp-08-iterators-yield",
+    "csharp-14-allocation-traps"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Eager Array methods versus iterators",
+      "note": "array.filter is eager. JS iterators and generator pipelines are the deferred analogue. LINQ to Objects is closer to a generator chain than to Array.prototype.",
+      "futureTopicSlug": "javascript/iterators/lazy-pipelines"
+    },
+    {
+      "language": "javascript",
+      "concept": "Lazy iterables",
+      "note": "A JS generator is lazy like IEnumerable until you spread it. Spreading twice re-runs the generator if you still have it.",
+      "futureTopicSlug": "javascript/language/iteration-protocols"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Introduction to LINQ queries — deferred execution",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/linq/get-started/introduction-to-linq-queries"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

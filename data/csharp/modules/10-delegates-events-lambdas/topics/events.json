@@ -1,0 +1,77 @@
+{
+  "id": "csharp-10-events",
+  "slug": "events",
+  "title": "Events versus public delegates",
+  "moduleId": "csharp-10-delegates-events-lambdas",
+  "order": 4,
+  "hook": "A long-lived SQS consumer that exposes a public Action field will leak every pipeline that subscribed once — and any code can null the field and drop production handlers.",
+  "sections": [
+    {
+      "heading": "Publisher, subscriber, and the event keyword",
+      "prose": "Events let a publisher notify subscribers that something happened. The publisher decides when to raise; subscribers decide what to do. An event with no subscribers is a no-op. Multiple subscribers are invoked synchronously in subscription order. The .NET pattern is EventHandler or EventHandler<TEventArgs> with a sender and args. C# 14 also allows partial events: one defining field-like declaration and one implementing declaration that supplies add and remove.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Field-like event versus a public delegate field",
+          "code": "public sealed class SqsHostedConsumer : IDisposable\n{\n    public event EventHandler<SqsMessage>? MessageReceived;\n\n    // Do not do this on a hosted service:\n    public Action<SqsMessage>? UnsafeHook;\n\n    public void OnMessage(SqsMessage message)\n    {\n        MessageReceived?.Invoke(this, message);\n        UnsafeHook?.Invoke(message);\n    }\n\n    public void Dispose() => MessageReceived = null; // only the publisher can assign\n}\n\npublic sealed record SqsMessage(string MessageId, string Body);",
+          "explanation": "Outside the declaring class, MessageReceived supports only += and -=. UnsafeHook can be replaced with null by any assembler of the type, wiping metrics and ack paths together."
+        }
+      ]
+    },
+    {
+      "heading": "Unsubscribe or leak",
+      "prose": "The publisher’s invocation list holds the subscriber’s delegate, which holds the subscriber instance. A process-wide SQS or RabbitMQ host lives for the lifetime of the worker. A scoped per-message processor that += MessageReceived and never -= stays rooted until the host dies. Unsubscribe in Dispose, use a short-lived local function that you remove after the batch, or avoid events and pass an interface into the consumer. Custom add/remove accessors exist when you need synchronization or weak references; they must stay paired with -=.",
+      "snippets": [
+        {
+          "language": "csharp",
+          "label": "Subscribe for a batch, then detach",
+          "code": "public async Task ProcessBatchAsync(SqsHostedConsumer host, CancellationToken ct)\n{\n    EventHandler<SqsMessage> handler = (_, msg) => Console.WriteLine(msg.MessageId);\n    host.MessageReceived += handler;\n    try\n    {\n        await host.DrainAsync(ct);\n    }\n    finally\n    {\n        host.MessageReceived -= handler;\n    }\n}",
+          "explanation": "The handler is a named method group (or a stored delegate). Unsubscribing a fresh lambda with the same shape does nothing — it is a different instance."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "event restricts callers to += and -=; only the declaring type raises and assigns.",
+    "Handlers run synchronously; isolate exceptions with GetInvocationList if needed.",
+    "Leaks: long-lived publisher + short-lived subscriber without -=.",
+    "You must -= the same delegate instance you +=; a new lambda will not detach."
+  ],
+  "commonPitfalls": [
+    "Using a public delegate field as an 'event'.",
+    "Unsubscribing with a newly allocated lambda.",
+    "Raising events from a background thread without documenting reentrancy."
+  ],
+  "relatedTopicIds": [
+    "csharp-10-delegates-func-action",
+    "csharp-10-lambdas-and-closures",
+    "csharp-10-js-first-class-functions",
+    "csharp-13-async-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "EventTarget addEventListener / removeEventListener",
+      "note": "Browser events require the same function reference to remove, exactly like C# -=. JS does not stop you from replacing onclick entirely; C# event does.",
+      "futureTopicSlug": "javascript/dom/event-target"
+    },
+    {
+      "language": "javascript",
+      "concept": "EventTarget",
+      "note": "addEventListener/removeEventListener is subscribe/unsubscribe. C# events hide the delegate invocation list.",
+      "futureTopicSlug": "javascript/browser/event-target"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Events",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/events/"
+    },
+    {
+      "title": "How to subscribe to and unsubscribe from events",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/events/how-to-subscribe-to-and-unsubscribe-from-events"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "sqs-consumer"
+}
