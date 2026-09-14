@@ -1,40 +1,174 @@
 {
   "id": "csharp-04-constructors-and-required",
   "slug": "constructors-and-required",
-  "title": "Constructors, initializers, and required",
+  "title": "Constructors, initializers, and required (object creation)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 5,
-  "hook": "Construction is how you make an invalid object unrepresentable. Field initializers, constructors, primary constructors, object initializers, and required properties are one toolbox — not competing fashions.",
+  "hook": "Construction is how you make an invalid object unrepresentable. Field initializers, constructors, primary constructors, object initializers, and `required` properties are one toolbox — not competing styles.",
   "sections": [
     {
-      "heading": "Ordinary and chained constructors",
-      "prose": "Instance constructors run after field initializers. this(...) chains to another constructor on the same type; base(...) is module 05. Validate at the boundary: empty tenant ids and missing RabbitMQ routing keys should throw ArgumentException (module 06) rather than exist as half-built objects. Static constructors run once per type and are a deadlock magnet if they touch other types — keep them tiny."
-    },
-    {
-      "heading": "Primary constructors and object initializers",
-      "prose": "C# 12 primary constructors put parameters on class Type(params). Those parameters are in scope for the body and field initializers; capture them into properties if they must outlive the constructor. Object initializers set accessible set or init properties after the constructor returns. They combine with constructors that take the required identity (message id) while leaving optional knobs (timeout) to the initializer.",
-      "snippets": [
+      "heading": "What is construction?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Primary constructor, required, and initializer",
-          "code": "public sealed class PublishCommand(string exchange)\n{\n    public string Exchange { get; } = exchange;\n    public required string RoutingKey { get; init; }\n    public int RetryCount { get; init; } = 3;\n}\n\nvar cmd = new PublishCommand(\"attempts\")\n{\n    RoutingKey = \"grading.completed\"\n};",
-          "explanation": "exchange is captured from the primary constructor. RoutingKey is required in the object initializer. RetryCount has a default so callers may omit it."
+          "type": "prose",
+          "text": "A **constructor** is a special method that runs when you create an object with `new`. It sets up initial field values after field initializers run. An **object initializer** (`new Type { Prop = value }`) sets properties after the constructor returns. **`required`** (C# 11) is a compiler check that forces callers to set certain properties during creation. **Primary constructors** (C# 12) put parameters directly on the type declaration."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "constructor",
+              "longForm": "constructor",
+              "plainDefinition": "A method that runs automatically when `new` creates an object. It initializes instance state.",
+              "example": "`public Customer(string name) { Name = name; }`"
+            },
+            {
+              "term": "object initializer",
+              "longForm": "object initializer",
+              "plainDefinition": "Syntax that sets accessible `set` or `init` properties right after `new`, before the object is used.",
+              "example": "`new Order { Id = 1, Status = \"pending\" }`"
+            },
+            {
+              "term": "required",
+              "longForm": "required modifier",
+              "plainDefinition": "A compiler attribute on a property that forces object creation code to set that property, or the build fails.",
+              "example": "`public required string RoutingKey { get; init; }`"
+            },
+            {
+              "term": "primary constructor",
+              "longForm": "primary constructor (C# 12)",
+              "plainDefinition": "Constructor parameters declared on the type line itself. They are in scope for the body and field initializers.",
+              "example": "`public class Worker(string queueUrl) { ... }`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "required and struct default",
-      "prose": "required (C# 11) is a compiler check on object creation: skip a required property and the call does not compile, unless you use SetsRequiredMembers on a constructor that assigns them. Structs still have default(T), which zero-initializes fields and does not run your parameterless constructor. new Struct() runs a parameterless constructor if you wrote one; default does not. That split bites configuration structs deserialized from Redis or created in arrays."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Half-built objects are a source of bugs. Validate at the boundary: empty tenant IDs and missing routing keys should throw `ArgumentException` rather than exist as invalid state. `required` plus `init` keeps object initializers honest. Primary constructors reduce boilerplate for types that capture a few inputs."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "default(T) bypasses constructors for structs",
+          "body": "`default(MyStruct)` zero-initializes all fields and does not run your parameterless constructor. `new MyStruct()` does run it if you wrote one. That split bites configuration structs in arrays and Redis deserialization."
+        }
+      ]
+    },
+    {
+      "heading": "How construction flows",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Object creation order",
+          "items": [
+            {
+              "title": "Field initializers run",
+              "body": "Instance field initializers and property initializers execute first, in declaration order."
+            },
+            {
+              "title": "Constructor body runs",
+              "body": "Your constructor code executes. Use `this(...)` to chain to another constructor on the same type."
+            },
+            {
+              "title": "Object initializer runs",
+              "body": "If the call site uses `{ Prop = value }`, those assignments happen after the constructor returns."
+            },
+            {
+              "title": "Static constructor (once per type)",
+              "body": "Runs before the first use of the type. Keep it tiny — exceptions become `TypeInitializationException` for the process lifetime."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Construction pipeline",
+            "source": "flowchart TD\n  N[new Type args] --> FI[Field initializers]\n  FI --> CT[Constructor body]\n  CT --> OI[Object initializer]\n  OI --> R[Ready object]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Primary constructor, required, and initializer",
+            "code": "public sealed class PublishCommand(string exchange)\n{\n    public string Exchange { get; } = exchange;\n    public required string RoutingKey { get; init; }\n    public int RetryCount { get; init; } = 3;\n}\n\nvar cmd = new PublishCommand(\"attempts\")\n{\n    RoutingKey = \"grading.completed\"\n};",
+            "explanation": "Line 1: primary constructor captures `exchange`. Line 4: `required` forces `RoutingKey` in the initializer. Line 5: `RetryCount` defaults to 3. Lines 8–10: object initializer sets the required property."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Chained constructors with validation",
+            "code": "public sealed class RabbitConfig\n{\n    public string Host { get; }\n    public int Port { get; }\n\n    public RabbitConfig(string host) : this(host, 5672) { }\n\n    public RabbitConfig(string host, int port)\n    {\n        Host = host ?? throw new ArgumentNullException(nameof(host));\n        Port = port is > 0 and < 65536 ? port\n            : throw new ArgumentOutOfRangeException(nameof(port));\n    }\n}",
+            "explanation": "Line 6: `this(host, 5672)` chains to the two-parameter constructor. Lines 9–12: validation throws before invalid state exists."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Struct default vs new()",
+            "code": "struct Config\n{\n    public int TimeoutMs;\n    public Config() => TimeoutMs = 5000;\n}\n\nvar a = new Config();     // TimeoutMs = 5000 (ctor runs)\nvar b = default(Config);  // TimeoutMs = 0 (ctor skipped)\nvar c = new Config[3];    // each element: TimeoutMs = 0",
+            "explanation": "Line 4: parameterless constructor sets 5000. Line 8: `default` zero-inits — constructor does not run. Line 9: array elements also get zero-init, not your constructor."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Construction in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Constructor return", "Cannot replace `this` with a different object", "JS constructor can return a different object"],
+            ["Required fields", "`required` modifier — compile error if missing", "TS `!` definite assignment is compile-time only, no runtime check"],
+            ["Initializer syntax", "`new Type { Prop = val }` after constructor", "Object literal `{ prop: val }` is the primary pattern"],
+            ["Static constructor", "Runs once per type before first use", "Module-level code or IIFE — no language equivalent"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Object initializers on mutable classes",
+          "body": "Setting properties after construction on a mutable class does not create a snapshot. If you need an immutable copy, use `init` properties or records (module 05)."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming new() equals default() for structs",
+          "body": "If you wrote a parameterless constructor, `new MyStruct()` runs it but `default(MyStruct)` does not. Arrays and `default` always zero-init."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Primary constructors capture inputs; promote them to properties if they are part of the API.",
-    "required plus init is how you keep object initializers honest.",
-    "default(T) for structs bypasses constructors."
+    "`required` plus `init` keeps object initializers honest.",
+    "`default(T)` for structs bypasses constructors."
   ],
   "commonPitfalls": [
     "Using object initializers on mutable classes and then treating the object as a value snapshot.",
-    "Assuming new MyStruct() and default(MyStruct) are identical when a parameterless constructor exists."
+    "Assuming `new MyStruct()` and `default(MyStruct)` are identical when a parameterless constructor exists."
   ],
   "relatedTopicIds": [
     "csharp-04-classes-and-instances",
@@ -47,13 +181,13 @@
     {
       "language": "javascript",
       "concept": "constructor function and class fields",
-      "note": "JS constructors can return a different object; C# constructors cannot replace this. JS has no required-property compiler check.",
+      "note": "JavaScript constructors can return a different object; C# constructors cannot replace `this`. JavaScript has no `required`-property compiler check.",
       "futureTopicSlug": "javascript/classes/constructors"
     },
     {
       "language": "typescript",
       "concept": "definite assignment and required fields",
-      "note": "TS definite assignment (!) and required in types are compile-time only. C# required is still compile-time, but init accessors are real IL.",
+      "note": "TypeScript definite assignment (`!`) and `required` in types are compile-time only. C# `required` is still compile-time, but `init` accessors are real Intermediate Language (IL).",
       "futureTopicSlug": "typescript/classes/definite-assignment"
     }
   ],

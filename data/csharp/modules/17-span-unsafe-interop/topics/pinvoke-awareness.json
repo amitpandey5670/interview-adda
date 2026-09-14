@@ -1,49 +1,164 @@
 {
   "id": "csharp-17-pinvoke-awareness",
   "slug": "pinvoke-awareness",
-  "title": "P/Invoke awareness without becoming a C++ shop",
+  "title": "Platform Invoke (P/Invoke) awareness without becoming a C++ shop",
   "moduleId": "csharp-17-span-unsafe-interop",
   "order": 4,
-  "hook": "P/Invoke is how managed code calls a native export. It is a marshalling and lifetime problem. It is not a request to rewrite the worker in C++.",
+  "hook": "Platform Invoke (P/Invoke) calls native functions in operating system or third-party dynamic-link libraries (DLLs) from C#. Modern LibraryImport source generation replaces much hand-written DllImport marshalling — you still need to respect calling conventions, string encoding, and resource lifetime.",
   "sections": [
     {
-      "heading": "The boundary, not the language",
-      "prose": "A P/Invoke declares a native entry point, a calling convention, and how each argument becomes bits the other ABI understands. Strings, bools, and structs are where people lose days. You need to know: who allocates, who frees, whether the native API expects UTF-16 or UTF-8, and whether the handle is an `IntPtr` you must `Dispose`. SkiaSharp (and similar) wrap that handle in a managed object with `Dispose` — forgetting `using` leaks native heaps the CLR GC will never see. That is module 06’s `IDisposable` with teeth. You do not need to recite `stdcall` versus `cdecl` unless the signature is wrong; you need to own the wrapper project so the rest of the solution stays safe C#.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "LibraryImport instead of a hand-rolled DllImport stub",
-          "code": "using System.Runtime.InteropServices;\n\ninternal static partial class NativeCodec\n{\n    [LibraryImport(\"codec\", StringMarshalling = StringMarshalling.Utf8)]\n    internal static partial int Encode(ReadOnlySpan<byte> pixels, int length, int width);\n}\n\ninternal sealed class CodecSession : IDisposable\n{\n    public void Dispose() => /* release native session */ GC.SuppressFinalize(this);\n}",
-          "explanation": "LibraryImport is a source generator (module 16). The method is partial, the project allows unsafe blocks, marshalling is generated at compile time — including Native AOT — instead of a runtime IL stub from DllImport."
+          "type": "prose",
+          "text": "DllImport and LibraryImport declare extern methods implemented in native code. The runtime marshals parameters — strings as UTF-8 or UTF-16, arrays as pointers — and translates calling conventions. SkiaSharp, SQLite, and GPU libraries wrap P/Invoke in managed APIs. You consume those wrappers; you rarely write raw declarations except for OS utilities or legacy SDKs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "P/Invoke",
+              "shortForm": "P/Invoke",
+              "longForm": "Platform Invoke",
+              "plainDefinition": "Mechanism for calling unmanaged native functions from managed code.",
+              "example": "[LibraryImport(\"kernel32.dll\")] partial int GetTickCount();"
+            },
+            {
+              "term": "Marshalling",
+              "longForm": "Interop marshalling",
+              "plainDefinition": "Converting managed types to native layout and back at the boundary.",
+              "example": "string to const char* with CharSet.Utf8."
+            },
+            {
+              "term": "LibraryImport",
+              "longForm": "LibraryImport attribute",
+              "plainDefinition": "Modern P/Invoke attribute paired with source generator for marshalling code.",
+              "example": "Replaces DllImport for trim-safe, faster interop."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Span versus Memory at the native edge",
-      "prose": "Microsoft’s memory guidelines: wrap a synchronous native call with `Span<T>` (and `fixed` or generated marshalling). Wrap an asynchronous native call with `Memory<T>` and `Memory<T>.Pin`, because `fixed` cannot span an `await`. Never pass a pinned span without a length if the native side might walk until `\\0`. Prefer letting `LibraryImport` marshal `ReadOnlySpan<byte>` when the generator supports it. If the native library is a RabbitMQ C client you should not have chosen, stop — use the managed client. P/Invoke is for the library you cannot avoid (codec, OS, vendor SDK), not for fashion.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Wrong: span as a C string",
-          "code": "// WRONG: native walks until '\\0'; spans are not terminated.\n// NativeParse(p);\n\n// RIGHT: length is part of the contract.\n// NativeParse(p, payload.Length);",
-          "explanation": "The unsafe best-practices doc calls this out explicitly. Interviews like this because it shows you have read the boundary rules, not a C++ textbook."
+          "type": "prose",
+          "text": "Every P/Invoke boundary is a bug surface: wrong charset corrupts strings, wrong lifetime leaks native handles, wrong thread model crashes SkiaSharp. IDisposable on managed wrappers exists because native resources are outside the garbage collector. Interview answer: know the boundary exists, use official wrappers, and read lifetime docs — not every team needs custom C++."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Boundary discipline",
+          "body": "Treat native handles like database connections — short lifetime, explicit release, no finalizer reliance."
         }
       ]
     },
     {
-      "heading": "What this track will not teach",
-      "prose": "This is not COM, C++/CLI, or how to write a vtable. If an interviewer dives into `MarshalAs`, answer with “I would look up the library’s ABI, generate LibraryImport, write interop tests, and keep the unsafe project tiny.” Then steer to lifetime: `IDisposable`, pinning duration, and AOT. Seniority here is containment."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "P/Invoke call path",
+          "items": [
+            {
+              "title": "Declare extern method",
+              "body": "LibraryImport with DLL name and entry point."
+            },
+            {
+              "title": "Generator emits marshaller",
+              "body": "Compile-time code converts parameters."
+            },
+            {
+              "title": "Call from managed code",
+              "body": "Looks like normal static method."
+            },
+            {
+              "title": "Release native resources",
+              "body": "Dispose wrapper; do not leak handles."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Managed to native boundary",
+            "source": "flowchart LR\n  A[C# caller] --> B[LibraryImport stub]\n  B --> C[Marshalling\\nstring array ptr]\n  C --> D[native .dll .so]\n  D --> C\n  C --> B\n  B --> A"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "LibraryImport modern P/Invoke",
+            "code": "internal static partial class Posix\n{\n    [LibraryImport(\"libc\", StringMarshalling = StringMarshalling.Utf8)]\n    internal static partial int gethostname(Span<byte> name, int len);\n}",
+            "explanation": "Source generator emits platform-specific marshalling. Span<byte> avoids fixed char buffers in some cases."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Consume SkiaSharp safely",
+            "code": "using var surface = SKSurface.Create(new SKImageInfo(800, 600));\nusing var canvas = surface.Canvas;\ncanvas.Clear(SKColors.White);\nusing var image = surface.Snapshot();\nusing var data = image.Encode(SKEncodedImageFormat.Png, 100);\nawait File.WriteAllBytesAsync(\"out.png\", data.ToArray());",
+            "explanation": "SkiaSharp wraps native Skia via P/Invoke. using ensures native surfaces are released promptly."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Legacy DllImport pattern",
+            "code": "[DllImport(\"user32.dll\", CharSet = CharSet.Unicode)]\nstatic extern int MessageBox(IntPtr hWnd, string text, string caption, uint type);\n\n// Prefer LibraryImport for new code — trim and AOT friendly",
+            "explanation": "DllImport still works but LibraryImport is the forward path for .NET 7+ interop."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Native interop",
+          "headers": ["Aspect", "C# P/Invoke", "Node.js"],
+          "rows": [
+            ["Mechanism", "DllImport / LibraryImport", "N-API native addon .node module"],
+            ["String encoding", "CharSet, StringMarshalling", "UTF-8 Buffer explicit"],
+            ["Wrappers", "NuGet SkiaSharp, SQLite", "npm optional native deps"],
+            ["Lifetime", "IDisposable on wrappers", "Manual close on handles"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Wrong CharSet garbling strings. Holding native pointer after managed array is unpinned. SkiaSharp objects without using — native memory leak until GC finalizer."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "P/Invoke is marshalling plus lifetime; prefer LibraryImport source generation over DllImport.",
-    "Synchronous native wrappers take Span; asynchronous ones take Memory and Pin.",
-    "Native handles need Dispose; the CLR will not collect a SkiaSharp-style unmanaged heap for you."
+    "P/Invoke is the managed-to-native boundary — marshalling and lifetime matter.",
+    "Prefer LibraryImport and official NuGet wrappers over raw declarations.",
+    "Native resources need Dispose; GC does not track unmanaged heap."
   ],
   "commonPitfalls": [
-    "Calling DllImport with CharSet mismatches and blaming the native vendor.",
-    "Pinning a buffer for the lifetime of a request instead of for the native call.",
-    "Spreading AllowUnsafeBlocks and native types into domain assemblies."
+    "Ansi vs Unicode string mismatch.",
+    "Leaking SkiaSharp surfaces without using.",
+    "Custom P/Invoke when a maintained wrapper exists."
   ],
   "relatedTopicIds": [
     "csharp-17-unsafe-pointers-fixed",
@@ -53,25 +168,17 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Node-API / ffi-napi",
-      "note": "Node native addons and bun:ffi are the same class of problem: ABI, strings, and who frees. JS still does not pin interior pointers the way fixed does.",
-      "futureTopicSlug": "javascript/native/ffi"
+      "concept": "Native modules",
+      "note": "sharp and bcrypt use native code like SkiaSharp. C# P/Invoke is declared in C#; Node loads .node binaries built from C++.",
+      "futureTopicSlug": "javascript/native/addons"
     }
   ],
   "officialSources": [
     {
       "title": "P/Invoke source generation",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke-source-generation"
-    },
-    {
-      "title": "Memory<T> usage guidelines (rules 9–10)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
-    },
-    {
-      "title": "Unsafe code best practices",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/unsafe-code/best-practices"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "skiasharp-dispose"
+  "scenarioTag": "skiasharp-dispose",
+  "animationHint": "flow"
 }

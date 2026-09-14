@@ -1,20 +1,156 @@
 {
   "id": "csharp-03-conversions",
   "slug": "conversions",
-  "title": "Conversions, is, as, typeof",
+  "title": "Type conversions and tests (is, as, typeof)",
   "moduleId": "csharp-03-type-system",
   "order": 6,
-  "hook": "Implicit conversions cannot lose information the compiler cares about. Explicit casts can throw. `is`/`as`/`typeof`/`GetType` are how you ask “what is this?” without pretending C# is JS.",
+  "hook": "Sometimes you need to turn one type into another or ask \"what type is this?\" C# gives you implicit conversions for safe changes, explicit casts for risky ones, and `is`/`as`/`typeof` for type questions.",
   "sections": [
     {
-      "heading": "Casts and type tests",
-      "prose": "Numeric promotions (`int` to `long`, `float` to `double`) are implicit. Narrowing (`long` to `int`, `double` to `int`) is explicit and can overflow or truncate — wrap in `checked` if that matters. Reference conversions up the hierarchy are implicit; downcasts are explicit and throw `InvalidCastException` on failure. `is` tests compatibility and, in modern C#, can introduce a variable (`if (msg is string body)`). `as` converts to a reference or nullable type and returns `null` on failure — never use `as` on a non-nullable value type. `typeof(Token)` is the `Type` object for a compile-time name, including `typeof(Dictionary<,>)` for unbound generics. `obj.GetType()` is the run-time type of an instance. `nameof` is a string, not a `Type`. Compile-time type drives overload resolution; run-time type drives virtual dispatch and `is`.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "is/as versus GetType versus typeof",
-          "code": "object payload = ReadAuthPayload();\nif (payload is string jwt)\n{\n    Validate(jwt);\n}\n\nvar dto = payload as AuthDto; // null if not AuthDto\n\nType compile = typeof(AuthDto);\nType runtime = payload.GetType();\n\nint truncated = (int)1.9; // 1, not rounded",
-          "explanation": "Wrong: `typeof(payload)` — typeof needs a type name. Wrong: comparing `GetType()` to `typeof(IList)` for interface tests — use `is`."
+          "type": "prose",
+          "text": "A **conversion** changes a value from one type to another. **Implicit** conversions happen automatically when the compiler is sure no information is lost (`int` to `long`). **Explicit** casts (`(int)1.9`) can truncate or throw and require you to write the cast. **`is`** tests whether a value is compatible with a type and can introduce a new variable. **`as`** tries a reference conversion and returns `null` on failure. **`typeof`** gives you a `Type` object for a compile-time type name. **`GetType()`** returns the run-time type of an instance."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "implicit conversion",
+              "longForm": "implicit conversion",
+              "plainDefinition": "A conversion the compiler performs automatically because it is considered safe (widening numerics, upcasting references).",
+              "example": "`long big = 42;` — `int` 42 promotes to `long` silently."
+            },
+            {
+              "term": "explicit cast",
+              "longForm": "explicit cast",
+              "plainDefinition": "A conversion you write with parentheses. May truncate numbers or throw on failed reference casts.",
+              "example": "`int truncated = (int)1.9;` — result is `1`, not rounded."
+            },
+            {
+              "term": "is",
+              "longForm": "is (type test)",
+              "plainDefinition": "Checks run-time type compatibility. Modern C# lets you write `if (msg is string body)` to test and bind in one step.",
+              "example": "`if (payload is AuthDto dto) Validate(dto);`"
+            },
+            {
+              "term": "typeof",
+              "longForm": "typeof operator",
+              "plainDefinition": "Returns a `System.Type` for a compile-time type name. Needs a type, not a variable: `typeof(string)`, not `typeof(myVar)`.",
+              "example": "`Type t = typeof(Dictionary<,>);` — unbound generic form."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Auth payloads arrive as `object` or JSON. You must narrow them safely before use. A wrong cast throws `InvalidCastException` at run time. Comparing `GetType() == typeof(Base)` misses derived types — use `is` instead. Parsing CSV grades with `(int)double.Parse(\"3.7\")` truncates to `3` instead of rounding — use `decimal` and explicit rounding rules."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Compile-time vs run-time",
+          "body": "`typeof` and overload resolution are compile-time. `GetType()`, `is`, and virtual method dispatch use run-time type. `nameof` returns a string name — it is not a `Type` object."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing the right tool",
+          "items": [
+            {
+              "title": "Safe widening? → implicit",
+              "body": "`int` to `long`, `float` to `double`, derived class to base class — no cast needed."
+            },
+            {
+              "title": "Narrowing or downcasting? → explicit cast",
+              "body": "`(int)1.9` truncates. `(Derived)baseRef` throws if the object is not actually `Derived`."
+            },
+            {
+              "title": "Test without throwing? → is or as",
+              "body": "`is` returns `bool` (and can bind a variable). `as` returns `null` on failure — only for reference and nullable types."
+            },
+            {
+              "title": "Need type metadata? → typeof or GetType",
+              "body": "`typeof(AuthDto)` at compile time. `payload.GetType()` for the actual run-time type of this instance."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Conversion and type-test toolkit",
+            "source": "flowchart LR\n  W[\"Widening numeric\"] -->|implicit| OK[\"No cast needed\"]\n  N[\"Narrowing numeric\"] -->|\"(int)\"| TRUNC[\"May truncate\"]\n  UP[\"Base reference\"] -->|implicit| SAFE[\"Safe upcast\"]\n  DOWN[\"Derived test\"] -->|\"is / as\"| TEST[\"No throw on fail\"]\n  META[\"Type metadata\"] --> TYPEOF[\"typeof — compile time\"]\n  META --> GETTYPE[\"GetType — run time\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "is and as with an auth payload",
+            "code": "object payload = ReadAuthPayload();\n\nif (payload is string jwt)\n{\n    ValidateJwt(jwt);\n}\n\nvar dto = payload as AuthDto; // null if not AuthDto\nif (dto is not null)\n{\n    Process(dto);\n}",
+            "explanation": "Line 3: `is string jwt` tests and binds in one step — no cast needed inside the block. Line 8: `as` returns `null` instead of throwing when the object is not `AuthDto`. Never use `as` on a non-nullable value type like `int`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "typeof vs GetType vs nameof",
+            "code": "Type compile = typeof(AuthDto);     // compile-time name\nType runtime = payload.GetType();   // actual instance type\nstring name = nameof(AuthDto);      // string \"AuthDto\" — not a Type\n\n// Wrong: typeof needs a type, not a variable\n// Type bad = typeof(payload);",
+            "explanation": "Line 1: `typeof` resolves at compile time — works with unbound generics too. Line 2: `GetType()` is virtual and returns the real run-time type (may be a subclass). Line 3: `nameof` is for identifier strings in refactor-safe code. Line 6: `typeof(payload)` does not compile."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Numeric casts truncate; checked catches overflow",
+            "code": "int truncated = (int)1.9;    // 1 — truncates, does not round\n\nlong big = 1_000_000_000_000;\n// int overflow = (int)big;   // unchecked — wraps silently\nint safe = checked((int)big); // throws OverflowException\n\ndecimal grade = decimal.Parse(\"3.50\");",
+            "explanation": "Line 1: floating-to-integer cast truncates toward zero. Lines 4–5: unchecked narrowing may wrap; `checked` throws on overflow (see module 02). Line 7: parse grades as `decimal`, not `(int)double.Parse`."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Type questions in JS vs C#",
+          "headers": ["Tool", "C#", "JavaScript"],
+          "rows": [
+            ["Type of a value", "`obj.GetType()` → `System.Type`", "`typeof x` → string (`\"number\"`, `\"object\"`)"],
+            ["Instance check", "`x is MyClass`", "`x instanceof MyClass`"],
+            ["Safe cast", "`x as MyClass` → null on fail", "No direct equivalent — try/catch or manual check"],
+            ["Type name at compile time", "`typeof(MyClass)`", "N/A — no compile-time types in JS"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `GetType() == typeof(Base)` and missing derived types — use `is` instead. Using `as` on `int` — it does not compile; use a nullable or a cast. Parsing CSV with `(int)double.Parse` and losing fractional grades — use `decimal` and explicit rounding."
         }
       ]
     }
@@ -38,7 +174,7 @@
     {
       "language": "javascript",
       "concept": "typeof and instanceof",
-      "note": "`typeof` in JS is a string tag. C# `typeof` returns `System.Type`. `instanceof` is closer to `is` for references.",
+      "note": "JavaScript `typeof` returns a string tag. C# `typeof` returns `System.Type`. JavaScript `instanceof` is closer to C# `is` for reference types.",
       "futureTopicSlug": "javascript/types/typeof-instanceof"
     }
   ],

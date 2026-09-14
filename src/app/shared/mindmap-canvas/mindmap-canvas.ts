@@ -18,7 +18,7 @@ export class MindmapCanvas {
   protected readonly layout = computed(() => {
     const data = this.mindmap();
     const children = new Map<string, MindmapNode[]>();
-    for (const node of data.nodes) {
+    for (const node of data.nodes ?? []) {
       const key = node.parentId ?? '__root__';
       const list = children.get(key) ?? [];
       list.push(node);
@@ -33,12 +33,13 @@ export class MindmapCanvas {
         walk(child, depth + 1);
       }
     };
-    const roots = data.nodes.filter((node) => !node.parentId);
-    for (const root of roots.length ? roots : data.nodes.slice(0, 1)) {
+    const nodes = data.nodes ?? [];
+    const roots = nodes.filter((node) => !node.parentId);
+    for (const root of roots.length ? roots : nodes.slice(0, 1)) {
       walk(root, 0);
     }
     const byId = new Map(laid.map((node) => [node.id, node]));
-    const edges = data.edges
+    const edges = (data.edges ?? [])
       .map((edge) => {
         const from = byId.get(edge.from);
         const to = byId.get(edge.to);

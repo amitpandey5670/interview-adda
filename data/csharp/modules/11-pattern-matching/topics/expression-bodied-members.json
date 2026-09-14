@@ -1,39 +1,151 @@
 {
   "id": "csharp-11-expression-bodied-members",
   "slug": "expression-bodied-members",
-  "title": "Expression-bodied members",
+  "title": "Expression-bodied members (=> for methods and properties)",
   "moduleId": "csharp-11-pattern-matching",
   "order": 1,
-  "hook": "A Redis key builder that is one interpolation does not need a brace block — expression-bodied members are the language's way of saying the body is a single expression.",
+  "hook": "When a method body is a single expression — like building a cache key from one string interpolation — C# lets you write it with => instead of wrapping it in braces.",
   "sections": [
     {
-      "heading": "=> on members is not a lambda",
-      "prose": "Expression-bodied members use the same => token as lambdas, but they are ordinary methods, properties, constructors, finalizers, and indexers whose body is one expression. The compiler still emits a member. You cannot declare a local function inside an expression-bodied member. Use a block body the moment you need statements, more than a trivial guard, or a local function. C# 14 field-backed properties can mix an expression-bodied accessor with the field keyword; that is still a property, not a lambda.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Cache keys as expression-bodied members",
-          "code": "public sealed class AttemptCacheKeys(string tenant)\n{\n    public string Tenant { get; } = tenant;\n\n    public string ForAttempt(string attemptId) => $\"attempt:{Tenant}:{attemptId}\";\n\n    public string SessionLock => $\"lock:session:{Tenant}\";\n\n    public AttemptCacheKeys(string tenant, string region) : this(tenant)\n        => ArgumentException.ThrowIfNullOrWhiteSpace(region);\n}",
-          "explanation": "Methods, get-only properties, and constructors can all be expression-bodied. The constructor form runs the expression as the body after the initializer list."
+          "type": "prose",
+          "text": "Expression-bodied members use the => token to say \"the entire body of this member is one expression.\" They work on methods, properties, constructors, indexers, operators, and finalizers. The compiler still emits a normal member — this is not a lambda delegate. It is just a shorter syntax when the logic fits on one line (or one switch expression)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Expression-bodied member",
+              "longForm": "expression-bodied member",
+              "plainDefinition": "A C# member whose body is a single expression written after => instead of a { } block.",
+              "example": "public string Key => $\"user:{Id}\"; is a get-only property with an expression body."
+            },
+            {
+              "term": "Lambda",
+              "longForm": "lambda expression",
+              "plainDefinition": "An anonymous function that can be assigned to a delegate type, like x => x * 2.",
+              "example": "list.Select(x => x.Name) passes a lambda; it is not the same as a method written with =>."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "When a block is clearer",
-      "prose": "Interviewers are not grading you for maximum => density. A switch expression as the entire method body is fair. Two cache writes and a return are a block. Mixing an expression-bodied get with a block set is legal and common. Do not hide await in a one-liner that logs, mutates, and returns; the reader cannot see sequencing.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Switch expression as a method body",
-          "code": "public static int TtlSeconds(string kind) => kind switch\n{\n    \"attempt\" => 300,\n    \"session\" => 1800,\n    \"report\" => 60,\n    _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, \"Unknown cache kind.\")\n};",
-          "explanation": "This is both an expression-bodied member and a switch expression. Exhaustiveness is the compiler's job; the discard throws instead of inventing a TTL."
+          "type": "prose",
+          "text": "Expression-bodied members keep small, obvious APIs readable without ceremony. A Redis cache key builder, a one-line validator, or a switch expression that maps a string to an enum all benefit. Interviewers also use them to test whether you confuse => on a member with => in a lambda — they are different language features with different semantics."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to prefer a block body",
+          "body": "Switch to { } the moment you need multiple statements, local variables, or a local function. A one-liner that awaits, logs, and mutates state is harder to read than a short block — density is not a virtue when sequencing matters."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing expression vs block body",
+          "items": [
+            {
+              "title": "Count the expressions",
+              "body": "One expression that returns or assigns a value? => is fine. Two or more statements? Use a block."
+            },
+            {
+              "title": "Check member kind",
+              "body": "Methods, get-only properties, constructors (after the initializer list), indexers, and operators can all use =>."
+            },
+            {
+              "title": "Remember: no locals inside =>",
+              "body": "You cannot declare a local function or variable inside an expression-bodied member. Extract a private method instead."
+            },
+            {
+              "title": "Mix accessor styles on properties",
+              "body": "A property can use => for get and a block for set — common for lazy initialization with a backing field."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Expression-bodied member vs lambda",
+            "source": "flowchart LR\n  A[=> on a member] --> B[Compiler emits a real method or property]\n  C[=> in an argument] --> D[Compiler creates a delegate or expression tree]\n  B --> E[Called as obj.Method]\n  D --> F[Passed to Select, Where, etc.]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Cache keys as expression-bodied members",
+            "code": "public sealed class AttemptCacheKeys(string tenant)\n{\n    public string Tenant { get; } = tenant;\n\n    public string ForAttempt(string attemptId) => $\"attempt:{Tenant}:{attemptId}\";\n\n    public string SessionLock => $\"lock:session:{Tenant}\";\n\n    public AttemptCacheKeys(string tenant, string region) : this(tenant)\n        => ArgumentException.ThrowIfNullOrWhiteSpace(region);\n}",
+            "explanation": "ForAttempt is an expression-bodied method — one interpolation, one return. SessionLock is an expression-bodied get-only property. The constructor uses => after : this(tenant) to run a guard expression as the constructor body."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Switch expression as a method body",
+            "code": "public static int TtlSeconds(string kind) => kind switch\n{\n    \"attempt\" => 300,\n    \"session\" => 1800,\n    \"report\" => 60,\n    _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, \"Unknown cache kind.\")\n};",
+            "explanation": "The entire method is one switch expression after =>. Each arm returns an int. The discard (_) throws instead of inventing a TTL — a common interview trap is silently defaulting to zero."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Mixed get (expression) and set (block)",
+            "code": "private string? _displayName;\n\npublic string DisplayName\n{\n    get => _displayName ?? \"(unnamed)\";\n    set\n    {\n        ArgumentException.ThrowIfNullOrWhiteSpace(value);\n        _displayName = value.Trim();\n    }\n}",
+            "explanation": "get uses => for a one-line null-coalescing fallback. set needs a block because it validates and trims — two statements. This mix is idiomatic and readable."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# expression-bodied members vs JS class arrows",
+          "headers": ["Aspect", "C# expression-bodied member", "JavaScript class field arrow"],
+          "rows": [
+            ["What it is", "Real instance method or property", "Instance field holding an arrow function"],
+            ["this binding", "Normal instance this", "Lexical this from construction site — can surprise you"],
+            ["Syntax", "public void Foo() => expr;", "foo = () => expr; (field initializer)"],
+            ["Delegate conversion", "Not automatic — must assign to Func<> explicitly", "The field is already a function value"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling a one-line => method a \"lambda\" in an interview — it is a method with a shorthand body. Stuffing multiple statements into a ternary just to keep =>. Forgetting that expression-bodied constructors still run field initializers and : this(...) first. Hiding await plus side effects in a single expression body where sequencing is unclear."
         }
       ]
     }
   ],
   "interviewTakeaways": [
     "=> on a member is a body form, not a delegate conversion.",
-    "Allowed on methods, properties, operators, constructors, indexers, finalizers.",
+    "Allowed on methods, properties, operators, constructors, indexers, and finalizers.",
     "Local functions cannot be declared inside an expression-bodied member.",
     "Prefer a block when sequencing or locals matter."
   ],
@@ -51,7 +163,7 @@
     {
       "language": "javascript",
       "concept": "Concise arrow methods on classes",
-      "note": "class C { foo = () => this.x } is a field holding an arrow, which is a different this model. C# expression-bodied members are still instance methods with a real this.",
+      "note": "class C { foo = () => this.x } creates a field holding an arrow function with lexical this. C# expression-bodied members are still real instance methods with normal this binding.",
       "futureTopicSlug": "javascript/classes/arrow-fields"
     }
   ],

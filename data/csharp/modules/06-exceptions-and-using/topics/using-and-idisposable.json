@@ -1,30 +1,164 @@
 {
   "id": "csharp-06-using-and-idisposable",
   "slug": "using-and-idisposable",
-  "title": "using and IDisposable",
+  "title": "using and IDisposable (deterministic cleanup)",
   "moduleId": "csharp-06-exceptions-and-using",
   "order": 5,
-  "hook": "IDisposable is a deterministic cleanup contract. using is try/finally that calls Dispose even when the try throws. SkiaSharp surfaces, file streams, and RabbitMQ channels live here — not in a finalizer.",
+  "hook": "IDisposable is a contract that says \"call Dispose when you are done.\" The using statement is try/finally that calls Dispose even when the try throws — essential for SkiaSharp surfaces and file streams.",
   "sections": [
     {
-      "heading": "The contract",
-      "prose": "IDisposable.Dispose should be safe to call twice, should release unmanaged and nested managed resources, and should not throw in ordinary cleanup if you can help it. IAsyncDisposable.DisposeAsync is the async counterpart for types that need await to close (some queue clients, async streams). The compiler’s using statement and using declaration emit the finally. A using declaration disposes at the end of the scope, which is usually the method. Variables in using are readonly; you cannot reassign them."
-    },
-    {
-      "heading": "SkiaSharp and await using",
-      "prose": "SKSurface, SKBitmap, SKPaint, and SKCanvas wrap native graphics objects. If you skip Dispose on a high-concurrency image path, native memory grows while the GC still thinks you are fine. Wrap them in using (or a helper that is itself IDisposable). await using belongs on IAsyncDisposable — for example an async queue session — so disposal completes before the method continues. Do not implement a finalizer “just in case” on your wrapper; finalization order, threading, and resurrection are module 14, and they are the wrong default.",
-      "snippets": [
+      "heading": "What is IDisposable and using?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "using for SkiaSharp; await using for async resources",
-          "code": "static byte[] RenderScore(int score)\n{\n    using var surface = SKSurface.Create(new SKImageInfo(640, 120));\n    using var paint = new SKPaint { TextSize = 48 };\n    surface.Canvas.Clear(SKColors.White);\n    surface.Canvas.DrawText(score.ToString(), 16, 72, paint);\n    using var image = surface.Snapshot();\n    using var data = image.Encode(SKEncodedImageFormat.Png, 80);\n    return data.ToArray();\n}\n\nstatic async Task DrainAsync(IAsyncDisposable session)\n{\n    await using (session.ConfigureAwait(false))\n    {\n        await Task.CompletedTask;\n    }\n}",
-          "explanation": "Every SkiaSharp handle is using-owned so native resources release on success and on throw. await using disposes IAsyncDisposable. No finalizer appears on this path."
+          "type": "prose",
+          "text": "**IDisposable** defines a **Dispose** method for releasing resources deterministically — file handles, network connections, native graphics objects. The **using** statement (or **using declaration**) wraps creation and calls **Dispose** in a finally block, even when an exception escapes. **IAsyncDisposable** and **await using** are the async counterparts for types that need await to close cleanly. Variables declared in a using are read-only; you cannot reassign them."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IDisposable",
+              "longForm": "IDisposable interface",
+              "plainDefinition": "A contract with a Dispose method. Call it when you finish with an object that holds unmanaged or scarce resources.",
+              "example": "using var stream = File.OpenRead(path);"
+            },
+            {
+              "term": "using",
+              "longForm": "using statement",
+              "plainDefinition": "Syntax sugar for try/finally that calls Dispose. The compiler generates the cleanup code.",
+              "example": "using (var paint = new SKPaint()) { /* draw */ }"
+            },
+            {
+              "term": "IAsyncDisposable",
+              "longForm": "IAsyncDisposable interface",
+              "plainDefinition": "Async cleanup contract with DisposeAsync. Used with await using.",
+              "example": "await using var session = await OpenSessionAsync();"
+            },
+            {
+              "term": "using declaration",
+              "longForm": "using declaration (C# 8)",
+              "plainDefinition": "using var x = ...; disposes at the end of the enclosing scope — usually the method.",
+              "example": "using var surface = SKSurface.Create(info);"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "using versus catch",
-      "prose": "Dispose runs in finally, then the exception continues. You still catch at the worker boundary (previous topics). Do not hide Dispose behind a fire-and-forget Task — unobserved faults are module 13. If you must own a resource across methods, the type that holds it should be IDisposable and the composition root should using the owner."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The garbage collector (GC) eventually collects managed objects, but native memory inside SkiaSharp, database drivers, and socket wrappers is invisible to GC pressure. Without Dispose, a high-concurrency image pipeline leaks native memory while managed heap looks fine. using guarantees cleanup on success, failure, and early return. Finalizers are a last resort — covered in module 14, not here."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Dispose should not throw in ordinary cleanup",
+          "body": "Dispose must be safe to call twice (idempotent). Throwing from Dispose during unwind can mask the original exception. Release resources quietly when possible."
+        }
+      ]
+    },
+    {
+      "heading": "How using compiles to try/finally",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Lifecycle with using",
+          "items": [
+            {
+              "title": "Resource is created",
+              "body": "using var surface = SKSurface.Create(...); assigns the disposable object."
+            },
+            {
+              "title": "try body runs",
+              "body": "Your drawing or I/O code executes. If throw occurs, control jumps to finally."
+            },
+            {
+              "title": "finally calls Dispose",
+              "body": "The compiler-generated finally invokes Dispose (or DisposeAsync for await using)."
+            },
+            {
+              "title": "Exception continues if one was thrown",
+              "body": "Dispose runs first; then the original exception propagates up the stack."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "using statement expansion",
+            "source": "flowchart TD\n  A[using var resource = Create] --> B[try: use resource]\n  B -->|success| C[finally: resource.Dispose]\n  B -->|throw| D[finally: resource.Dispose]\n  D --> E[exception continues up]\n  C --> F[continue method]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "using for SkiaSharp native handles",
+            "code": "static byte[] RenderScore(int score)\n{\n    using var surface = SKSurface.Create(new SKImageInfo(640, 120));\n    using var paint = new SKPaint { TextSize = 48 };\n    surface.Canvas.Clear(SKColors.White);\n    surface.Canvas.DrawText(score.ToString(), 16, 72, paint);\n    using var image = surface.Snapshot();\n    using var data = image.Encode(SKEncodedImageFormat.Png, 80);\n    return data.ToArray();\n}",
+            "explanation": "Lines 3–4: every SkiaSharp handle is using-owned. Line 9: return happens after Dispose on inner objects but before surface disposal at scope end. Native memory releases on throw or return."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "await using for async cleanup",
+            "code": "static async Task ProcessAsync(IAsyncDisposable session, CancellationToken ct)\n{\n    await using (session.ConfigureAwait(false))\n    {\n        await DoWorkAsync(session, ct);\n    } // DisposeAsync runs here\n}",
+            "explanation": "Line 3: await using calls DisposeAsync in finally. Line 6: async cleanup completes before the method continues — important for queue sessions and async streams."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Implementing IDisposable on a wrapper",
+            "code": "sealed class TempFile : IDisposable\n{\n    public string Path { get; } = System.IO.Path.GetTempFileName();\n    private bool _disposed;\n\n    public void Dispose()\n    {\n        if (_disposed) return;\n        _disposed = true;\n        if (File.Exists(Path))\n            File.Delete(Path);\n    }\n}\n\nusing var temp = new TempFile();\nawait UploadAsync(temp.Path);",
+            "explanation": "Line 7: guard against double Dispose. Line 11: delete the temp file deterministically. Line 16: using ensures cleanup even if UploadAsync throws."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Resource cleanup in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Explicit disposal", "IDisposable + using — decades of daily use", "Symbol.dispose and using added recently (optional)"],
+            ["Compiler enforcement", "using pattern is well-known; analyzers warn on undisposed IDisposable", "No IDisposable in the type system — rely on finally manually"],
+            ["Async cleanup", "IAsyncDisposable + await using", "Symbol.asyncDispose for explicit resource management"],
+            ["Native wrappers", "SkiaSharp requires Dispose — GC does not free native memory promptly", "Native addons vary; no uniform CLR contract"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Creating SKSurface without using",
+          "body": "Relying on GC for SkiaSharp leaks native memory under load. Always wrap SKSurface, SKBitmap, SKPaint, and SKCanvas in using."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Returning a disposed object",
+          "body": "Do not return an object from inside a using block if the block disposes it before the caller uses it. Dispose at the owner's scope — the type that holds the resource across methods should be IDisposable."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -34,7 +168,7 @@
   ],
   "commonPitfalls": [
     "Creating SKSurface without using and relying on GC.",
-    "Returning a disposed object from a using block that disposed too early — dispose at the owner’s scope."
+    "Returning a disposed object from a using block that disposed too early — dispose at the owner's scope."
   ],
   "relatedTopicIds": [
     "csharp-06-try-catch-finally",
@@ -46,19 +180,19 @@
     {
       "language": "javascript",
       "concept": "Symbol.dispose and using",
-      "note": "JS is adding explicit resource management (using, Symbol.asyncDispose). C# has had using/IDisposable for decades and the CLR still has a separate finalizer queue.",
+      "note": "JavaScript is adding explicit resource management (using, Symbol.asyncDispose). C# has had using/IDisposable for decades and the CLR still has a separate finalizer queue.",
       "futureTopicSlug": "javascript/resources/using"
     },
     {
       "language": "typescript",
       "concept": "no IDisposable in the type system",
-      "note": "TS cannot enforce Dispose. You rely on finally or the new JS using. C# compiler enforces using on the pattern and analyzers warn on IDisposable left undisposed.",
+      "note": "TypeScript cannot enforce Dispose. You rely on finally or the new JS using. C# compiler and analyzers support the using pattern for IDisposable.",
       "futureTopicSlug": "typescript/resources/dispose"
     },
     {
       "language": "javascript",
       "concept": "using / Symbol.dispose",
-      "note": "JS explicit resource management is late and optional. C# using is the daily native-resource pattern (SkiaSharp).",
+      "note": "JavaScript explicit resource management is late and optional. C# using is the daily native-resource pattern for libraries like SkiaSharp.",
       "futureTopicSlug": "javascript/language/explicit-resource-management"
     }
   ],

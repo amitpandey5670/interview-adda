@@ -1,38 +1,169 @@
 {
   "id": "csharp-02-operators",
   "slug": "operators",
-  "title": "Operators",
+  "title": "Expressions and operators (arithmetic, logic, null handling)",
   "moduleId": "csharp-02-syntax-operators-statements",
   "order": 2,
-  "hook": "Operators are expressions with precedence. Null-coalescing and null-conditional are the ones that keep Redis lookups and token payloads from throwing. C# 14 lets `?.` sit on the left of an assignment.",
+  "hook": "Operators turn values into expressions. The ones you will use most in production are null-coalescing (??) and null-conditional (?.) — they keep cache lookups and token payloads from throwing. C# 14 adds null-conditional assignment so ?. can appear on the left of =.",
   "introducedIn": "C# 14",
   "sections": [
     {
-      "heading": "Arithmetic, comparison, logical, assignment",
-      "prose": "Arithmetic: `+ - * / %` and increments. Integer `/` truncates toward zero — `5/2` is `2`, not `2.5`. Comparison and equality: `< > <= >= == !=`. For `string`, `==` is content equality (overloaded), unlike JS reference-or-coercion surprises. Logical: `& | ^ !` always evaluate both sides for bool; `&& ||` short-circuit — use those in guards. Assignment is right-associative (`a = b = 0`). Compound `+=` etc. exist. Precedence is the usual C family; parenthesize when mixing `??` with `?:`.",
-      "snippets": [
+      "heading": "What are operators and expressions?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Null-coalescing and null-conditional",
-          "code": "string? cached = redisGet; // may be null\nstring json = cached ?? \"{}\";\nint? ttl = cacheEntry?.TtlSeconds;\n\n// C# 14: assign only if the receiver is non-null; RHS skipped when null\ncacheEntry?.LastAccessUtc = DateTime.UtcNow;",
-          "explanation": "`??` supplies a fallback. `?.` skips member access. Null-conditional assignment (C# 14) does not evaluate the right-hand side when the receiver is null. `++`/`--` are still not allowed on `?.`."
+          "type": "prose",
+          "text": "An **expression** is code that produces a value: `5 + 3` evaluates to `8`. An **operator** is the symbol that performs the action: `+`, `==`, `&&`, `??`. C# operators follow a **precedence** order (multiplication before addition, for example). When in doubt, use parentheses. Unlike JavaScript, C# does not coerce types in comparisons — `==` on two strings compares content, and comparing a string to a number is a compile error."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "??",
+              "shortForm": "??",
+              "longForm": "null-coalescing operator",
+              "plainDefinition": "Returns the left value if it is not null; otherwise returns the right value.",
+              "example": "string json = cached ?? \"{}\"; — uses \"{}\" when cached is null."
+            },
+            {
+              "term": "?.",
+              "shortForm": "?.",
+              "longForm": "null-conditional operator",
+              "plainDefinition": "Accesses a member only when the receiver is not null; otherwise the whole expression is null.",
+              "example": "int? ttl = cacheEntry?.TtlSeconds; — null if cacheEntry is null."
+            },
+            {
+              "term": "short-circuit",
+              "longForm": "short-circuit evaluation",
+              "plainDefinition": "Logical operators (&& and ||) stop evaluating as soon as the result is known.",
+              "example": "if (user != null && user.IsActive) — IsActive is never called when user is null."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "C# 14 null-conditional assignment",
-      "prose": "Before C# 14 you wrote `if (msg is not null) msg.RetryCount = n;`. Now `msg?.RetryCount = n;` is legal, including `+=`. The right-hand expression runs only when the left receiver is non-null — important if the RHS hits Redis or deserializes a token. Do not confuse this with `??=`, which assigns when the left value is null."
+      "heading": "Why operator choice matters",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Integer division truncates toward zero: `5 / 2` is `2`, not `2.5`. Use `decimal` or `double` when you mean real division. Short-circuit logical operators (`&&`, `||`) skip the right side when the answer is already decided — critical when the right side would throw on a null reference. The null-coalescing operator (`??`) and null-conditional operator (`?.`) are your first line of defense against NullReferenceException in service code."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "C# 14 null-conditional assignment",
+          "body": "Before C# 14 you wrote if (msg is not null) msg.RetryCount = n;. Now msg?.RetryCount = n; is legal. The right-hand side runs only when the receiver is not null. Do not confuse this with ??=, which assigns when the left value is already null."
+        }
+      ]
+    },
+    {
+      "heading": "How operator precedence works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Evaluating a mixed expression",
+          "items": [
+            {
+              "title": "Parentheses first",
+              "body": "Anything inside ( ) is evaluated before anything outside."
+            },
+            {
+              "title": "Unary and multiplicative",
+              "body": "Negation (-), then *, /, %."
+            },
+            {
+              "title": "Additive and comparison",
+              "body": "Then + and -, then <, >, ==, !=."
+            },
+            {
+              "title": "Logical and null-coalescing",
+              "body": "&& and || short-circuit. ?? sits lower — parenthesize when mixing ?? with ?:."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Null-safe access flow",
+            "source": "flowchart TD\n  A[Evaluate receiver] --> B{Is receiver null?}\n  B -->|Yes| C[Skip member access — result is null]\n  B -->|No| D[Access member or assign value]\n  D --> E[Return result]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough: arithmetic and null operators",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Arithmetic and comparison basics",
+            "code": "int a = 5, b = 2;\nint quotient = a / b;       // 2 — integer division truncates\ndouble real = a / (double)b; // 2.5 — cast for real division\n\nstring s1 = \"hello\";\nstring s2 = \"hello\";\nbool same = s1 == s2;       // true — content equality\n\nbool guard = count > 0 && items != null; // short-circuit: items not checked if count <= 0",
+            "explanation": "Integer / truncates toward zero. string == compares content. && stops evaluating when the left side is false."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Null-coalescing and null-conditional",
+            "code": "string? cached = redisGet; // may be null\nstring json = cached ?? \"{}\";\nint? ttl = cacheEntry?.TtlSeconds;\n\n// C# 14: assign only if receiver is non-null; RHS skipped when null\ncacheEntry?.LastAccessUtc = DateTime.UtcNow;",
+            "explanation": "?? supplies a fallback when the left side is null. ?. skips member access when the receiver is null. Null-conditional assignment (C# 14) does not evaluate the right-hand side when the receiver is null."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "??= versus ?. =",
+            "code": "string? name = null;\nname ??= \"default\";     // assigns \"default\" because name is null\n\nCacheEntry? entry = GetEntry();\nentry?.HitCount += 1;   // C# 14: increment only if entry is not null\n\n// Wrong assumption: GetOrder() always runs\nCustomer? customer = null;\ncustomer?.Order = GetOrder(); // GetOrder() is NOT called when customer is null",
+            "explanation": "??= assigns when the variable is null. ?. = skips the entire right-hand side when the receiver is null — important when the RHS hits a database or deserializes a token."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# vs JavaScript/TypeScript operators",
+          "headers": ["Operator", "C#", "JavaScript/TypeScript"],
+          "rows": [
+            ["==", "Typed equality, no coercion", "JS == coerces types; TS uses === for strict"],
+            ["??", "Null-coalescing (since C# 8)", "?? nullish coalescing (ES2020)"],
+            ["?.", "Null-conditional access", "Optional chaining ?."],
+            ["?. =", "C# 14: assign if not null", "Syntax error in JavaScript"],
+            ["&& / ||", "Short-circuit on bool only", "Short-circuit with truthy/falsy values"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes to avoid",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Top pitfalls",
+          "body": "Using == on floating-point for money — use decimal and exact compares. Writing x ?? y ?? z then mixing with ?: without parentheses. Assuming customer?.Order = GetOrder() always calls GetOrder() — it does not when customer is null. Using & and | on bool when you meant && and || — the non-short-circuit versions evaluate both sides."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Integer division truncates; use decimal/double when you mean real division.",
-    "`&&`/`||` short-circuit; `&`/`|` on bool do not.",
-    "C# 14: `x?.Prop = expr` assigns only if `x` is not null; RHS is skipped otherwise."
+    "Integer division truncates; use decimal or double when you mean real division.",
+    "&& and || short-circuit; & and | on bool do not.",
+    "C# 14: x?.Prop = expr assigns only if x is not null; the right-hand side is skipped otherwise.",
+    "??= assigns when the left is null; ?. = assigns when the receiver is not null — different conditions."
   ],
   "commonPitfalls": [
-    "Using `==` on floating point for money — use decimal and exact compares, or a tolerance for double.",
-    "Writing `x ?? y ?? z` then mixing with `?:` without parentheses.",
-    "Assuming `customer?.Order = GetOrder()` always calls `GetOrder` — it does not when customer is null."
+    "Using == on floating point for money — use decimal and exact compares, or a tolerance for double.",
+    "Writing x ?? y ?? z then mixing with ?: without parentheses.",
+    "Assuming customer?.Order = GetOrder() always calls GetOrder() — it does not when customer is null.",
+    "Confusing ??= (assign if null) with ?. = (assign if receiver is not null)."
   ],
   "relatedTopicIds": [
     "csharp-02-statements-if-switch",
@@ -44,7 +175,7 @@
     {
       "language": "javascript",
       "concept": "?? ?. ||= and optional chaining assignment",
-      "note": "JS has `??` and `?.`. Optional chaining on the left of assignment is a JS syntax error; C# 14 allows `x?.Prop = v`. JS `==` coerces; C# `==` does not.",
+      "note": "JavaScript has ?? and ?. but optional chaining on the left of assignment is a syntax error. C# 14 allows x?.Prop = v. JavaScript == coerces types; C# == does not.",
       "futureTopicSlug": "javascript/operators/nullish"
     }
   ],

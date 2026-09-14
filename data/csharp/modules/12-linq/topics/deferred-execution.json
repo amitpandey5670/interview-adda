@@ -1,32 +1,181 @@
 {
   "id": "csharp-12-deferred-execution",
   "slug": "deferred-execution",
-  "title": "Deferred execution and hot-path traps",
+  "title": "Deferred execution and hot-path traps (plan vs run)",
   "moduleId": "csharp-12-linq",
   "order": 3,
-  "hook": "On a 199-to-999 concurrent attempt-submit path, enumerating the same filtered query twice is two CPU passes and two different snapshots if the list is still growing.",
+  "hook": "Declaring a LINQ query stores a plan, not results. Each time you enumerate — foreach, Count, ToList — the plan re-runs against the current source. On a busy submit path, that double pass can return different data.",
   "sections": [
     {
-      "heading": "Immediate versus deferred, streaming versus buffering",
-      "prose": "Operators that return a scalar (Count, Any, First, Max, Sum) execute immediately. Operators that return IEnumerable typically defer. Deferred operators split into streaming (Where, Select, SelectMany, Take) and non-streaming (OrderBy, GroupBy, Reverse). Streaming yields as it reads. Buffering reads everything first. ToList and ToArray freeze a snapshot. Microsoft’s classification table is the thing to cite, not a vague “LINQ is lazy.”",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Double enumeration on a live submit buffer",
-          "code": "var pending = new List<Attempt>(); // mutated by other tasks\n\nIEnumerable<Attempt> late =\n    pending.Where(a => a.SubmittedAt > cutoff);\n\nvar count = late.Count();          // pass 1\nforeach (var a in late)            // pass 2 — different membership\n{\n    Report(a);\n}\n\nvar snapshot = late.ToList();      // one pass, then reuse snapshot",
-          "explanation": "Count and foreach each run Where. Inserts between them change the report. ToList once is the hot-path fix."
+          "type": "prose",
+          "text": "Deferred execution means a LINQ query does not run when you assign it to a variable. It runs when you enumerate it or call an immediate operator. Immediate operators — Count, Any, First, Max, Sum, ToList, ToArray — execute right away. Deferred operators that return IEnumerable typically split into two classes: streaming (Where, Select, SelectMany, Take) yield elements as they read, and buffering (OrderBy, GroupBy, Reverse) read the entire source before yielding the first element."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Deferred execution",
+              "plainDefinition": "The query is a recipe stored in an IEnumerable. Work happens only when you enumerate or materialize.",
+              "example": "var q = items.Where(x => x.Active); // no work yet",
+              "longForm": "Deferred execution"
+            },
+            {
+              "term": "Immediate execution",
+              "plainDefinition": "Operators that return a scalar or a concrete collection run the query right away.",
+              "example": "items.Where(x => x.Active).Count() // runs now",
+              "longForm": "Immediate execution"
+            },
+            {
+              "term": "Materialization",
+              "plainDefinition": "Freezing a deferred query into a List or array with ToList or ToArray.",
+              "example": "var snapshot = query.ToList(); // one pass, reusable",
+              "longForm": "Materialization"
+            },
+            {
+              "term": "Multiple enumeration",
+              "plainDefinition": "Running the same IEnumerable plan more than once. Each pass re-executes all deferred operators.",
+              "example": "var c = q.Count(); foreach (var x in q) { } // two passes",
+              "longForm": "Multiple enumeration"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Captured variables and accidental work",
-      "prose": "The query closes over cutoff, tenantId, and sometimes this. Changing cutoff after the query is built and before it is enumerated uses the new value — deferred by design. In high concurrency, that is a race unless the captured locals are snapshots. Chaining two Where clauses is still one pass when you finally enumerate; chaining Where after ToList is a second pass on a copy. Logging .ToList() in a diagnostic build inside a library method that then returns IEnumerable surprises callers who enumerate again.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Capture of a loop variable that moves",
-          "code": "IEnumerable<IEnumerable<Attempt>> queries = [];\nfor (var tenant = 0; tenant < tenantCount; tenant++)\n{\n    var id = tenant; // snapshot\n    queries = queries.Append(attempts.Where(a => a.TenantId == id));\n}",
-          "explanation": "Without id, every query would see the final tenantCount value (C# no longer has the old foreach capture bug for foreach, but for-loop ints still need a copy if you close over the iterator)."
+          "type": "prose",
+          "text": "On a high-concurrency submit path, enumerating the same filtered query twice is two CPU passes and potentially two different snapshots if the underlying list is still growing. Count then foreach on the same IEnumerable is the classic production bug. Chaining two Where clauses is still one pass when you finally enumerate, but calling ToList in the middle creates a second pass on a copy. Captured variables (cutoff, tenantId) are read at enumeration time, not at query construction — a race if those locals change between passes."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Hot-path fix",
+          "body": "Call ToList once to snapshot, then share the list. One pass, one consistent view of the data."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Plan versus execution",
+          "items": [
+            {
+              "title": "Build the query",
+              "body": "Assign a chain of Where/Select to a variable. No elements are read from the source."
+            },
+            {
+              "title": "First enumeration",
+              "body": "Count() or foreach walks the source through the filter. If the source changed, results reflect the new state."
+            },
+            {
+              "title": "Second enumeration",
+              "body": "Another foreach or Count re-runs the entire plan. Two passes, potentially different results."
+            },
+            {
+              "title": "Snapshot with ToList",
+              "body": "ToList runs the plan once and stores results. Subsequent operations use the frozen list."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Deferred vs immediate operators",
+            "source": "flowchart TD\n  Q[Query variable\\nstores plan] --> D{Enumerate?}\n  D -->|No| W[No work done]\n  D -->|foreach / ToList| E[Execute plan]\n  E --> S{Operator type}\n  S -->|Where Select Take| ST[Stream elements]\n  S -->|OrderBy GroupBy| BU[Buffer all first]\n  E --> M[Count First Max\\nImmediate scalar]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Double enumeration on a live submit buffer",
+            "code": "var pending = new List<Attempt>(); // mutated by other tasks\n\nIEnumerable<Attempt> late =\n    pending.Where(a => a.SubmittedAt > cutoff);\n\nvar count = late.Count();          // pass 1 — walks the filter\nforeach (var a in late)            // pass 2 — different membership!\n{\n    Report(a);\n}\n\nvar snapshot = late.ToList();      // one pass, then reuse snapshot",
+            "explanation": "Count and foreach each run Where independently. Inserts between them change the report. ToList once is the hot-path fix."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Captured variable read at enumeration time",
+            "code": "int minScore = 50;\nvar query = attempts.Where(a => a.Score >= minScore);\n\nminScore = 80; // changed after query built\n\nforeach (var a in query)\n{\n    // Uses minScore = 80, not 50 — deferred by design\n    Console.WriteLine(a.Id);\n}",
+            "explanation": "The lambda closes over minScore by reference. The value at enumeration time is what matters. Snapshot locals if you need a fixed threshold."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Loop variable capture in deferred queries",
+            "code": "IEnumerable<IEnumerable<Attempt>> queries = [];\nfor (var tenant = 0; tenant < tenantCount; tenant++)\n{\n    var id = tenant; // snapshot — required!\n    queries = queries.Append(attempts.Where(a => a.TenantId == id));\n}\n\n// Without 'var id = tenant', every query would see the final tenant value.",
+            "explanation": "Closing over a for-loop iterator variable captures the variable, not the value. Copy to a local inside the loop body before using it in a lambda."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Deferred LINQ vs eager Array methods",
+          "headers": [
+            "Aspect",
+            "C# LINQ (deferred)",
+            "JavaScript Array"
+          ],
+          "rows": [
+            [
+              "When work runs",
+              "On enumeration or ToList/Count",
+              "Immediately on filter/map"
+            ],
+            [
+              "Re-running",
+              "Each foreach re-executes the plan",
+              "Each filter creates a new array once"
+            ],
+            [
+              "Lazy analogue",
+              "IEnumerable iterator chain",
+              "Generator functions (function*)"
+            ],
+            [
+              "Snapshot",
+              "ToList() or ToArray()",
+              "Spread [...arr] or Array.from"
+            ],
+            [
+              "Double-iterate trap",
+              "Same IEnumerable, two passes",
+              "Spreading a generator twice re-runs it"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling Count then foreach on the same IEnumerable. Returning a query over a using-disposed enumerator (yield after dispose). Putting expensive Select lambdas in a query that reporting enumerates three times. Assuming OrderBy streams — it buffers the entire source first."
         }
       ]
     }

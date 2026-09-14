@@ -1,4 +1,4 @@
-import { afterNextRender, Component, ElementRef, input, viewChild } from '@angular/core';
+import { afterRenderEffect, Component, ElementRef, input, viewChild } from '@angular/core';
 import hljs from 'highlight.js/lib/core';
 import csharp from 'highlight.js/lib/languages/csharp';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -21,16 +21,35 @@ export class CodeBlock {
   readonly code = input('');
   readonly explanation = input('');
   private readonly codeEl = viewChild<ElementRef<HTMLElement>>('hljsCode');
+  private lastHighlightKey = '';
 
   constructor() {
-    afterNextRender(() => this.highlight());
+    afterRenderEffect(() => {
+      this.highlight(this.code(), this.language());
+    });
   }
 
-  private highlight(): void {
+  private highlight(code: string, language: string): void {
     const el = this.codeEl()?.nativeElement;
     if (!el) {
       return;
     }
-    hljs.highlightElement(el);
+
+    const key = `${language}\0${code}`;
+    if (key === this.lastHighlightKey) {
+      return;
+    }
+    this.lastHighlightKey = key;
+
+    el.className = `language-${language}`;
+
+    const registered = hljs.getLanguage(language);
+    if (!registered) {
+      el.textContent = code;
+      return;
+    }
+
+    const { value } = hljs.highlight(code, { language });
+    el.innerHTML = value;
   }
 }

@@ -1,32 +1,156 @@
 {
   "id": "csharp-10-local-functions-vs-lambdas",
   "slug": "local-functions-vs-lambdas",
-  "title": "Local functions versus lambdas",
+  "title": "Local functions versus lambdas (named helpers vs inline callbacks)",
   "moduleId": "csharp-10-delegates-events-lambdas",
   "order": 3,
-  "hook": "A SkiaSharp render helper that yields tiles wants a local function: argument checks run now, yield lives in the nested iterator, and you never allocate a Func.",
+  "hook": "A local function is a named method nested inside another method. It can use yield return, recurse naturally, and skip delegate allocation when you call it directly — things a lambda cannot do.",
   "sections": [
     {
-      "heading": "What local functions are",
-      "prose": "A local function is a named method nested in another member. It has no access modifier. It may be async, unsafe, static, or extern (extern must be static). It can carry attributes on itself and on parameters. It cannot sit inside an expression-bodied member. Non-static locals see enclosing locals and this. static locals cannot capture, which is the same guarantee as a static lambda, with method syntax.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Validate then iterate — local function + IDisposable",
-          "code": "public IEnumerable<byte[]> RasterPages(Stream fontStream, int pageCount)\n{\n    ArgumentNullException.ThrowIfNull(fontStream);\n    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageCount);\n\n    return Pages();\n\n    IEnumerable<byte[]> Pages()\n    {\n        using var surface = SkiaSurface.Create(); // IDisposable stand-in for SKSurface\n        for (var i = 0; i < pageCount; i++)\n        {\n            yield return surface.EncodePage(i);\n        }\n    }\n}",
-          "explanation": "If Pages were the outer iterator, a bad pageCount would throw only when the caller first MoveNext. The local function pattern throws at the call site, then disposes the surface as the enumerator is disposed."
+          "type": "prose",
+          "text": "A **local function** is a method declared inside another member's body. It has no access modifier and is visible throughout the containing member. Non-static local functions can read enclosing locals and `this`. **static** local functions cannot capture, matching the guarantee of a static lambda. Lambdas are anonymous and always become delegates when stored or passed to APIs that expect Func or Action."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "local function",
+              "longForm": "local function",
+              "plainDefinition": "A named method nested inside another method, property getter, or similar member.",
+              "example": "IEnumerable<int> Evens() { for (var i = 0; i < n; i++) if (i % 2 == 0) yield return i; }"
+            },
+            {
+              "term": "yield return",
+              "longForm": "iterator yield return",
+              "plainDefinition": "Pauses an iterator method and returns the next value. Lambdas cannot contain yield.",
+              "example": "yield return surface.EncodePage(i);"
+            },
+            {
+              "term": "display class",
+              "longForm": "closure display class",
+              "plainDefinition": "Compiler-generated type holding captured variables. Local functions avoid this when called directly without converting to a delegate.",
+              "example": "Calling Pages() directly may skip heap allocation that a Func would require."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Where lambdas lose",
-      "prose": "Lambdas are anonymous, must be definitely assigned before recursive use, always become delegates when stored, and cannot contain yield return. Local functions can be called as methods with no delegate, so the JIT may skip a heap closure when nothing else captures the same locals. Recursion is natural. Prefer a lambda when the API takes Func or Action (LINQ, Task.Run, events). Prefer a local function when you would otherwise write a private method that only one caller should see, especially iterators and async methods that must validate first.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Recursion without a dummy Func",
-          "code": "static int Factorial(int n)\n{\n    return Inner(n);\n\n    static int Inner(int k) => k < 2 ? 1 : k * Inner(k - 1);\n}",
-          "explanation": "A lambda factorial needs Func<int,int> inner = null!; then assignment. The local function is already in scope and static so it cannot capture n by accident."
+          "type": "prose",
+          "text": "Choose local functions when you need **yield return**, recursion without dummy assignments, attributes on the helper, or argument validation before an iterator runs. A SkiaSharp render helper that yields tiles should validate pageCount in the outer method, then return an iterator from a local function — otherwise the exception appears only on the first MoveNext. Choose lambdas when the API demands a delegate: LINQ, Task.Run, events."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "The iterator validation pattern",
+          "body": "Put ArgumentNullException and range checks in the outer method. Put yield return in the local function. The caller gets immediate errors and proper IDisposable cleanup when enumeration ends."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing local function vs lambda",
+          "items": [
+            {
+              "title": "Does the API require a delegate?",
+              "body": "LINQ, Task.Run, and events need Func/Action — use a lambda (or method group)."
+            },
+            {
+              "title": "Do you need yield or recursion?",
+              "body": "Local functions support yield return and can call themselves by name without a forward declaration."
+            },
+            {
+              "title": "Will you call it directly?",
+              "body": "Direct calls to a local function may avoid delegate and closure allocation. Converting to Func in a loop loses that win."
+            },
+            {
+              "title": "Need static no-capture?",
+              "body": "Both static local functions and static lambdas forbid capture. Pick syntax by whether you need a name and yield."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Decision: local function or lambda",
+            "source": "flowchart TD\n  Q[Need inline callback?] --> A{API takes delegate?}\n  A -->|yes| L[Lambda or method group]\n  A -->|no| B{Need yield or recursion?}\n  B -->|yes| F[Local function]\n  B -->|no| C{Only one caller?}\n  C -->|yes| F\n  C -->|no| L"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Validate then iterate with a local function",
+            "code": "public IEnumerable<byte[]> RasterPages(Stream fontStream, int pageCount)\n{\n    ArgumentNullException.ThrowIfNull(fontStream);\n    ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pageCount);\n\n    return Pages();\n\n    IEnumerable<byte[]> Pages()\n    {\n        using var surface = SkiaSurface.Create();\n        for (var i = 0; i < pageCount; i++)\n            yield return surface.EncodePage(i);\n    }\n}",
+            "explanation": "Lines 2–3: validation throws at the call site. Line 8: local function holds yield and IDisposable disposal when enumeration completes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Recursion without a dummy Func",
+            "code": "static int Factorial(int n)\n{\n    return Inner(n);\n\n    static int Inner(int k) => k < 2 ? 1 : k * Inner(k - 1);\n}",
+            "explanation": "Line 5: Inner calls itself by name. A lambda would need Func<int,int> inner = null!; then assignment before recursion works."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Lambda where the API requires a delegate",
+            "code": "var ids = deliveries.Select(d => d.MessageId);\n\nawait Task.Run(() => ProcessBatch(ids));\n\nhost.MessageReceived += (_, msg) => Console.WriteLine(msg.MessageId);",
+            "explanation": "Line 1: LINQ Select expects Func<T,TResult>. Line 3: Task.Run expects Action. Line 5: event handlers need a delegate — lambdas fit naturally here."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Nested helpers in C# vs JS",
+          "headers": ["Feature", "C# local function", "JavaScript nested function"],
+          "rows": [
+            ["Hoisting", "In scope for entire containing member", "function declarations hoisted in their block scope"],
+            ["yield", "Supported in local functions", "Supported in function* generators, not in arrow callbacks"],
+            ["Recursion", "Call by name immediately", "const fn = () => fn() fails; function decl hoists"],
+            ["Delegate conversion", "Optional — only when passed as Func/Action", "Functions are already first-class values"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "yield return in the validating method",
+          "body": "If the outer method is the iterator, bad arguments throw only when the caller first MoveNext. Split validation (outer) from iteration (local function)."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Local function inside an expression-bodied member",
+          "body": "Local functions cannot be declared inside expression-bodied properties or methods. Use a block body for the containing member."
         }
       ]
     }
@@ -51,7 +175,7 @@
     {
       "language": "javascript",
       "concept": "Nested function declarations versus arrows",
-      "note": "JS nested function foo() {} is hoisted in its scope and can recurse by name. C# local functions are also in scope throughout the containing member, unlike a const fn = () => that is temporal-dead before initialization.",
+      "note": "JavaScript nested function foo() {} is hoisted in its scope and can recurse by name. C# local functions are also in scope throughout the containing member, unlike const fn = () => that is temporal-dead before initialization.",
       "futureTopicSlug": "javascript/functions/nested-declarations"
     }
   ],

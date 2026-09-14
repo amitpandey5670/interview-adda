@@ -1,30 +1,165 @@
 {
   "id": "csharp-05-equality-and-hashing",
   "slug": "equality-and-hashing",
-  "title": "Equality and hashing",
+  "title": "Equality and hashing (dictionary key contract)",
   "moduleId": "csharp-05-object-oriented-csharp",
   "order": 6,
-  "hook": "Equals without GetHashCode is a Dictionary bug waiting for a cache miss. IEquatable<T> avoids boxing. Records generate a consistent pair; hand-rolled DTOs often do not.",
+  "hook": "When two objects compare equal, they must produce the same hash code. Break that rule and your Dictionary lookups silently miss — a bug that shows up only under load in a Redis cache or an in-flight attempt tracker.",
   "sections": [
     {
-      "heading": "Reference equality versus value equality",
-      "prose": "object.ReferenceEquals and the default class == test identity. Value equality asks whether the data matches. Structs default to field-by-field equality (slow, reflection-ish historically, now more generated but still easy to get wrong with floats and unused fields). Records generate value equality including the runtime type, so a derived record is not equal to a base record with the same properties. Strings are the model citizen: immutable, value-equal, stable hash."
-    },
-    {
-      "heading": "Dictionaries, Redis keys, and IEquatable",
-      "prose": "Dictionary<TKey, TValue> buckets with GetHashCode then confirms with Equals. The contract: if Equals is true, hashes must match; hashes matching does not imply Equals. Mutating a key after insert orphans the entry. IEquatable<T> gives a typed Equals that does not box T when T is a struct — implement it alongside overrides of Object.Equals and GetHashCode. For Redis cache keys, prefer a readonly record struct or a string you own; do not use a mutable class.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "IEquatable cache key used in a dictionary",
-          "code": "readonly struct AttemptKey(string tenant, string attemptId) : IEquatable<AttemptKey>\n{\n    public string Tenant { get; } = tenant;\n    public string AttemptId { get; } = attemptId;\n\n    public bool Equals(AttemptKey other) =>\n        Tenant == other.Tenant && AttemptId == other.AttemptId;\n\n    public override bool Equals(object? obj) =>\n        obj is AttemptKey other && Equals(other);\n\n    public override int GetHashCode() => HashCode.Combine(Tenant, AttemptId);\n}\n\nvar inflight = new Dictionary<AttemptKey, int>();\ninflight[new AttemptKey(\"acme\", \"a-1\")] = 1;\nvar n = inflight[new AttemptKey(\"acme\", \"a-1\")]; // 1 — value equality, not identity",
-          "explanation": "Two different struct copies lookup the same slot because Equals and GetHashCode agree. HashCode.Combine is the .NET helper; keep the fields identical to Equals."
+          "type": "prose",
+          "text": "**Equality** asks whether two values represent the same data. **Hashing** compresses an object into an integer for fast lookup in collections like `Dictionary<TKey, TValue>` and `HashSet<T>`. The contract is strict: if `Equals` returns true, `GetHashCode` must return the same value. Classes default to **reference equality** (same object in memory). Records and structs default to **value equality** (same field values)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "reference equality",
+              "longForm": "reference equality",
+              "plainDefinition": "Two variables point at the same object in memory. The default for classes.",
+              "example": "`ReferenceEquals(a, b)` or default `==` for classes without overload."
+            },
+            {
+              "term": "value equality",
+              "longForm": "value equality",
+              "plainDefinition": "Two objects compare equal because their data matches, even if they are different instances.",
+              "example": "Two `AuthToken` records with the same claims are value-equal."
+            },
+            {
+              "term": "GetHashCode",
+              "longForm": "GetHashCode",
+              "plainDefinition": "Returns an integer hash used by dictionaries and hash sets to bucket entries. Must be consistent with Equals.",
+              "example": "`HashCode.Combine(Tenant, AttemptId)`"
+            },
+            {
+              "term": "IEquatable<T>",
+              "longForm": "IEquatable<T>",
+              "plainDefinition": "Interface with a typed Equals(T other) method. Avoids boxing when T is a struct used in collections.",
+              "example": "`readonly struct AttemptKey : IEquatable<AttemptKey>`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Operators and records",
-      "prose": "If you overload ==, overload !=, and keep them consistent with Equals (module 04 operators). Records already do this. For classes that stay identity-based, do not overload == or you will confuse every reviewer who writes if (handler == null) versus if (handler is null) — the latter still uses a different pattern in modern C#. EqualityComparer<T>.Default is what collections use; custom comparers belong at the dictionary constructor, not hidden inside GetHashCode with randomness."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every `Dictionary` and `HashSet` uses `GetHashCode` to pick a bucket, then `Equals` to confirm a match. If you override `Equals` but leave the default reference-based `GetHashCode`, equal objects land in different buckets and lookups return nothing. In a Redis-backed in-flight tracker or a high-concurrency submit path, that means duplicate processing or lost cache entries. Records generate a consistent pair automatically; hand-rolled DTOs often do not."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Never mutate a dictionary key",
+          "body": "If a key's fields change after insertion, its hash changes and the entry becomes unreachable — a silent orphan in the dictionary. Use immutable records or readonly structs as keys."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Dictionary lookup using equality and hashing",
+          "items": [
+            {
+              "title": "Compute hash of the lookup key",
+              "body": "Dictionary calls `key.GetHashCode()` to find the bucket index."
+            },
+            {
+              "title": "Scan the bucket",
+              "body": "All entries in that bucket are compared with `Equals`. Matching hash codes do not guarantee equality — hash collisions happen."
+            },
+            {
+              "title": "Confirm with Equals",
+              "body": "If `Equals` returns true, the entry is found. If false, the dictionary reports a miss."
+            },
+            {
+              "title": "Contract check",
+              "body": "Equal objects must hash equal. Unequal objects may hash equal (collision) but Equals must return false."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Equals and GetHashCode contract",
+            "source": "flowchart TD\n  LOOKUP[Dictionary lookup] --> HASH[GetHashCode of key]\n  HASH --> BUCKET[Find bucket]\n  BUCKET --> EQUALS[Equals against entries]\n  EQUALS -->|true| FOUND[Return value]\n  EQUALS -->|false| MISS[Key not found]\n  CONTRACT[Rule: Equals true implies same hash]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IEquatable cache key in a dictionary",
+            "code": "readonly struct AttemptKey(string tenant, string attemptId) : IEquatable<AttemptKey>\n{\n    public string Tenant { get; } = tenant;\n    public string AttemptId { get; } = attemptId;\n\n    public bool Equals(AttemptKey other) =>\n        Tenant == other.Tenant && AttemptId == other.AttemptId;\n\n    public override bool Equals(object? obj) =>\n        obj is AttemptKey other && Equals(other);\n\n    public override int GetHashCode() => HashCode.Combine(Tenant, AttemptId);\n}\n\nvar inflight = new Dictionary<AttemptKey, int>();\ninflight[new AttemptKey(\"acme\", \"a-1\")] = 1;\nvar count = inflight[new AttemptKey(\"acme\", \"a-1\")]; // 1",
+            "explanation": "Line 1: readonly struct implements `IEquatable<AttemptKey>`. Lines 6–7: typed `Equals` avoids boxing. Line 12: `GetHashCode` uses the same fields as `Equals`. Lines 15–16: two different struct copies find the same slot because equality and hash agree."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Reference equality versus value equality",
+            "code": "var a = new List<int> { 1, 2 };\nvar b = new List<int> { 1, 2 };\nConsole.WriteLine(a == b);              // False — reference equality\nConsole.WriteLine(a.Equals(b));         // False — List<T> uses reference Equals\n\nvar r1 = new AuthToken(\"user\", \"issuer\", DateTimeOffset.UtcNow);\nvar r2 = new AuthToken(\"user\", \"issuer\", r1.ExpiresAt);\nConsole.WriteLine(r1 == r2);              // True — record value equality",
+            "explanation": "Lines 1–4: two lists with identical contents are not equal — classes use reference equality by default. Lines 6–8: two records with the same values are equal even though they are different heap objects. Records generate both `Equals` and `GetHashCode`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "The broken-equality bug",
+            "code": "class BrokenKey\n{\n    public string Tenant { get; set; } = \"\";\n    public override bool Equals(object? obj) =>\n        obj is BrokenKey other && Tenant == other.Tenant;\n    // BUG: GetHashCode not overridden — still reference-based\n}\n\nvar dict = new Dictionary<BrokenKey, int>();\nvar key1 = new BrokenKey { Tenant = \"acme\" };\ndict[key1] = 42;\nvar key2 = new BrokenKey { Tenant = \"acme\" };\nConsole.WriteLine(dict.ContainsKey(key2)); // False — hash mismatch!",
+            "explanation": "Line 5: `Equals` is overridden for value comparison. Line 6: `GetHashCode` is NOT overridden — it still uses the default reference hash. Lines 11–13: `key1` and `key2` are equal by `Equals` but hash differently, so `ContainsKey` returns false. Always override both together."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Equality across languages",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Object comparison", "Reference equality by default for classes", "`===` compares references for objects"],
+            ["Value comparison", "Override Equals / use records", "No built-in; manual deep-equal libraries"],
+            ["Collection keys", "Dictionary uses GetHashCode + Equals", "Map uses SameValueZero (like ===)"],
+            ["IEquatable", "Typed Equals avoids boxing for structs", "No runtime equality protocol"],
+            ["Generated equality", "Records auto-generate both methods", "TypeScript cannot generate runtime equality"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Overriding Equals without GetHashCode",
+          "body": "This is the most common equality bug. `Dictionary` and `HashSet` will appear to work in simple tests but fail under real data because equal keys land in different buckets."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mutable DTO as a HashSet element",
+          "body": "A mutable class used in a `HashSet` across a high-concurrency submit path will break when any thread changes a field that affects equality. The entry becomes unreachable. Use immutable records or readonly structs."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -46,13 +181,13 @@
     {
       "language": "javascript",
       "concept": "=== versus Object.is",
-      "note": "JS objects compare by reference; there is no IEquatable. Map keys use SameValueZero. C# dictionaries use the type’s equality contract.",
+      "note": "JavaScript objects compare by reference; there is no IEquatable. Map keys use SameValueZero. C# dictionaries use the type's equality contract.",
       "futureTopicSlug": "javascript/equality/triple-equals"
     },
     {
       "language": "typescript",
       "concept": "no runtime equality protocol",
-      "note": "TS cannot generate Equals/GetHashCode. You write your own or use a library. C# records generate both.",
+      "note": "TypeScript cannot generate Equals/GetHashCode. You write your own or use a library. C# records generate both.",
       "futureTopicSlug": "typescript/types/nominal-equality"
     }
   ],

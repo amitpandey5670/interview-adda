@@ -1,26 +1,193 @@
 {
   "id": "csharp-13-promises-vs-tasks",
   "slug": "promises-vs-tasks",
-  "title": "JavaScript Promises versus Task",
+  "title": "JavaScript Promises versus Task (same model, different scheduler)",
   "moduleId": "csharp-13-async-await",
   "order": 7,
-  "hook": "Both models let you write linear async code. The scheduling underneath is not the same: Promises settle into the microtask queue on one JS thread; Tasks resume on a .NET thread-pool thread unless a SynchronizationContext says otherwise.",
+  "hook": "Both models let you write linear async code. The scheduling underneath is not the same: Promises settle into the microtask queue on one JavaScript thread; Tasks resume on a .NET thread-pool thread unless a SynchronizationContext says otherwise.",
   "sections": [
     {
-      "heading": "What maps, and what does not",
-      "prose": "A JS Promise is a thenable object that is pending, fulfilled, or rejected. A .NET Task is a thenable in spirit: incomplete, ran-to-completion, faulted, or canceled. await promise in JS schedules a microtask; those microtasks drain before the next macrotask (timers, I/O callbacks). await task in C# schedules a continuation that may run on another thread. There is no microtask queue in the CLR. That is why a long CPU loop in a JS async function freezes the UI or the Node event loop, while a long CPU loop inside a C# async method after an await still freezes that thread but other pool threads can proceed. JS has no ValueTask; every async function allocates a Promise. JS has no CancellationToken on the language Promise; AbortSignal is bolted onto fetch and friends.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Same composition, different scheduler",
-          "code": "public async Task<string> LoadSessionAsync(string sessionId, CancellationToken cancellationToken)\n{\n    var redisTask = _redis.GetDatabase().StringGetAsync(sessionId);\n    var introspectTask = _http.GetStringAsync($\"/oauth/introspect/{sessionId}\", cancellationToken);\n    await Task.WhenAll(redisTask, introspectTask);\n    return redisTask.Result.ToString() ?? introspectTask.Result;\n}",
-          "explanation": "WhenAll is Promise.all. Continuations may hop threads. In JS, the then callbacks still run on the single JS thread via microtasks."
+          "type": "prose",
+          "text": "A JavaScript Promise is a thenable object that is pending, fulfilled, or rejected. A .NET Task is similar in spirit: incomplete, ran-to-completion, faulted, or canceled. await in both languages pauses the current function until the operation completes. But the scheduling differs fundamentally. JS Promise continuations are microtasks that always run on the same JavaScript thread. C# Task continuations may run on any thread-pool thread unless a SynchronizationContext marshals them back."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Promise",
+              "plainDefinition": "JavaScript's built-in async result object. States: pending, fulfilled, rejected.",
+              "example": "const data = await fetch(url).then(r => r.json());",
+              "longForm": "Promise"
+            },
+            {
+              "term": "Task",
+              "plainDefinition": "The .NET reference type representing an async operation. States: running, completed, faulted, canceled.",
+              "example": "var data = await httpClient.GetStringAsync(url);",
+              "longForm": "Task"
+            },
+            {
+              "term": "Microtask queue",
+              "plainDefinition": "JavaScript's internal queue for Promise callbacks. Drains before the next macrotask (timers, I/O).",
+              "example": "Promise.then callbacks always run on the same JS thread.",
+              "longForm": "Microtask queue"
+            },
+            {
+              "term": "AbortController",
+              "plainDefinition": "JavaScript's cooperative cancellation mechanism. The practical analog of CancellationToken.",
+              "example": "fetch(url, { signal: controller.signal })",
+              "longForm": "AbortController"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Interview trap: ‘async means parallel’",
-      "prose": "In both languages, awaiting A then B is sequential. Starting both then combining is concurrent wait. Parallel CPU in JS requires Worker threads or a native addon; in C# it requires extra threads (Task.Run, Parallel, PLINQ) which is module 15, not this language TAP module. TypeScript’s Promise types erase; Task<T> remains in IL and is awaited by the state machine. Do not say ‘Task is just a Promise.’ Say ‘same programmer model, different execution engine.’"
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Coming from JavaScript, it is tempting to say 'Task is just a Promise.' The programmer model is similar, but the execution engine differs. A long CPU loop in a JS async function freezes the event loop. A long CPU loop in a C# async method after an await still freezes that thread, but other pool threads can proceed. JS has no ValueTask; every async function allocates a Promise. JS has no CancellationToken on the language Promise — AbortSignal is bolted onto fetch and friends."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview trap: 'async means parallel'",
+          "body": "In both languages, awaiting A then B is sequential. Starting both then combining is concurrent wait. Parallel CPU in JS requires Worker threads; in C# it requires Task.Run or Parallel — neither is what async/await does by itself."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mapping concepts across languages",
+          "items": [
+            {
+              "title": "Start async work",
+              "body": "JS: const p = fetch(url). C#: var t = httpClient.GetAsync(url)."
+            },
+            {
+              "title": "Compose with await",
+              "body": "Both pause the function and resume when the operation completes."
+            },
+            {
+              "title": "Combine independent work",
+              "body": "JS: Promise.all([a, b]). C#: Task.WhenAll(a, b)."
+            },
+            {
+              "title": "Cancel",
+              "body": "JS: AbortController.abort(). C#: CancellationTokenSource.Cancel()."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Promise vs Task scheduling",
+            "source": "flowchart LR\n  subgraph JS[JavaScript]\n    P[Promise resolves] --> M[Microtask queue]\n    M --> S[Same JS thread]\n  end\n  subgraph NET[C# .NET]\n    T[Task completes] --> C[Continuation scheduled]\n    C --> TP[Thread pool thread\\nor SynchronizationContext]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same composition, different scheduler",
+            "code": "public async Task<string> LoadSessionAsync(\n    string sessionId, CancellationToken cancellationToken)\n{\n    var redisTask = _redis.GetDatabase().StringGetAsync(sessionId);\n    var introspectTask = _http.GetStringAsync(\n        $\"/oauth/introspect/{sessionId}\", cancellationToken);\n\n    await Task.WhenAll(redisTask, introspectTask);\n    return redisTask.Result.ToString() ?? introspectTask.Result;\n}",
+            "explanation": "WhenAll is Promise.all. Continuations may hop threads. In JS, the then callbacks still run on the single JS thread via microtasks."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "JavaScript equivalent with Promise.all",
+            "code": "async function loadSession(sessionId, signal) {\n  const [redisData, introspectData] = await Promise.all([\n    redis.get(sessionId),\n    fetch(`/oauth/introspect/${sessionId}`, { signal }).then(r => r.text())\n  ]);\n  return redisData ?? introspectData;\n}",
+            "explanation": "Same concurrent-wait pattern. Both continuations run as microtasks on the same JS thread after I/O completes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Cancellation: AbortController vs CancellationToken",
+            "code": "// C#\nvar cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));\nvar data = await httpClient.GetStringAsync(url, cts.Token);\n\n// JavaScript equivalent:\n// const controller = new AbortController();\n// setTimeout(() => controller.abort(), 30_000);\n// const data = await fetch(url, { signal: controller.signal });",
+            "explanation": "AbortController is the practical JS analog of CancellationToken, not a hidden field on Promise. Both are cooperative — the operation must observe the signal."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Promise vs Task feature matrix",
+          "headers": [
+            "Feature",
+            "JavaScript Promise",
+            "C# Task"
+          ],
+          "rows": [
+            [
+              "Combine parallel waits",
+              "Promise.all",
+              "Task.WhenAll"
+            ],
+            [
+              "First to complete",
+              "Promise.race",
+              "Task.WhenAny"
+            ],
+            [
+              "Cancellation",
+              "AbortSignal (per-API)",
+              "CancellationToken (built-in)"
+            ],
+            [
+              "Sync-complete optimization",
+              "None — always allocates Promise",
+              "ValueTask struct"
+            ],
+            [
+              "Thread model",
+              "Single JS thread + microtasks",
+              "Thread pool + optional SynchronizationContext"
+            ],
+            [
+              "Type at runtime",
+              "Promise object always",
+              "Task<T> is a real CLR type"
+            ],
+            [
+              "TypeScript types",
+              "Promise<T> erases at run time",
+              "Task<T> survives in IL"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Claiming C# await uses a microtask queue. Using Task.Result in a WhenAll continuation and thinking it is as safe as awaiting. Equating Node worker_threads with C# async/await. Saying 'Task is just a Promise' without noting the different execution engine."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -48,7 +215,7 @@
     {
       "language": "typescript",
       "concept": "Promise<T> versus Task<T>",
-      "note": "TypeScript’s Promise<T> is a compile-time annotation around a JS Promise. Task<T> is a real CLR type with status, cancellation, and exception storage.",
+      "note": "TypeScript's Promise<T> is a compile-time annotation around a JS Promise. Task<T> is a real CLR type with status, cancellation, and exception storage.",
       "futureTopicSlug": "typescript/async/promises"
     }
   ],

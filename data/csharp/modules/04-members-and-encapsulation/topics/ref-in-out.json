@@ -1,40 +1,174 @@
 {
   "id": "csharp-04-ref-in-out",
   "slug": "ref-in-out",
-  "title": "ref, in, and out",
+  "title": "ref, in, and out (parameter aliasing)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 4,
-  "hook": "After ordinary parameters, C# lets a parameter alias a caller’s variable. ref is read-write aliasing. in is a readonly alias. out is a definite-assignment obligation. These are language features, not C++ references with destructor rules.",
+  "hook": "Ordinary parameters copy data. `ref`, `in`, and `out` let a parameter alias the caller's variable instead — for writing results back, avoiding copies, or both.",
   "sections": [
     {
-      "heading": "Why they exist",
-      "prose": "Ordinary by-value passing is the default and the right default. ref exists so Try-style APIs and interop can write back to a local without wrapping a class. out is the definite-assignment variant: the caller may pass an unassigned local; the callee must assign before return. in (and ref readonly) exist so a large struct can be passed without copying, provided nobody mutates it through that alias."
-    },
-    {
-      "heading": "Defensive copies and readonly struct",
-      "prose": "If you pass a mutable struct as in, the compiler may copy it anyway so a method cannot mutate the caller’s value through a sneaky instance method. Mark the struct readonly (next struct topic) so in is a true zero-copy readonly view. That matters on a high-concurrency attempt-submit path where cache-key structs are compared in a loop. Do not sprinkle ref on class parameters to “go faster” — classes are already a reference.",
-      "snippets": [
+      "heading": "What are ref, in, and out?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "out for parse, in for a readonly key",
-          "code": "readonly struct CacheKey(string tenant, string attemptId)\n{\n    public string Tenant { get; } = tenant;\n    public string AttemptId { get; } = attemptId;\n}\n\nstatic bool TryParseAttempt(string raw, out int attemptNo)\n{\n    return int.TryParse(raw, out attemptNo);\n}\n\nstatic bool Exists(in CacheKey key, IReadOnlyDictionary<CacheKey, byte> map) =>\n    map.ContainsKey(key);",
-          "explanation": "TryParse uses out so the local can start unassigned. in CacheKey avoids copying a readonly struct into Exists. ContainsKey still uses equality — module 05."
+          "type": "prose",
+          "text": "After you understand ordinary parameters, C# offers three **parameter modifiers** that change how data is passed. **`ref`** creates a read-write alias to the caller's variable. **`in`** creates a read-only alias (no copy for large structs). **`out`** is like `ref` but the caller may pass an unassigned variable and the callee must assign it before returning."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ref",
+              "longForm": "ref parameter",
+              "plainDefinition": "A parameter that aliases the caller's variable. Reads and writes go directly to the caller's storage.",
+              "example": "`void Swap(ref int a, ref int b)` — both variables are swapped in the caller."
+            },
+            {
+              "term": "in",
+              "longForm": "in parameter",
+              "plainDefinition": "A read-only alias. The callee cannot assign to the parameter. Useful for large readonly structs to avoid copying.",
+              "example": "`bool Contains(in CacheKey key)` — passes the key without copying."
+            },
+            {
+              "term": "out",
+              "longForm": "out parameter",
+              "plainDefinition": "An alias where the caller may pass an unassigned variable. The callee must assign a value before returning.",
+              "example": "`bool TryParse(string s, out int result)` — classic pattern."
+            },
+            {
+              "term": "defensive copy",
+              "longForm": "defensive copy",
+              "plainDefinition": "When the compiler copies a mutable struct even through `in`, to prevent mutation via instance methods.",
+              "example": "Passing a mutable struct as `in` may still copy — use `readonly struct` to avoid this."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Interview traps",
-      "prose": "ref requires the caller to pass a definitely assigned variable and to write ref at the call site. You cannot pass a property as ref or out because a property is not a storage location. C# 14 lets lambda parameters take ref/in/out modifiers without repeating types. Extension members that wrap these tricks wait for module 10."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "`out` powers the `TryParse` pattern — return a bool for success and write the parsed value through an `out` parameter. `in` avoids copying large readonly structs on hot paths like cache-key lookups. `ref` lets APIs write back to a caller's local without wrapping a one-field class. These are language features, not C++ references with destructor rules."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Do not cargo-cult ref on classes",
+          "body": "Class parameters already pass a reference. Adding `ref` to a class parameter does not make it faster — it only forces the caller to write `ref` at the call site."
+        }
+      ]
+    },
+    {
+      "heading": "How each modifier works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing the right modifier",
+          "items": [
+            {
+              "title": "Start with ordinary parameters",
+              "body": "Default passing is correct for most APIs. Only reach for modifiers when you have a specific reason."
+            },
+            {
+              "title": "Use `out` for Try-style results",
+              "body": "The caller may pass an unassigned local. The callee must assign before return. Good APIs assign a default on failure."
+            },
+            {
+              "title": "Use `in` for large readonly structs",
+              "body": "Avoids copying on every call. Pair with `readonly struct` so the compiler does not make a defensive copy."
+            },
+            {
+              "title": "Use `ref` for two-way aliasing",
+              "body": "Caller must pass a definitely assigned variable and write `ref` at the call site. Properties cannot be passed as `ref` or `out`."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Parameter modifier comparison",
+            "source": "flowchart LR\n  O[Ordinary] -->|copy value or ref| C[Callee local]\n  R[ref] -->|alias| V[Caller variable]\n  I[in] -->|readonly alias| V\n  U[out] -->|must assign| V"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "out for TryParse, in for a readonly key",
+            "code": "readonly struct CacheKey(string tenant, string attemptId)\n{\n    public string Tenant { get; } = tenant;\n    public string AttemptId { get; } = attemptId;\n}\n\nstatic bool TryParseAttempt(string raw, out int attemptNo)\n    => int.TryParse(raw, out attemptNo);\n\nstatic bool Exists(in CacheKey key, IReadOnlyDictionary<CacheKey, byte> map)\n    => map.ContainsKey(key);",
+            "explanation": "Line 1: `readonly struct` pairs with `in`. Line 8: `out` lets the caller pass an unassigned `attemptNo`. Line 11: `in CacheKey` avoids copying the struct into `Exists`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ref for swapping two locals",
+            "code": "static void Swap(ref int a, ref int b)\n{\n    int temp = a;\n    a = b;\n    b = temp;\n}\n\nint x = 1, y = 2;\nSwap(ref x, ref y);\n// x is 2, y is 1",
+            "explanation": "Line 1: `ref` parameters alias the caller's variables. Line 8: the call site must write `ref` for each argument. After the call, `x` and `y` are swapped in the caller's scope."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Defensive copy with mutable struct",
+            "code": "struct MutablePoint { public int X; public void Flip() => X = -X; }\n\nstatic int ReadX(in MutablePoint p) => p.X;\n// Compiler may copy p defensively because Flip() could mutate\n\nreadonly struct SafePoint(int x)\n{\n    public int X { get; } = x;\n}\n\nstatic int ReadSafe(in SafePoint p) => p.X;\n// No defensive copy — readonly struct",
+            "explanation": "Line 1: a mutable struct with an instance method. Line 4: `in` may still copy because `Flip()` could mutate through `this`. Line 7: `readonly struct` tells the compiler no mutation is possible."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Aliasing in C# vs JS/TS",
+          "headers": ["Pattern", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Multiple return values", "`out` parameters or tuples", "Return an object `{ ok, value }` or a tuple array"],
+            ["Avoiding copies", "`in` or `ref readonly` for structs", "No value types — objects are always references"],
+            ["Try-parse", "`bool TryParse(string, out int)`", "Manual check: `const n = Number(s); if (isNaN(n))`"],
+            ["Pass by reference", "`ref` keyword at call site", "Not available — objects alias automatically"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "ref on reference types for performance",
+          "body": "Classes are already passed by reference. Adding `ref` to a class parameter does not reduce allocations or improve speed."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Properties are not ref locations",
+          "body": "You cannot pass `obj.Count` as `ref` or `out` because a property is not a storage location — it is a method call disguised as field access."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "ref aliases storage; in is readonly alias; out must be assigned by the callee.",
-    "in plus a mutable struct can still copy; readonly struct is the matching design.",
-    "Properties are not ref-capable locations."
+    "`ref` aliases storage both ways; `in` is a readonly alias; `out` must be assigned by the callee.",
+    "`in` plus a mutable struct can still copy defensively — `readonly struct` is the matching design.",
+    "Properties are not `ref`-capable locations."
   ],
   "commonPitfalls": [
-    "Using ref on reference types as a cargo-cult performance habit.",
-    "Forgetting that TryParse-style out parameters leave the value undefined on failure unless the callee assigned it — good APIs assign default on failure."
+    "Using `ref` on reference types as a cargo-cult performance habit.",
+    "Forgetting that TryParse-style `out` parameters leave the value undefined on failure unless the callee assigned it."
   ],
   "relatedTopicIds": [
     "csharp-04-methods-and-parameters",
@@ -46,13 +180,13 @@
     {
       "language": "javascript",
       "concept": "no ref parameters",
-      "note": "JS always passes object references and copies primitives. There is no out or in. Multiple outputs use objects or arrays.",
+      "note": "JavaScript always passes object references and copies primitives. There is no `out` or `in`. Multiple outputs use objects or arrays.",
       "futureTopicSlug": "javascript/functions/passing"
     },
     {
       "language": "typescript",
       "concept": "tuple returns versus out",
-      "note": "TS/JS prefer returning a tuple or Result object. C# still uses out in the BCL (TryParse) and tuples when you want two values without aliasing.",
+      "note": "TypeScript and JavaScript prefer returning a tuple or Result object. C# still uses `out` in the Base Class Library (BCL) like `TryParse`, and tuples when you want two values without aliasing.",
       "futureTopicSlug": "typescript/functions/tuples"
     }
   ],

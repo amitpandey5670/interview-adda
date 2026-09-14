@@ -1,20 +1,150 @@
 {
   "id": "csharp-03-value-vs-reference",
   "slug": "value-vs-reference",
-  "title": "Value types vs reference types",
+  "title": "Value types vs reference types (copy vs alias)",
   "moduleId": "csharp-03-type-system",
   "order": 3,
-  "hook": "Assignment copies a value or copies a reference. That is the language contract. Where bits live (stack vs heap) is an implementation detail the CLR is free to optimize — GC mechanics are module 14.",
+  "hook": "When you assign a variable in C#, you either copy the data itself or copy a pointer to an object. That copy-versus-alias rule is the heart of value types and reference types.",
   "sections": [
     {
-      "heading": "Copy the payload or copy the pointer",
-      "prose": "Value types (`struct`, enum, built-in numerics, `bool`, `decimal`) store their data in the variable. Assigning `point2 = point1` copies fields. Reference types (`class`, arrays, `string`, delegates) store a reference. Assigning `list2 = list1` makes two variables alias one object; `list2.Add` is visible through `list1`. Boxing copies a value type into an `object` wrapper on the heap — an allocation you pay for when you stuff an `int` into `ArrayList` or a non-generic interface. Unboxing extracts it. Language view: boxing is a conversion to `object`/`ValueType`/interface. Runtime view (generations, LOH, stacks of frames) waits for module 14. `string` is a reference type with value-like equality. Passing a struct into a method copies it unless you use `ref` (members module).",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Independent structs vs aliased lists",
-          "code": "var a = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero);\nvar b = a; // copy\n\nvar list1 = new List<int> { 199, 999 };\nvar list2 = list1; // same object\nlist2.Add(1);\n// list1.Count is 3\n\nobject boxed = 199; // boxing int → object",
-          "explanation": "Wrong interview line: “structs always live on the stack.” Right: “assignment copies the value; the CLR may store that value on the stack, in a register, or boxed on the heap.”"
+          "type": "prose",
+          "text": "C# splits types into two families. **Value types** (`struct`, `enum`, and built-in numerics like `int`, `bool`, `decimal`) store their data directly in the variable. Assigning `b = a` copies every field. **Reference types** (`class`, arrays, `string`, delegates) store a reference (think: a pointer) to an object on the heap. Assigning `list2 = list1` makes two variables point at the same object — changes through one are visible through the other."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "value type",
+              "longForm": "value type",
+              "plainDefinition": "A type whose assignment copies the actual data. Built-in numerics, `bool`, `decimal`, `struct`, and `enum` are value types.",
+              "example": "`var b = a;` where `a` is a `DateTimeOffset` — `b` gets its own copy."
+            },
+            {
+              "term": "reference type",
+              "longForm": "reference type",
+              "plainDefinition": "A type whose assignment copies a reference to a shared object, not the object's contents.",
+              "example": "`var list2 = list1;` — both variables see the same `List<int>`."
+            },
+            {
+              "term": "boxing",
+              "longForm": "boxing",
+              "plainDefinition": "Wrapping a value type inside an `object` (or interface) reference on the heap. It allocates memory and copies the value.",
+              "example": "`object boxed = 199;` boxes the `int` 199 into a heap object."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Confusing copy and alias causes subtle bugs. You mutate a struct from a list indexer and wonder why the list did not change — you mutated a **copy**, not the element in the list. You pass a `List<T>` to two methods and one clears it — the other sees an empty list because they share the same object. **Boxing** in hot loops (storing `int` in non-generic collections) creates garbage the Garbage Collector (GC) must clean up — details in module 14."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview framing",
+          "body": "Say: \"value assignment copies data; reference assignment aliases an object.\" Do not claim \"structs always live on the stack\" — the CLR may store a value in a register, on the stack, or boxed on the heap. Stack versus heap is an implementation detail covered in the memory module."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "What happens on assignment",
+          "items": [
+            {
+              "title": "Value type assignment",
+              "body": "The runtime copies all fields byte-for-byte. `a` and `b` are independent — changing `b` does not affect `a`."
+            },
+            {
+              "title": "Reference type assignment",
+              "body": "Only the reference (address) is copied. Both variables point to one object. `list2.Add(1)` changes what `list1` sees."
+            },
+            {
+              "title": "Boxing a value",
+              "body": "Assigning a value type to `object` or a non-generic interface wraps it in a heap object. This is an allocation you pay for."
+            },
+            {
+              "title": "Unboxing",
+              "body": "Casting the boxed object back to the original value type copies the value out. A wrong cast throws `InvalidCastException`."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Copy vs alias on assignment",
+            "source": "flowchart LR\n  subgraph value [\"Value type: DateTimeOffset\"]\n    A1[a] -->|\"copy fields\"| B1[b]\n  end\n  subgraph reference [\"Reference type: List\"]\n    L1[list1] --> O[\"one List object\"]\n    L2[list2] --> O\n  end\n  subgraph boxing [\"Boxing\"]\n    I[\"int 199\"] -->|wrap| BOX[\"object on heap\"]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Independent structs vs aliased lists",
+            "code": "var a = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero);\nvar b = a; // copy — b is independent\n\nvar list1 = new List<int> { 199, 999 };\nvar list2 = list1; // same object\nlist2.Add(1);\n// list1.Count is now 3",
+            "explanation": "Lines 1–2: `DateTimeOffset` is a struct (value type). `b = a` copies all fields. Lines 4–7: `List<int>` is a class (reference type). `list2 = list1` aliases the same list; adding through `list2` is visible on `list1`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Boxing and unboxing",
+            "code": "int score = 199;\nobject boxed = score;       // boxing — heap allocation\n\nint unboxed = (int)boxed;   // unboxing — copies value out\n\n// Wrong cast throws:\n// long wrong = (long)boxed;",
+            "explanation": "Line 2: assigning `int` to `object` boxes the value on the heap. Line 4: unboxing with `(int)` extracts the `int`. Line 7: unboxing to the wrong type throws — you must match the original boxed type."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Struct copy trap in a list",
+            "code": "var points = new List<Point> { new(1, 2) };\n\nvar p = points[0];   // copy of the struct\np.X = 99;            // mutates the copy only\n// points[0].X is still 1\n\npoints[0] = points[0] with { X = 99 }; // correct update",
+            "explanation": "Line 3: the indexer returns a **copy** of the struct, not a reference to the slot. Line 4: changing `p.X` does not update the list. Line 7: assign back with `with` (or write `points[0] = p` after mutation) to replace the element."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Copy vs alias",
+          "headers": ["Concept", "C#", "JavaScript"],
+          "rows": [
+            ["Primitives copy", "`int`, `bool`, `decimal` (value types)", "`number`, `boolean`, `bigint`, `string` (primitives)"],
+            ["Objects alias", "`class`, arrays, `List<T>`", "Plain objects, arrays"],
+            ["User-defined value type", "`struct` — explicit in language", "No struct keyword — use objects"],
+            ["Equality", "Value types: field-by-field (or overridden); `string`: content", "Primitives: by value; objects: by reference"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Mutating a struct from a list indexer and expecting the list to change — you mutated a copy. Boxing value types in hot loops (non-generic collections, `object` keys) then blaming GC without measuring. Thinking `string` is a value type because `==` compares content — it is a reference type with value-like equality."
         }
       ]
     }
@@ -22,7 +152,7 @@
   "interviewTakeaways": [
     "Value assignment copies data; reference assignment aliases an object.",
     "Boxing is wrapping a value type as a reference (`object` or interface).",
-    "Do not equate value type with “stack” in a senior interview; point at module 14 for GC."
+    "Do not equate value type with \"stack\" in a senior interview; point at module 14 for GC."
   ],
   "commonPitfalls": [
     "Mutating a struct you got from a list indexer and expecting the list to change — you mutated a copy.",
@@ -40,7 +170,7 @@
     {
       "language": "javascript",
       "concept": "Primitives vs objects",
-      "note": "JS primitives copy; objects alias. C# makes the same split explicit as value vs reference types, including user-defined structs.",
+      "note": "JavaScript primitives copy on assignment; objects alias. C# makes the same split explicit with value types (`struct`) and reference types (`class`).",
       "futureTopicSlug": "javascript/types/primitives-vs-objects"
     }
   ],

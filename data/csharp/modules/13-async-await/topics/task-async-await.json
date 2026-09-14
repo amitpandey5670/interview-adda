@@ -1,26 +1,184 @@
 {
   "id": "csharp-13-task-async-await",
   "slug": "task-async-await",
-  "title": "Task, async, await, and ValueTask",
+  "title": "Task, async, await, and ValueTask (the Task-based Asynchronous Pattern)",
   "moduleId": "csharp-13-async-await",
   "order": 2,
   "hook": "async is not a runtime daemon. The C# compiler rewrites your method into a state machine that parks on await and resumes when a Task or ValueTask completes.",
   "sections": [
     {
-      "heading": "The compiler’s state machine",
-      "prose": "An async method returns quickly with a Task (or ValueTask) that represents the rest of the method. At each await, if the awaited awaitable is already completed, execution continues synchronously — a cache hit path. If not, the state machine captures locals, hooks a continuation, and returns. When the I/O completes, the continuation runs the next state. That is why you can write linear code for Redis then HTTP then a RabbitMQ publish. Locals that look like stack variables may live on a heap-allocated state-machine box for the duration of the awaits. Naming methods with the Async suffix is convention, not a compiler rule; the compiler only cares about the async modifier and the return type: void, Task, Task<T>, ValueTask, or ValueTask<T>.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Hot cache path with ValueTask",
-          "code": "public sealed class AttemptCache(IMemoryCache memory, IConnectionMultiplexer redis)\n{\n    public async ValueTask<string?> GetPayloadAsync(string attemptId, CancellationToken cancellationToken)\n    {\n        if (memory.TryGetValue(attemptId, out string? cached))\n        {\n            return cached;\n        }\n\n        var db = redis.GetDatabase();\n        var payload = await db.StringGetAsync(attemptId);\n        cancellationToken.ThrowIfCancellationRequested();\n        if (payload.IsNullOrEmpty)\n        {\n            return null;\n        }\n\n        memory.Set(attemptId, payload.ToString(), TimeSpan.FromSeconds(30));\n        return payload.ToString();\n    }\n}",
-          "explanation": "A memory hit completes without allocating a Task. A Redis miss still awaits. Callers must await the ValueTask at most once."
+          "type": "prose",
+          "text": "The Task-based Asynchronous Pattern (TAP) is C#'s model for async I/O. An async method returns quickly with a Task (or ValueTask) representing the rest of the work. At each await, if the awaited operation is already complete, execution continues synchronously. If not, the compiler-generated state machine captures locals, hooks a continuation, and returns. When I/O completes, the continuation runs the next state. This is why you can write linear code for Redis, then HTTP, then a message publish."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TAP",
+              "shortForm": "TAP",
+              "longForm": "Task-based Asynchronous Pattern",
+              "plainDefinition": "The .NET convention: async methods return Task or ValueTask; callers await them.",
+              "example": "public async Task<string> GetDataAsync() { ... }"
+            },
+            {
+              "term": "Task",
+              "plainDefinition": "A reference type representing an asynchronous operation. Can be incomplete, completed, faulted, or canceled.",
+              "example": "await httpClient.GetAsync(url) returns Task<HttpResponseMessage>.",
+              "longForm": "Task"
+            },
+            {
+              "term": "ValueTask",
+              "plainDefinition": "A struct awaitable that can hold a result, a Task, or an IValueTaskSource. Avoids Task allocation on sync-complete paths.",
+              "example": "return cachedValue; // completes synchronously, no Task heap object.",
+              "longForm": "ValueTask"
+            },
+            {
+              "term": "State machine",
+              "plainDefinition": "Compiler-generated code that stores locals and resumes at the correct point after each await.",
+              "example": "Locals that look like stack variables may live on a heap box during awaits.",
+              "longForm": "State machine"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Task versus ValueTask in .NET 10",
-      "prose": "Task is a reference type with a rich API: WhenAll, WhenAny, ContinueWith (prefer await), and exception aggregation. It is the default return type for public APIs. ValueTask is a struct that can hold a result, a Task, or an IValueTaskSource used by pooled pipes and sockets. Use ValueTask when a profiler shows Task allocations on a path that usually finishes synchronously. Never store a ValueTask to await it later twice; the underlying source may have been reused. If you need to pass the operation to WhenAll, call .AsTask() once. async Task still allocates a Task on every slow path; that is normal and cheaper than blocking a thread."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Understanding the compiler transformation explains why async methods can allocate, why ValueTask exists, and why you should not use async on methods that never await. Task is the default return type with a rich API: WhenAll, WhenAny, and exception aggregation. ValueTask is an allocation optimization for paths that usually finish synchronously — like a memory cache hit. Never await the same ValueTask twice; the underlying source may have been reused."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "ValueTask rule of thumb",
+          "body": "Use Task for public APIs unless a profiler shows Task allocations on a path that usually completes synchronously. Await a ValueTask at most once, then forget it."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Compiler state machine lifecycle",
+          "items": [
+            {
+              "title": "Call the async method",
+              "body": "The method starts executing synchronously until the first await."
+            },
+            {
+              "title": "Hit an await",
+              "body": "If the awaited Task is complete, continue inline. If not, capture state and return the Task to the caller."
+            },
+            {
+              "title": "I/O completes",
+              "body": "A continuation is scheduled on the thread pool (or SynchronizationContext)."
+            },
+            {
+              "title": "Resume",
+              "body": "The state machine restores locals and continues from the next statement after await."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "async method state machine",
+            "source": "stateDiagram-v2\n  [*] --> Running\n  Running --> AwaitCheck: hit await\n  AwaitCheck --> Running: Task already complete\n  AwaitCheck --> Suspended: Task incomplete\n  Suspended --> Running: continuation fires\n  Running --> [*]: method returns"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Hot cache path with ValueTask",
+            "code": "public sealed class AttemptCache(IMemoryCache memory, IConnectionMultiplexer redis)\n{\n    public async ValueTask<string?> GetPayloadAsync(\n        string attemptId, CancellationToken cancellationToken)\n    {\n        if (memory.TryGetValue(attemptId, out string? cached))\n        {\n            return cached; // sync path — no Task allocation\n        }\n\n        var db = redis.GetDatabase();\n        var payload = await db.StringGetAsync(attemptId);\n        cancellationToken.ThrowIfCancellationRequested();\n        if (payload.IsNullOrEmpty) return null;\n\n        memory.Set(attemptId, payload.ToString(), TimeSpan.FromSeconds(30));\n        return payload.ToString();\n    }\n}",
+            "explanation": "A memory hit completes without allocating a Task. A Redis miss still awaits. Callers must await the ValueTask at most once."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Valid async return types",
+            "code": "public async Task DoWorkAsync() { await Task.Delay(100); }\npublic async Task<int> GetCountAsync() { return 42; }\npublic async ValueTask<bool> TryGetAsync() { return true; }\n\n// async void — ONLY for event handlers (see async-exceptions topic)\n// private async void OnButtonClick(object s, EventArgs e) { ... }",
+            "explanation": "The compiler cares about the async modifier and return type. The Async suffix on method names is convention, not a compiler rule."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Task.Run vs async — different purposes",
+            "code": "// Task.Run: queue CPU-bound work to the thread pool\nvar hash = await Task.Run(() => ComputeHash(largeFile));\n\n// async/await: compose I/O waits without blocking\nvar data = await httpClient.GetStringAsync(url);\nvar parsed = await ParseAsync(data);\n\n// Do NOT: Task.Run to wrap blocking I/O and call it async",
+            "explanation": "Task.Run offloads CPU work to another pool thread. async composes I/O waits. Confusing them is a common interview trap."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "async functions in C# vs JavaScript",
+          "headers": [
+            "Aspect",
+            "C# async/await",
+            "JavaScript async/await"
+          ],
+          "rows": [
+            [
+              "Return type",
+              "Task, Task<T>, ValueTask, ValueTask<T>",
+              "Always wraps in a Promise"
+            ],
+            [
+              "Sync-complete optimization",
+              "ValueTask skips Task allocation",
+              "Every async function allocates a Promise"
+            ],
+            [
+              "State machine",
+              "Compiler-generated struct/class",
+              "Compiler-generated generator"
+            ],
+            [
+              "Thread hopping",
+              "Continuations may run on different pool threads",
+              "Microtasks always on the same JS thread"
+            ],
+            [
+              "Naming convention",
+              "Async suffix (convention only)",
+              "No suffix convention"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Awaiting the same ValueTask instance twice after a cache miss that used IValueTaskSource. Using async on a method that never awaits — the compiler warns, and you still pay a state machine. Confusing Task.Run (queue CPU work) with async (compose waits). Returning ValueTask from a public API without measuring whether the allocation matters."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [

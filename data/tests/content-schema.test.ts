@@ -2,7 +2,18 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { ContentIndex, InterviewPage, Mindmap, ModuleDoc, OverviewPage, QuickOverview, Topic } from '../contracts/content.models.ts';
+import {
+  countTopicSnippets,
+  topicHasDiagram,
+  topicHasGlossary,
+  type ContentIndex,
+  type InterviewPage,
+  type Mindmap,
+  type ModuleDoc,
+  type OverviewPage,
+  type QuickOverview,
+  type Topic,
+} from '../contracts/content.models.ts';
 
 const require = createRequire(`${process.cwd()}/data/tests/content-schema.test.ts`);
 const Ajv2020 = require('ajv/dist/2020.js') as new (options?: object) => {
@@ -43,8 +54,8 @@ function listModuleFolders(): string[] {
     .sort();
 }
 
-function snippetCount(topic: Topic): number {
-  return topic.sections.reduce((total, section) => total + (section.snippets?.length ?? 0), 0);
+function isUpgradedMindmap(mindmap: Mindmap): boolean {
+  return Boolean(mindmap.overviewDiagram && (mindmap.conceptCards?.length ?? 0) >= 4);
 }
 
 describe('C# content schemas', () => {
@@ -99,7 +110,7 @@ describe('C# content schemas', () => {
     }
   });
 
-  it('enforces unique ids, topic snippets, official sources, and relatedTopicIds', () => {
+  it('enforces ids, sources, related links, and upgraded-module depth', () => {
     const topics: Topic[] = [];
     const moduleIds = new Set<string>();
 
@@ -115,16 +126,30 @@ describe('C# content schemas', () => {
       expect(quick.moduleId).toBe(moduleDoc.id);
       expect(interview.moduleId).toBe(moduleDoc.id);
 
+      if (isUpgradedMindmap(mindmap)) {
+        expect(mindmap.intro, `${folder} mindmap intro`).toBeTruthy();
+        expect(mindmap.revisionDiagram, `${folder} revision diagram`).toBeTruthy();
+      }
+
       const topicFiles = readdirSync(path.join(folder, 'topics')).filter((name) => name.endsWith('.json'));
       const slugs = new Set(moduleDoc.topics.map((item) => item.slug));
       expect(topicFiles.length).toBe(moduleDoc.topics.length);
+
+      const upgradedModule = isUpgradedMindmap(mindmap);
 
       for (const file of topicFiles) {
         const topic = loadJson(path.join(folder, 'topics', file)) as Topic;
         expect(topic.moduleId).toBe(moduleDoc.id);
         expect(slugs.has(topic.slug)).toBe(true);
-        expect(snippetCount(topic)).toBeGreaterThanOrEqual(1);
+        expect(countTopicSnippets(topic)).toBeGreaterThanOrEqual(upgradedModule ? 3 : 1);
         expect(topic.officialSources.length).toBeGreaterThanOrEqual(1);
+
+        if (upgradedModule) {
+          expect(topic.sections.length, `${topic.id} sections`).toBeGreaterThanOrEqual(4);
+          expect(topicHasGlossary(topic), `${topic.id} glossary`).toBe(true);
+          expect(topicHasDiagram(topic), `${topic.id} diagram`).toBe(true);
+        }
+
         topics.push(topic);
       }
     }

@@ -1,32 +1,181 @@
 {
   "id": "csharp-12-ienumerable-vs-iqueryable",
   "slug": "ienumerable-vs-iqueryable",
-  "title": "IEnumerable versus IQueryable",
+  "title": "IEnumerable versus IQueryable (delegates vs expression trees)",
   "moduleId": "csharp-12-linq",
   "order": 4,
-  "hook": "The lambda looks the same. On IEnumerable it is a Func the JIT runs. On IQueryable it is an expression tree a provider must understand — or throw.",
+  "hook": "The lambda looks the same in both cases. On IEnumerable it is a Func delegate the Just-In-Time (JIT) compiler runs in your process. On IQueryable it is an expression tree a provider must translate — or throw.",
   "sections": [
     {
-      "heading": "Delegates versus expression trees",
-      "prose": "Enumerable.Where takes Func<T,bool>. Queryable.Where takes Expression<Func<T,bool>>. The C# compiler picks the overload from the source type. An expression tree is an immutable data structure of nodes (calls, binaries, constants). A provider walks it. Microsoft documents hard limits: no statement lambdas, no await, no local functions, no assignment, incomplete support for newer language surface. That is all you need in this language track. You do not need DbContext, tracking, or Include.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Same lambda, two compile-time types",
-          "code": "IEnumerable<Attempt> inMemory = attempts;\nIQueryable<Attempt> remote = /* some IQueryProvider */; // interview-level: not EF setup\n\nvar local = inMemory.Where(a => a.Score >= 50);  // Func, runs here\nvar tree = remote.Where(a => a.Score >= 50);     // Expression, maybe SQL later\n\nExpression<Func<Attempt, bool>> explicitTree = a => a.Score >= 50;",
-          "explanation": "Writing the lambda as Expression<...> forces a tree even without IQueryable. You can Compile() it back to a Func for in-process use."
+          "type": "prose",
+          "text": "IEnumerable<T> and IQueryable<T> both let you write LINQ queries, but they compile lambdas differently. Enumerable.Where takes Func<T, bool> — a compiled delegate that runs in your process. Queryable.Where takes Expression<Func<T, bool>> — an immutable tree of nodes (method calls, constants, binary operations) that a provider walks and may rewrite to SQL, a search DSL, or another remote language. The C# compiler picks the overload from the source type. An expression tree is not executable code; it is data describing what you want."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IEnumerable<T>",
+              "plainDefinition": "A sequence you enumerate in process. LINQ operators take Func delegates and run locally.",
+              "example": "List<Attempt>.Where(a => a.Score > 50) — runs in memory.",
+              "longForm": "IEnumerable<T>"
+            },
+            {
+              "term": "IQueryable<T>",
+              "plainDefinition": "A queryable sequence backed by an IQueryProvider. LINQ operators build expression trees the provider may translate.",
+              "example": "dbContext.Attempts.Where(a => a.Score > 50) — may become SQL.",
+              "longForm": "IQueryable<T>"
+            },
+            {
+              "term": "Expression tree",
+              "plainDefinition": "An immutable data structure representing code as a tree of nodes, not compiled IL.",
+              "example": "Expression<Func<Attempt, bool>> tree = a => a.Score >= 50;",
+              "longForm": "Expression tree"
+            },
+            {
+              "term": "IQueryProvider",
+              "plainDefinition": "The engine that executes or translates an IQueryable expression tree.",
+              "example": "Entity Framework Core's provider translates trees to SQL.",
+              "longForm": "IQueryProvider"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "AsQueryable is not a database, ToList is a wall",
-      "prose": "list.AsQueryable() wraps an in-memory sequence. Operators still execute locally after the tree is compiled. The method exists so APIs can accept IQueryable uniformly. Calling ToList (or AsEnumerable) in the middle of a remote chain is the wall: everything after runs as LINQ to Objects on the pulled data. That is the interview answer for “why did this filter not hit the index” without teaching EF. Custom instance methods in a Where are fine on IEnumerable and usually fatal on a provider.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "AsEnumerable as the in-process boundary",
-          "code": "IQueryable<Attempt> q = remote.Where(a => a.Tenant == tenant);\n\n// From here, lambdas may use any in-memory C# — they will not be translated.\nIEnumerable<Attempt> local = q.AsEnumerable()\n    .Where(a => CustomScoreCurve(a) > 0.8);",
-          "explanation": "AsEnumerable switches overload resolution to Enumerable. The first Where may still run in the provider. CustomScoreCurve never has to be translatable."
+          "type": "prose",
+          "text": "Confusing IEnumerable and IQueryable is how in-memory code \"worked on a list\" and then timed out on a database table. AsQueryable() on a List<T> still executes locally — it is not a database. ToList() or AsEnumerable() in the middle of a remote chain is the wall: everything after runs as LINQ to Objects on pulled data. Custom instance methods in a Where are fine on IEnumerable and usually fatal on a provider. Statement lambdas, await, local functions, and many newer C# features cannot go into expression trees."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview-level scope",
+          "body": "Know the interface split and the tree limits. You do not need Entity Framework Core mapping details in this language track — just understand that a provider translates a subset of C#."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Two compilation paths",
+          "items": [
+            {
+              "title": "Write the same lambda",
+              "body": "a => a.Score >= 50 looks identical in both contexts."
+            },
+            {
+              "title": "Compiler picks the overload",
+              "body": "IEnumerable source → Func delegate. IQueryable source → Expression<Func<...>> tree."
+            },
+            {
+              "title": "IEnumerable executes locally",
+              "body": "The JIT compiles the Func and runs it for each element in the process."
+            },
+            {
+              "title": "IQueryable defers to the provider",
+              "body": "The provider walks the expression tree and may translate it to SQL or throw if it cannot."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IEnumerable vs IQueryable execution",
+            "source": "flowchart TD\n  L[Lambda: a => a.Score >= 50] --> T{Source type?}\n  T -->|IEnumerable| F[Func delegate]\n  F --> R[Run in process\\nLINQ to Objects]\n  T -->|IQueryable| E[Expression tree]\n  E --> P[IQueryProvider]\n  P -->|Can translate| S[SQL / remote DSL]\n  P -->|Cannot translate| X[Throw at runtime]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same lambda, two compile-time types",
+            "code": "IEnumerable<Attempt> inMemory = attempts;\nIQueryable<Attempt> remote = attempts.AsQueryable();\n\nvar local = inMemory.Where(a => a.Score >= 50);  // Func — runs here\nvar tree  = remote.Where(a => a.Score >= 50);    // Expression — provider decides\n\n// Force a tree even without IQueryable:\nExpression<Func<Attempt, bool>> explicitTree = a => a.Score >= 50;\nFunc<Attempt, bool> compiled = explicitTree.Compile(); // back to in-process",
+            "explanation": "AsQueryable on a List still executes locally after compiling the tree. Writing Expression<Func<...>> forces a tree you can inspect or Compile() back to a Func."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "AsEnumerable as the in-process boundary",
+            "code": "IQueryable<Attempt> q = remote.Where(a => a.Tenant == tenant);\n\n// From here, lambdas may use any in-memory C# — they will not be translated.\nIEnumerable<Attempt> local = q.AsEnumerable()\n    .Where(a => CustomScoreCurve(a) > 0.8);\n\nstatic double CustomScoreCurve(Attempt a) => a.Score / 100.0 * 1.2;",
+            "explanation": "AsEnumerable switches overload resolution to Enumerable. The first Where may still run in the provider. CustomScoreCurve never has to be translatable."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ToList is a materialization wall",
+            "code": "// Remote chain — provider may translate both Where clauses\nvar remoteQuery = dbSet\n    .Where(a => a.Tenant == tenant)\n    .Where(a => a.Score >= 50)\n    .ToList(); // wall: pulls rows into memory\n\n// From here, full C# is available — but data is already in RAM\nvar enriched = remoteQuery.Where(a => a.Status.Equals(\"pass\", StringComparison.Ordinal));",
+            "explanation": "ToList executes the remote query and stores results. Everything after runs as LINQ to Objects on the in-memory list."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Expression trees vs JavaScript functions",
+          "headers": [
+            "Aspect",
+            "C# IQueryable",
+            "JavaScript"
+          ],
+          "rows": [
+            [
+              "Lambda representation",
+              "Expression tree (inspectable data)",
+              "Plain function — no built-in AST"
+            ],
+            [
+              "Remote translation",
+              "Provider walks the tree to SQL",
+              "ORMs parse strings or use a DSL"
+            ],
+            [
+              "In-memory fallback",
+              "AsEnumerable() / ToList()",
+              "Always in-memory unless using an ORM"
+            ],
+            [
+              "Language feature in Where",
+              "Limited to translatable subset",
+              "Any JavaScript you can write"
+            ],
+            [
+              "Unique to C#",
+              "Expression<T> in the language",
+              "No direct equivalent"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Believing AsQueryable() sends a List to SQL. Putting a statement lambda or local function in a provider Where. Turning this topic into an Entity Framework Core lecture — out of scope for this track. Forgetting that ToList in the middle of a remote chain pulls all matching rows into memory."
         }
       ]
     }

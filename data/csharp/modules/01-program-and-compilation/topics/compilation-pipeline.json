@@ -1,26 +1,155 @@
 {
   "id": "csharp-01-compilation-pipeline",
   "slug": "compilation-pipeline",
-  "title": "Compilation pipeline: source, IL, JIT, AOT",
+  "title": "How C# code becomes running programs (source, IL, JIT, AOT)",
   "moduleId": "csharp-01-program-and-compilation",
   "order": 2,
-  "hook": "A C# file is not executed as text. Roslyn emits IL into an assembly; the CLR JIT-compiles methods, or Native AOT compiles ahead of time. That is the opposite of `node app.mjs`.",
+  "hook": "A C# file is not executed as plain text. The Roslyn compiler turns it into Intermediate Language (IL) inside an assembly, and the Common Language Runtime (CLR) compiles that to machine code when your app runs — or ahead of time if you choose Native Ahead-of-Time (AOT).",
   "sections": [
     {
-      "heading": "Source → IL → machine code",
-      "prose": "You write `.cs` files. The C# compiler (Roslyn) produces Intermediate Language (IL) plus metadata, packaged as an assembly (`.dll`, sometimes an `.exe` shim). At run time the CLR’s JIT turns IL into native code per method, applying tiered compilation. Native AOT (`PublishAot`) compiles to a native binary before you deploy — useful for cold-start sensitive Lambdas, with a closed-world trim. JavaScript modules (`import`/`export`) are a load-time linking story inside one engine; a .NET assembly is a versioned, metadata-rich unit the loader binds. When two workers share a domain model, they share an assembly reference, not an npm package of `.ts` sources.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Same source, two publish modes",
-          "code": "// Worker.cs — compiled to IL in Worker.dll\nConsole.WriteLine(\"consumer up\");\n\n// JIT path:  dotnet publish -c Release\n// AOT path:  <PublishAot>true</PublishAot> then publish\n// File-based apps default PublishAot on publish; disable if you need reflection-heavy code.",
-          "explanation": "Interviewers want the split: compile to IL always (except AOT, which still starts from C# and produces native). JS has no IL assembly with CTS metadata."
+          "type": "prose",
+          "text": "The compilation pipeline is the journey from your .cs source files to code the CPU can execute. Roslyn (the C# compiler) reads your code and emits IL plus rich metadata packaged as an assembly (.dll or .exe). At run time, the CLR's Just-In-Time (JIT) compiler turns each method's IL into native machine instructions. Native AOT is an alternative: it compiles to a standalone native binary before deployment, trading some flexibility for faster startup."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Roslyn",
+              "longForm": "Roslyn C# compiler",
+              "plainDefinition": "The official open-source compiler that turns C# source into IL assemblies.",
+              "example": "dotnet build invokes Roslyn behind the scenes."
+            },
+            {
+              "term": "JIT",
+              "shortForm": "JIT",
+              "longForm": "Just-In-Time compiler",
+              "plainDefinition": "The part of the CLR that compiles IL to machine code at run time, method by method.",
+              "example": "The first call to a method triggers JIT compilation; later calls reuse the native code."
+            },
+            {
+              "term": "AOT",
+              "shortForm": "AOT",
+              "longForm": "Ahead-of-Time compilation",
+              "plainDefinition": "Compiling to native machine code before the app runs, instead of waiting for JIT at startup.",
+              "example": "Setting PublishAot=true produces a native binary with no JIT step at launch."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Assembly versus JS module",
-      "prose": "An ES module is a file graph resolved by the host (Node, browser). A .NET assembly can contain many types, resources, and a strong name. Binding failures look like `FileNotFoundException` or version mismatches, not `ERR_MODULE_NOT_FOUND`. For Redis or RabbitMQ client libraries you consume NuGet packages — assemblies — not `require()` of source. Async I/O on those clients still uses `Task`; that state machine is later (module 13). Here: the unit of deployment is the assembly (or an AOT binary), not a folder of modules."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Understanding the pipeline explains build output, deployment size, cold-start behavior, and why C# is not \"interpreted like a script.\" When two microservices share a domain model, they reference the same assembly — a versioned, metadata-rich unit. JavaScript modules are a file graph resolved by the host; a .NET assembly can hold many types, resources, and version information. Binding failures look like FileNotFoundException, not ERR_MODULE_NOT_FOUND."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When interviewers ask \"is C# compiled or interpreted?\"",
+          "body": "Say compiled twice: Roslyn compiles to IL at build time, and the JIT (or AOT) compiles IL to CPU code. It is never a line-by-line interpreter like an old BASIC shell."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Source to CPU",
+          "items": [
+            {
+              "title": "Write .cs files",
+              "body": "Your C# source lives in the project. Folders are organizational; the compiler reads all included files."
+            },
+            {
+              "title": "Roslyn emits IL + metadata",
+              "body": "The compiler produces an assembly (.dll) containing IL instructions and type metadata the CLR needs."
+            },
+            {
+              "title": "CLR loads the assembly",
+              "body": "At startup, the runtime verifies types, resolves references, and prepares methods."
+            },
+            {
+              "title": "JIT or AOT produces machine code",
+              "body": "Default path: JIT compiles methods on demand with tiered optimization. AOT path: everything is native before launch."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Compilation pipeline",
+            "source": "flowchart LR\n  A[C# source .cs] --> B[Roslyn compiler]\n  B --> C[IL + metadata in assembly]\n  C --> D{Run mode}\n  D -->|Default| E[CLR JIT]\n  D -->|PublishAot| F[Native AOT binary]\n  E --> G[CPU machine code]\n  F --> G"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Simple worker source",
+            "code": "// Worker.cs — compiled to IL inside Worker.dll\nConsole.WriteLine(\"consumer up\");\n\n// Build:  dotnet build -c Release\n// Run:    dotnet Worker.dll",
+            "explanation": "Even a one-liner becomes IL in an assembly. There is no direct \"run the .cs text\" path in a normal SDK project — the compiler always sits in between."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Enable Native AOT publish",
+            "code": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <PublishAot>true</PublishAot>\n  </PropertyGroup>\n</Project>\n\n<!-- dotnet publish -c Release produces a native binary -->",
+            "explanation": "AOT compiles ahead of deployment. Useful for cold-start-sensitive workloads (like short-lived Lambdas), but reflection-heavy libraries may need PublishAot=false."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Inspect build output",
+            "code": "dotnet build -c Release\nls bin/Release/net10.0/\n# Worker.dll  — IL assembly\n# Worker.deps.json — dependency manifest\n# Worker.runtimeconfig.json — runtime settings",
+            "explanation": "dotnet build produces IL assemblies and manifests — not JavaScript. Compare this to tsc emitting .js files with no CLR metadata."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Assemblies vs ES modules",
+          "headers": ["Aspect", ".NET assembly", "JavaScript ES module"],
+          "rows": [
+            ["What it contains", "IL + metadata for many types", "Source or bundled JavaScript for one module graph"],
+            ["Versioning", "Strong names, binding redirects", "package.json semver"],
+            ["Load mechanism", "CLR assembly loader", "Node/bundler module resolver"],
+            ["Typical failure", "FileNotFoundException, version mismatch", "ERR_MODULE_NOT_FOUND"],
+            ["Sharing code", "Project reference or NuGet package", "npm install + import"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Saying C# is \"interpreted\" — it is compiled; JIT is a second compile, not line-by-line interpretation. Confusing C# language version (LangVersion) with Target Framework Moniker (TFM) — LangVersion controls syntax; net10.0 controls which runtime APIs exist. Assuming Native AOT is always on — SDK projects default to JIT unless you enable PublishAot."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -29,7 +158,7 @@
     "AOT trades flexibility (reflection, runtime codegen) for startup and size — know when a consumer needs JIT instead."
   ],
   "commonPitfalls": [
-    "Saying C# is “interpreted.” It is compiled; the JIT is a second compile, not a line-by-line interpreter.",
+    "Saying C# is \"interpreted.\" It is compiled; the JIT is a second compile, not a line-by-line interpreter.",
     "Confusing the C# language version with the TFM. LangVersion is syntax; net10.0 is the runtime surface.",
     "Assuming Native AOT is always on. SDK projects default to JIT unless you enable PublishAot (file-based apps enable it for publish)."
   ],
@@ -44,7 +173,7 @@
     {
       "language": "javascript",
       "concept": "ES modules vs assemblies",
-      "note": "JS modules are source/bytecode files the engine links. .NET assemblies are IL+metadata units versioned and loaded by the CLR.",
+      "note": "JavaScript modules are source or bytecode files the engine links at load time. .NET assemblies are IL plus metadata units versioned and loaded by the CLR.",
       "futureTopicSlug": "javascript/modules/esm"
     }
   ],
@@ -54,8 +183,8 @@
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/program-structure/"
     },
     {
-      "title": "A tour of C#",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/tour-of-csharp/overview"
+      "title": "Native AOT deployment",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/"
     }
   ],
   "animationHint": "flow"

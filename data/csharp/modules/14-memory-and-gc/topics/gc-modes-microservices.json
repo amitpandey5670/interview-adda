@@ -1,37 +1,163 @@
 {
   "id": "csharp-14-gc-modes-microservices",
   "slug": "gc-modes-microservices",
-  "title": "GC modes in microservices",
+  "title": "Garbage collection modes in microservices (server, workstation, containers)",
   "moduleId": "csharp-14-memory-and-gc",
   "order": 6,
-  "hook": "You do not tune the GC by calling Collect in a controller. You pick a flavor (workstation vs server), a latency-versus-throughput stance, and container heap limits — then you measure.",
+  "hook": "ASP.NET Core defaults to server garbage collection for throughput. Containerized APIs need heap hard limits so the process respects cgroup memory. Dynamic Adaptation To Application Sizes (DATAS) shrinks heaps when load is light.",
   "sections": [
     {
-      "heading": "What you can actually change",
-      "prose": "Server GC (DOTNET_gcServer=1, the ASP.NET Core default) creates per-processor heaps and is the right starting point for Kestrel APIs. Workstation GC (gcServer=0) uses less memory and is reasonable for tiny workers or client tools. Background GC is on by default for both in modern .NET and lets gen-2 work overlap mutators more than the old blocking mode. SustainedLowLatency and LowLatency trade pause behavior against heap growth; they are process-wide and easy to misuse. .NET 9 and 10 ship DATAS (dynamic adaptation to application sizes) so server GC can shrink heaps when traffic is quiet — useful when a service scales from 199 to 999 users and back. GCHeapHardLimit and GCHeapHardLimitPercent, plus container memory limits, stop the process from believing it has the whole VM. COMPlus_/DOTNET_ runtime knobs belong in the container spec, not in request code.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Observe, do not Collect",
-          "code": "public sealed class GcSnapshot\n{\n    public static string Describe()\n    {\n        return $\"server={GCSettings.IsServerGC}, latency={GCSettings.LatencyMode}, loh={GCSettings.LargeObjectHeapCompactionMode}, total={GC.GetTotalMemory(false)}\";\n    }\n}",
-          "explanation": "Logging IsServerGC and LatencyMode in diagnostics is fair. GC.Collect(2, GCCollectionMode.Forced, true) on each SQS message is not."
+          "type": "prose",
+          "text": "Workstation garbage collection uses one heap and favors lower latency for desktop apps. Server garbage collection creates one heap per logical processor for higher throughput in services. In containers, set GCHeapHardLimit or GCHeapHardLimitPercent so the runtime does not assume all host RAM is available. DATAS (Dynamic Adaptation To Application Sizes) adjusts heap size based on actual memory pressure in modern .NET."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Server GC",
+              "longForm": "Server garbage collection",
+              "plainDefinition": "Multi-heap GC mode tuned for throughput on multi-core servers.",
+              "example": "Default for ASP.NET Core on Windows and Linux."
+            },
+            {
+              "term": "Workstation GC",
+              "longForm": "Workstation garbage collection",
+              "plainDefinition": "Single-heap GC mode favoring interactive app responsiveness.",
+              "example": "WinForms and WPF defaults."
+            },
+            {
+              "term": "DATAS",
+              "shortForm": "DATAS",
+              "longForm": "Dynamic Adaptation To Application Sizes",
+              "plainDefinition": "Runtime feature that shrinks or grows GC heaps based on application memory usage.",
+              "example": "Light-traffic API uses less RAM until load increases."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What you should not change",
-      "prose": "Do not force full collections after every Redis miss. Do not switch LatencyMode to LowLatency for the duration of a request and forget to restore it. Do not assume Workstation GC ‘has shorter pauses’ under 999 concurrent users — you may simply allocate from one heap and stall. Pin CPU count in Kubernetes so server GC heap count matches the cgroup, or you over-create heaps. Native AOT still uses the same GC family; it does not remove gen 2. When RSS grows, profile allocations and static roots first; GC mode is the second conversation."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Kubernetes pod with a 512 MB limit and no GC heap cap can be OOM-killed while the runtime still thinks it has gigabytes. Calling GC.Collect() in request code rarely helps and often hurts. The knobs that matter: server versus workstation, heap hard limit, latency versus throughput mode, and fixing allocation traps — not manual collection."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Production defaults",
+          "body": "Keep server GC for APIs. Set DOTNET_GCHeapHardLimitPercent or runtimeconfig GCHeapHardLimit in containers. Measure with dotnet-counters before changing GCServer or GCLatencyMode."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Tuning a containerized API",
+          "items": [
+            {
+              "title": "Confirm server GC",
+              "body": "ASP.NET Core enables it by default; verify in runtimeconfig."
+            },
+            {
+              "title": "Set heap hard limit",
+              "body": "Match cgroup memory limit minus native and stack overhead."
+            },
+            {
+              "title": "Enable DATAS if appropriate",
+              "body": "Helps variable-load services use memory efficiently."
+            },
+            {
+              "title": "Monitor gen-2 and pause times",
+              "body": "EventCounters or Application Insights; fix allocations before tweaking GC."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "GC mode decision",
+            "source": "flowchart TD\n  A[.NET microservice] --> B{Workload}\n  B -->|ASP.NET API multi-core| C[Server GC]\n  B -->|Desktop UI| D[Workstation GC]\n  C --> E{Container?}\n  E -->|Yes| F[Heap hard limit + DATAS]\n  E -->|No| G[Monitor pause times]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "runtimeconfig GC settings",
+            "code": "{\n  \"runtimeOptions\": {\n    \"configProperties\": {\n      \"System.GC.Server\": true,\n      \"System.GC.Concurrent\": true,\n      \"System.GC.DynamicAdaptationMode\": 1\n    }\n  }\n}",
+            "explanation": "Server GC and DATAS can be set in runtimeconfig.template.json for deployed services."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Project GC hints",
+            "code": "<PropertyGroup>\n  <ServerGarbageCollection>true</ServerGarbageCollection>\n  <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>\n</PropertyGroup>",
+            "explanation": "MSBuild properties generate runtimeconfig for server and concurrent GC."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Monitor GC counters",
+            "code": "dotnet-counters monitor --process-id <pid> \\\n  System.Runtime[alloc-rate,gen-0-gc-count,gen-2-gc-count,gc-heap-size]",
+            "explanation": "Watch allocation rate and collection counts under load before changing GC modes."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime tuning",
+          "headers": ["Aspect", ".NET GC modes", "Node.js / V8"],
+          "rows": [
+            ["Service tuning", "Server GC, heap limits, DATAS", "NODE_OPTIONS max-old-space-size"],
+            ["Manual collect", "GC.Collect — avoid in app code", "No public GC.Collect equivalent"],
+            ["Container awareness", "GCHeapHardLimitPercent", "Heap limit via --max-old-space-size"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling GC.Collect() in request handlers. Running workstation GC on a 16-core API pod. Omitting heap limits in memory-constrained containers. Changing GC mode without measuring pause times and throughput."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Server GC for multi-core services; workstation for small clients; confirm with GCSettings.IsServerGC.",
-    "Set heap hard limits in containers; pair with cgroup memory.",
-    "DATAS and latency modes are process settings. Collect in production request paths is a red flag."
+    "ASP.NET Core defaults to server GC for throughput.",
+    "Containers need heap hard limits aligned with cgroup memory.",
+    "Fix allocation rate before tweaking GC; never Collect in the hot path."
   ],
   "commonPitfalls": [
-    "Leaving Server GC on a 256 MB sidecar so heaps never shrink (mitigate with DATAS and hard limits).",
-    "Copying old gcConcurrent config folklore without checking current runtime defaults.",
-    "Matching ‘we called GC.Collect after SkiaSharp’ instead of Dispose."
+    "GC.Collect() sprinkled in business code.",
+    "No heap limit in Kubernetes.",
+    "Switching to workstation GC on servers without a reason."
   ],
   "relatedTopicIds": [
     "csharp-14-generations-soh-loh",
@@ -42,15 +168,19 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "No server-GC flag in Node",
-      "note": "Node exposes flags like --max-old-space-size. There is no workstation versus server GC toggle analogous to DOTNET_gcServer. You still set a heap cap in containers.",
-      "futureTopicSlug": "javascript/runtime/gc"
+      "concept": "Heap limits",
+      "note": "Node uses --max-old-space-size. .NET uses GCHeapHardLimitPercent and respects cgroups in modern runtimes.",
+      "futureTopicSlug": "javascript/runtime/memory-limits"
     }
   ],
   "officialSources": [
     {
-      "title": "Runtime configuration options for garbage collection",
-      "url": "https://learn.microsoft.com/en-us/dotnet/core/runtime-config/garbage-collector"
+      "title": "Workstation and server garbage collection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/workstation-server-gc"
+    },
+    {
+      "title": "Garbage collection in container environments",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/container-aware-gc"
     }
   ],
   "scenarioTag": "high-concurrency"

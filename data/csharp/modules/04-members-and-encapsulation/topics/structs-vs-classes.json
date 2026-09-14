@@ -1,39 +1,173 @@
 {
   "id": "csharp-04-structs-vs-classes",
   "slug": "structs-vs-classes",
-  "title": "Structs versus classes",
+  "title": "Structs versus classes (value vs reference types)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 8,
-  "hook": "Structs are value types: assignment copies. Classes are reference types: assignment aliases. Microsoft recommends structs for small data with value semantics — coordinates, colors, cache keys — not for your worker host.",
+  "hook": "Structs are value types — assignment copies the data. Classes are reference types — assignment copies a pointer to the same object. Pick the right one and you avoid subtle bugs and performance traps.",
   "sections": [
     {
-      "heading": "Copy versus identity",
-      "prose": "A struct holds its data in the instance. Passing it, returning it, or assigning it copies the fields (unless you used ref/in). A class instance lives on the heap; many variables can point at it. Structs cannot inherit from another class or struct; they can implement interfaces, and interface dispatch boxes unless you use generics carefully (module 09). Equality of structs is field-wise by default and is slow and wrong for types with unused padding — design it in module 05."
-    },
-    {
-      "heading": "readonly struct and record struct",
-      "prose": "readonly struct forbids mutating instance members; auto-properties are get-only. That enables in parameters without defensive copies. You can mark individual methods readonly on a mutable struct. record struct (module 05) adds value equality and with-expressions while remaining a value type. record without struct is a class. Prefer readonly struct for a Redis key blob of a few strings; prefer class for anything with a lifetime, events, or inheritance.",
-      "snippets": [
+      "heading": "What is the difference?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "readonly struct key versus class client",
-          "code": "readonly struct RedisKey(string db, string id)\n{\n    public string Db { get; } = db;\n    public string Id { get; } = id;\n    public override string ToString() => $\"{Db}:{Id}\";\n}\n\nsealed class RedisGateway\n{\n    public RedisGateway(Uri endpoint) { Endpoint = endpoint; }\n    public Uri Endpoint { get; }\n    public void Ping() { /* I/O */ }\n}",
-          "explanation": "RedisKey is copied and has no identity. RedisGateway is a class because it represents a connection-shaped collaborator with behavior."
+          "type": "prose",
+          "text": "A **struct** is a **value type**: the variable holds the data directly. Assigning or passing a struct copies all its fields. A **class** is a **reference type**: the variable holds a reference to a heap object. Many variables can point at the same class instance. Microsoft recommends structs for small data with value semantics — coordinates, colors, cache keys — not for your worker host."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "struct",
+              "longForm": "structure (value type)",
+              "plainDefinition": "A value type defined with the `struct` keyword. Assignment copies the fields.",
+              "example": "`readonly struct Point(int x, int y)` — copied on assignment."
+            },
+            {
+              "term": "readonly struct",
+              "longForm": "readonly struct",
+              "plainDefinition": "A struct where instance members cannot mutate state. Enables zero-copy `in` parameters.",
+              "example": "`readonly struct CacheKey` — safe to pass with `in`."
+            },
+            {
+              "term": "boxing",
+              "longForm": "boxing",
+              "plainDefinition": "Wrapping a value type inside a reference-type object on the heap. Happens when casting a struct to `object` or an interface.",
+              "example": "`object boxed = 42;` — the `int` is copied to the heap."
+            },
+            {
+              "term": "record struct",
+              "longForm": "record struct",
+              "plainDefinition": "A struct with built-in value equality and `with`-expressions (module 05). Still a value type.",
+              "example": "`record struct Coordinate(double Lat, double Lon);`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Boxing and mutable struct traps",
-      "prose": "Casting a struct to object or to an interface boxes: a heap copy. Mutating a struct stored in an array is in-place; mutating a struct stored in a class field via a property getter mutates a copy and drops the write — the classic bug. Keep structs small (the old 16-byte hint is a heuristic, not a law) and immutable when you can. Deep equality comparison versus record class versus record struct is module 05, not this page."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Choosing struct versus class affects correctness, performance, and API design. A mutable struct in a property getter mutates a copy and drops the write — a classic bug. A large struct copied through many method layers wastes CPU. A readonly struct with `in` parameters avoids both problems on hot paths like cache-key lookups."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Structs cannot inherit from classes",
+          "body": "Structs can implement interfaces but cannot inherit from another class or struct. They implicitly inherit from `System.ValueType`. Use a class when you need inheritance or shared identity."
+        }
+      ]
+    },
+    {
+      "heading": "How copy versus identity works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Assignment behavior",
+          "items": [
+            {
+              "title": "Struct assignment",
+              "body": "Copies all fields. The two variables are independent. Mutating one does not affect the other."
+            },
+            {
+              "title": "Class assignment",
+              "body": "Copies the reference. Both variables point at the same heap object. Mutations are shared."
+            },
+            {
+              "title": "Struct in a method parameter",
+              "body": "Ordinary passing copies the struct. Use `ref` or `in` to alias instead (previous topic)."
+            },
+            {
+              "title": "Struct in an array",
+              "body": "Elements are stored inline. Mutating `array[i].Field` changes the array element directly."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Struct copy vs class alias",
+            "source": "flowchart LR\n  subgraph structCopy [Struct assignment]\n    S1[a.X=1] --> S2[b=a copies fields]\n    S2 --> S3[b.X=2 does not change a]\n  end\n  subgraph classAlias [Class assignment]\n    C1[a.Total=1] --> C2[b=a copies ref]\n    C2 --> C3[b.Total=2 changes a too]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "readonly struct key versus class client",
+            "code": "readonly struct RedisKey(string db, string id)\n{\n    public string Db { get; } = db;\n    public string Id { get; } = id;\n    public override string ToString() => $\"{Db}:{Id}\";\n}\n\nsealed class RedisGateway\n{\n    public RedisGateway(Uri endpoint) => Endpoint = endpoint;\n    public Uri Endpoint { get; }\n    public void Ping() { /* I/O */ }\n}",
+            "explanation": "Line 1: `RedisKey` is a small copied value — no identity. Line 8: `RedisGateway` is a class because it represents a connection-shaped collaborator with behavior and lifetime."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "The mutable struct property trap",
+            "code": "struct MutableBox { public int Value; }\n\nclass Container\n{\n    public MutableBox Box { get; set; }\n}\n\nvar c = new Container { Box = new MutableBox { Value = 1 } };\nc.Box.Value = 99; // compiles but Value is still 1!\n// getter returns a COPY; setter never runs",
+            "explanation": "Line 8: `c.Box.Value = 99` calls the getter (copy), mutates the copy, and discards it. The original `Box` in `Container` is unchanged. This is why mutable structs in properties are dangerous."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Boxing a struct",
+            "code": "int count = 42;\nobject boxed = count;        // boxing — heap allocation\nIComparable comp = count;    // boxing via interface\n\nvar list = new ArrayList { 1, 2, 3 }; // every int boxes",
+            "explanation": "Line 2: assigning an `int` to `object` wraps it on the heap. Line 3: interface dispatch on a value type also boxes. Line 5: non-generic collections box every element — a performance trap in hot loops."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Value types in C# vs JS/TS",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["User-defined value types", "`struct` — real copy semantics in the CLR", "No equivalent — even `Date` is an object"],
+            ["Type alias", "N/A for value semantics", "TS `type Point = { x: number }` is still a JS object at runtime"],
+            ["Assignment", "Struct copies fields; class copies reference", "Primitives copy; objects alias"],
+            ["Equality", "Default struct equality is field-wise (module 05)", "Object equality is reference identity unless you compare fields manually"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mutable structs in properties",
+          "body": "`container.Box.Value = 99` mutates a copy from the getter, not the stored struct. Keep structs immutable or mutate through a method on the containing class."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Large structs on hot paths",
+          "body": "A 64-byte struct passed through ten method layers means ten copies. Use `readonly struct` with `in`, or switch to a class if the data is large or has identity."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Struct assignment copies; class assignment aliases.",
-    "readonly struct pairs with in. No class inheritance for structs.",
+    "`readonly struct` pairs with `in`. Structs cannot inherit from classes.",
     "Default equality for structs is a starting point, not a dictionary strategy — module 05."
   ],
   "commonPitfalls": [
-    "Mutable structs in properties: set never happens.",
+    "Mutable structs in properties: the set never happens.",
     "Large structs copied through layers of methods on a hot path."
   ],
   "relatedTopicIds": [
@@ -48,13 +182,13 @@
     {
       "language": "javascript",
       "concept": "no user structs",
-      "note": "JS has primitives and objects. There is no custom value type; even Date is an object. C# lets you declare copy semantics.",
+      "note": "JavaScript has primitives and objects. There is no custom value type; even `Date` is an object. C# lets you declare copy semantics with `struct`.",
       "futureTopicSlug": "javascript/types/primitives-vs-objects"
     },
     {
       "language": "typescript",
       "concept": "type aliases versus value types",
-      "note": "TS type Point = { x: number; y: number } is still a JS object at runtime. C# struct Point is a real value type in the CLR.",
+      "note": "TypeScript `type Point = { x: number; y: number }` is still a JavaScript object at runtime. C# `struct Point` is a real value type in the CLR.",
       "futureTopicSlug": "typescript/types/object-types"
     }
   ],

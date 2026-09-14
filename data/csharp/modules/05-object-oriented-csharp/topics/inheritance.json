@@ -1,30 +1,165 @@
 {
   "id": "csharp-05-inheritance",
   "slug": "inheritance",
-  "title": "Inheritance",
+  "title": "Inheritance (single base class)",
   "moduleId": "csharp-05-object-oriented-csharp",
   "order": 2,
-  "hook": "A derived class gets the base’s accessible members except constructors and finalizers. You get one base class. Constructor chaining with base(...) is how identity is initialized before derived fields run.",
+  "hook": "When one type is truly a specialized version of another, you write `class Derived : Base`. C# gives you exactly one base class, and constructors must chain with `base(...)` before the derived type finishes initializing.",
   "sections": [
     {
-      "heading": "Single base, what is inherited",
-      "prose": "class Derived : Base is the only class inheritance shape. Derived may also list interfaces. Public, protected, and internal members of the base are visible according to the modifiers in module 04. Constructors are not inherited: Derived must call a Base constructor, implicitly the parameterless one if it exists, or explicitly base(...). Finalizers are not inherited either; you still should not write them (module 14)."
-    },
-    {
-      "heading": "Constructor order",
-      "prose": "Field initializers in the derived type run, then the derived constructor body, but the base constructor runs first among constructor bodies. In practice: base ctor body, then derived ctor body, with field initializers sequenced as specified by the language (derived initializers before the derived body, base initializers before the base body). If you need to validate arguments before calling base, use a static helper in the argument list. Primary constructors on both base and derived can feed base(x) from derived parameters.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Single base and constructor chaining",
-          "code": "abstract class AuthHandler(string issuer)\n{\n    public string Issuer { get; } = issuer;\n}\n\nsealed class LtiHandler(string issuer, string clientId) : AuthHandler(issuer)\n{\n    public string ClientId { get; } = clientId;\n}",
-          "explanation": "LtiHandler has one base. The primary constructor forwards issuer to AuthHandler. There is no second class parent for, say, logging — inject a logger instead."
+          "type": "prose",
+          "text": "**Inheritance** lets a derived class reuse and extend a base class. The syntax is `class Derived : Base`. The derived type gets the base's accessible members — public, protected, and internal — but **not** constructors or finalizers. C# allows only **one** base class; you can also list multiple interfaces after the base class name."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "base class",
+              "longForm": "base class",
+              "plainDefinition": "The parent type that another class derives from. Also called superclass or parent class.",
+              "example": "`class LtiHandler : AuthHandler` — AuthHandler is the base class."
+            },
+            {
+              "term": "derived class",
+              "longForm": "derived class",
+              "plainDefinition": "A class that inherits from a base class. Also called subclass or child class.",
+              "example": "`LtiHandler` is derived from `AuthHandler`."
+            },
+            {
+              "term": "abstract class",
+              "longForm": "abstract class",
+              "plainDefinition": "A class you cannot instantiate with `new`. It may contain abstract members that derived types must implement.",
+              "example": "`abstract class AuthHandler` — you create `LtiHandler`, not `AuthHandler` directly."
+            },
+            {
+              "term": "sealed class",
+              "longForm": "sealed class",
+              "plainDefinition": "A class that cannot be inherited from. Use it to close a hierarchy.",
+              "example": "`sealed class LtiHandler : AuthHandler` — no further subclasses allowed."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "abstract and sealed on the type",
-      "prose": "abstract class: cannot new, may have abstract members. sealed class: cannot derive. sealed is the default you should want for workers and DTOs unless you designed a hierarchy. A sealed derived type on an abstract base is a common production pattern: closed set of providers, open for the base author only."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Inheritance shares algorithm steps across a family of types. An auth provider family might share token validation and clock-skew checks in a base class, while `LtiHandler` and `OidcHandler` differ only in how they parse the raw token. Because C# enforces a single base class, you must choose that slot carefully — infrastructure dependencies belong in composition (previous topic), not in a deep base hierarchy."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Constructors are not inherited",
+          "body": "Every derived class must call a base constructor — either implicitly (parameterless base) or explicitly with `base(...)`. If you forget, the compiler errors. Finalizers are also not inherited; you should avoid writing them (see module 14)."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Constructor chaining order",
+          "items": [
+            {
+              "title": "Derived field initializers run",
+              "body": "Field initializers in the derived type execute first in the initialization sequence."
+            },
+            {
+              "title": "Base constructor body runs",
+              "body": "The base constructor initializes the base portion of the object. Use `base(args)` in the derived constructor's initializer list to pick which base constructor."
+            },
+            {
+              "title": "Derived constructor body runs",
+              "body": "After the base is fully constructed, the derived constructor body executes. At this point all base fields are valid."
+            },
+            {
+              "title": "Object is ready",
+              "body": "The fully initialized object can now be used. Avoid calling virtual methods from the base constructor — the derived override may run before derived fields are set."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Single inheritance and constructor chain",
+            "source": "flowchart TD\n  OBJ[object] --> AH[abstract AuthHandler]\n  AH --> LH[sealed LtiHandler]\n  AH --> OH[sealed OidcHandler]\n  NEW[new LtiHandler] -->|1 base ctor| AH\n  NEW -->|2 derived ctor| LH\n  NOTE[Only ONE class parent allowed]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Single base and constructor chaining",
+            "code": "abstract class AuthHandler(string issuer)\n{\n    public string Issuer { get; } = issuer;\n    public abstract AuthToken Parse(string raw);\n}\n\nsealed class LtiHandler(string issuer, string clientId) : AuthHandler(issuer)\n{\n    public string ClientId { get; } = clientId;\n\n    public override AuthToken Parse(string raw) =>\n        new AuthToken(raw, Issuer, ClientId);\n}",
+            "explanation": "Line 1: abstract base with primary constructor capturing `issuer`. Line 6: derived type forwards `issuer` to the base via `: AuthHandler(issuer)`. Line 7: `ClientId` is a derived-only property. Line 9: `Parse` is the abstract method implementation. There is no second class parent — inject a logger instead."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "abstract and sealed on the type",
+            "code": "// abstract: cannot new, may have abstract members\nabstract class Shape\n{\n    public abstract double Area();\n}\n\n// sealed: cannot derive further\nsealed class Circle(double radius) : Shape\n{\n    public override double Area() => Math.PI * radius * radius;\n}\n\n// Circle circle = new Circle(5); // OK\n// class Oval : Circle { }       // Compiler error — Circle is sealed",
+            "explanation": "Line 2: `abstract` blocks `new Shape()`. Line 8: `sealed` blocks further inheritance. This is the production pattern: an open base (`Shape`) with a closed set of sealed derived types (`Circle`)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Base plus interfaces",
+            "code": "interface IAuditable\n{\n    DateTimeOffset CreatedAt { get; }\n}\n\nabstract class Entity(string id) : IAuditable\n{\n    public string Id { get; } = id;\n    public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;\n}\n\nsealed class Order(string id, decimal total) : Entity(id)\n{\n    public decimal Total { get; } = total;\n}",
+            "explanation": "Line 6: one base class (`Entity`) plus one interface (`IAuditable`). Line 12: `Order` inherits from `Entity` and automatically implements `IAuditable` through the base. You can list multiple interfaces but only one class."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Inheritance across languages",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Syntax", "`class Derived : Base`", "`class Derived extends Base`"],
+            ["Constructor chaining", "`base(...)` in initializer", "`super(...)` before `this`"],
+            ["Single parent", "Compiler enforces one base class", "extends one class; prototypes can be mutated at runtime"],
+            ["sealed", "`sealed class` blocks derivation", "No direct equivalent"],
+            ["Metadata", "Hierarchy fixed in CLR metadata", "Prototype chain can change at runtime"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Calling virtual methods from a base constructor",
+          "body": "If the base constructor calls a virtual method, the derived override runs before derived field initializers complete. The override may see uninitialized derived state. Keep base constructors simple."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Public unsealed classes with no planned derived types",
+          "body": "If you do not intend anyone to subclass your worker or DTO, mark it `sealed`. An unsealed public class is an open invitation for external inheritance you did not design for."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -45,13 +180,13 @@
     {
       "language": "javascript",
       "concept": "extends and super()",
-      "note": "JS also requires super() before this in derived constructors. JS can mutate the prototype at runtime; C# hierarchies are fixed in metadata.",
+      "note": "JavaScript also requires super() before this in derived constructors. JavaScript can mutate the prototype at runtime; C# hierarchies are fixed in metadata.",
       "futureTopicSlug": "javascript/classes/extends"
     },
     {
       "language": "typescript",
       "concept": "single extends plus implements",
-      "note": "TS class extends one class and implements interfaces, similar on the surface. TS implements is erased; C# implements is runtime-checkable.",
+      "note": "TypeScript class extends one class and implements interfaces, similar on the surface. TypeScript implements is erased; C# implements is runtime-checkable.",
       "futureTopicSlug": "typescript/classes/extends-implements"
     }
   ],

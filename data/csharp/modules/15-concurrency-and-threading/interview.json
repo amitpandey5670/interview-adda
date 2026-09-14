@@ -3,40 +3,40 @@
   "title": "Concurrency interview drills",
   "items": [
     {
-      "question": "Should an ASP.NET Core action use Task.Run to call Redis?",
-      "answer": "No. Redis is I/O. await the async API so the request thread returns to the pool. Task.Run would spend a second pool thread waiting on the same I/O and can contribute to starvation under 999 concurrent users. Task.Run is for CPU work you refuse to run on the request path, such as a bounded SkiaSharp raster queued to a Channel.",
+      "question": "When do you use Task.Run versus async/await?",
+      "answer": "async/await frees threads during I/O — network, disk, database. Task.Run queues CPU-bound work to the thread pool so you do not block the ASP.NET request thread during hashing or parsing. Do not Task.Run an already async method just to be async. Parallel and PLINQ partition CPU work across cores when each item is expensive enough to justify coordination overhead.",
       "followUps": [
-        "When is Parallel.ForEachAsync appropriate?",
-        "What is thread-pool starvation in a blocking Redis client?"
+        "What happens if you Parallel.ForEach inside a request that already uses the thread pool heavily?",
+        "How does this differ from Node worker_threads?"
       ],
-      "sixtySeconds": "I/O: await. CPU: pool via Task.Run or Parallel. Never Task.Run just to ‘make Redis async.’"
+      "sixtySeconds": "async for I/O wait. Task.Run for CPU on pool. Never confuse them. PLINQ for big CPU-bound LINQ."
     },
     {
-      "question": "Why is lock(_gate) { await redis.StringGetAsync(...) } forbidden?",
-      "answer": "await yields. The continuation may resume on another thread, so you would Exit on a different thread than Enter — Monitor throws. Even if you block instead of await, every other caller queues behind a network round-trip. Throughput collapses from 199 to 999 users. Compute the cache key and the in-memory check under the lock, then I/O outside, then publish the result with Interlocked or a ConcurrentDictionary.TryAdd.",
+      "question": "Why must you never lock across an await?",
+      "answer": "lock is thread-scoped mutual exclusion. await releases the thread but does not release lock — other threads block on the lock while the holder is not even running. Under load you serialize the entire service and can deadlock with the thread pool. Release the lock before any I/O. Use SemaphoreSlim for throttling concurrent outbound calls instead of holding Monitor across network waits.",
       "followUps": [
-        "How does SemaphoreSlim.WaitAsync differ?",
-        "What is the C# 13 Lock type’s EnterScope?"
+        "Can you use lock with Monitor.TryEnter and timeout?",
+        "What is the difference between lock and SemaphoreSlim?"
       ],
-      "sixtySeconds": "Locks are for CPU-short critical sections. Never await while holding Monitor. Single-flight I/O without holding the lock."
+      "sixtySeconds": "lock plus await equals disaster. Short lock for memory only. Throttle I/O with SemaphoreSlim."
     },
     {
-      "question": "Is volatile enough for a shared counter of submitted attempts?",
-      "answer": "No. volatile does not make ++ atomic and does not give you a total order Microsoft is willing to call a lock. Two threads can both read 41 and write 42. Use Interlocked.Increment. volatile is a narrow hint against some compiler/hardware reordering for a simple flag; even Microsoft now tells you to prefer Interlocked or lock. long and double cannot be volatile because reads are not atomic on all platforms.",
+      "question": "How do you fix a Redis cache stampede when traffic spikes?",
+      "answer": "Many parallel cache misses on the same key each hit the database. Single-flight: ConcurrentDictionary of in-flight Task per key so one loader runs and others await the same Task. Add SemaphoreSlim to cap total database concurrency across keys. Jitter cache TTL. Never wrap Redis get and database query in one global lock — that serializes all keys.",
       "followUps": [
-        "What does CompareExchange do in a single-flight cache?",
-        "How does lock provide a memory barrier?"
+        "How is single-flight like Promise deduplication in TypeScript?",
+        "Should cancelled waiters remove the inflight entry?"
       ],
-      "sixtySeconds": "Counters: Interlocked. Flags: still prefer Interlocked. volatile is easy to get wrong."
+      "sixtySeconds": "Per-key Task coalescing. DB semaphore. No global lock on cache path."
     },
     {
-      "question": "How do you stop a Redis cache stampede when attempts jump from 199 to 999 concurrent?",
-      "answer": "Do not let every request miss and hit the origin. Use a per-key single-flight: ConcurrentDictionary of Task, or a Channel worker that refreshes. The first waiter starts the Redis/DB fill; the rest await the same Task. Combine with a short lock or Interlocked.CompareExchange only around dictionary mutation, never around the I/O. Add jittered TTL so keys do not expire in lockstep after a deploy.",
+      "question": "When would you choose Channel over ConcurrentQueue plus lock?",
+      "answer": "Channel gives async WriteAsync and ReadAllAsync with optional bounded capacity for backpressure. A RabbitMQ receiver can write to a channel and multiple workers read without hand-rolled wait handles. ConcurrentQueue is lower level; you still coordinate completion and blocking. Channels fit producer-consumer pipelines; ConcurrentDictionary fits shared maps.",
       "followUps": [
-        "How is this different from a Mutex?",
-        "Where does SemaphoreSlim cap concurrent origin calls?"
+        "What does BoundedChannelFullMode.Wait do?",
+        "How does Channel relate to IAsyncEnumerable?"
       ],
-      "sixtySeconds": "Single-flight per key. Share one Task. Lock only the map, not Redis. Jitter TTLs."
+      "sixtySeconds": "Channel for async producer-consumer with backpressure. ConcurrentDictionary for shared maps."
     }
   ]
 }

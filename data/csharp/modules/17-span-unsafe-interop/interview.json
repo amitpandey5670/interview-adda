@@ -1,42 +1,42 @@
 {
   "moduleId": "csharp-17-span-unsafe-interop",
-  "title": "Span, unsafe code, and interop — interview",
+  "title": "Span and interop interview drills",
   "items": [
     {
-      "question": "Why can you not store Span<T> on a class or await with one live?",
-      "answer": "Span<T> is a ref struct. It may point at stack memory or a slice of an array. The compiler forbids putting it on the heap (class fields, async state machines, iterators across yield) so a stack frame cannot disappear under it. Use Memory<T> when the buffer must survive an await, then .Span only in synchronous sections.",
+      "question": "When do you use Span versus string?",
+      "answer": "Span is a window over existing memory — char array, stackalloc buffer, or string backing — without allocating a new string. Use Span for parsing headers, tokens, and CSV fields on hot paths. string is immutable heap object — fine for storage and API boundaries. After parsing, you may still allocate a string when you need to store the value long term.",
       "followUps": [
-        "What did C# 13 change for ref locals in async methods?",
-        "What did C# 14 add for spans?"
+        "Why cannot Span be a field on a class?",
+        "How does Memory<T> help async methods?"
       ],
-      "sixtySeconds": "ref struct, no heap. Memory for async. C# 14 implicit conversions. C# 13: scoped span across more APIs."
+      "sixtySeconds": "Span slices without alloc. string for stored text. Memory for async fields."
     },
     {
-      "question": "How would you parse a large CSV without a string per cell?",
-      "answer": "Keep the line as ReadOnlySpan<char> (or bytes). IndexOf the delimiter, Slice the cell, parse ints with int.TryParse on the span. stackalloc a scratch buffer for a decoded row if the line is bounded. Do not Substring unless you must retain the value after the buffer is reused.",
+      "question": "When is stackalloc appropriate for CSV import?",
+      "answer": "When you have a proven maximum line length and the scratch fits safely on the stack — typically hundreds of chars, not megabytes. Parse with span walks instead of Split. For rows or files exceeding stack limits, stream with StreamReader and use ArrayPool for large buffers to avoid Large Object Heap churn. Validate line length before stackalloc.",
       "followUps": [
-        "When is stackalloc the wrong tool?",
-        "UTF-8 vs char spans?"
+        "What happens if you stackalloc inside a loop with user-controlled size?",
+        "How does record struct help per-row allocation?"
       ],
-      "sixtySeconds": "Slice, don't Substring. TryParse on span. stackalloc only for small bounded scratch."
+      "sixtySeconds": "stackalloc bounded lines. Span parse. Pool or stream for huge data."
     },
     {
-      "question": "What does fixed do, and when do you still need unsafe?",
-      "answer": "fixed pins a managed object so the GC cannot relocate it, giving a pointer valid inside the statement. unsafe is the context that allows pointer types. Prefer Span and MemoryMarshal over raw pointers. You need unsafe for function pointers, pointer arithmetic, or some P/Invoke signatures — not for ordinary slicing.",
+      "question": "Why does SkiaSharp need using even though C# has GC?",
+      "answer": "SkiaSharp wraps native Skia bitmaps and surfaces allocated outside the managed heap. GC only tracks the small managed wrapper. Without Dispose, native pixels stay allocated until a finalizer runs much later — looks like a memory leak under load. using releases native resources deterministically at block exit.",
       "followUps": [
-        "Can you fixed a span across a p/invoke without a length?",
-        "What is AllowUnsafeBlocks?"
+        "What does fixed do during P/Invoke?",
+        "LibraryImport versus DllImport for Native AOT?"
       ],
-      "sixtySeconds": "fixed pins. unsafe enables pointers. Span first. Never pass a span pointer as a C string without length."
+      "sixtySeconds": "Native memory outside GC. Dispose now. Finalizer too late for bitmaps."
     },
     {
-      "question": "How should a C# engineer talk about P/Invoke in an interview?",
-      "answer": "It is a marshalling boundary: calling convention, character set, ownership of native memory, and lifetime. Prefer LibraryImport source generation over DllImport. Wrap native handles in IDisposable (SkiaSharp lesson). This is not an invitation to rewrite the worker in C++.",
+      "question": "What is the minimum you need to know about P/Invoke?",
+      "answer": "It is the boundary to native DLLs. Marshaling converts strings and arrays to native layout. Use official NuGet wrappers when they exist. For new declarations prefer LibraryImport source generation. Respect calling convention and charset. Pin or use Span only for the call duration. You are not writing a C++ shop — isolate interop in a small shim.",
       "followUps": [
-        "Span vs Memory when wrapping native calls?",
-        "Why does LibraryImport require unsafe?"
+        "When would you enable AllowUnsafeBlocks?",
+        "How does pinning affect GC compaction?"
       ],
-      "sixtySeconds": "Boundary, not a C++ course. LibraryImport. Dispose native. Span sync, Memory async."
+      "sixtySeconds": "P/Invoke is native boundary. Wrappers preferred. Short pin. LibraryImport modern path."
     }
   ]
 }

@@ -1,40 +1,178 @@
 {
   "id": "csharp-05-csharp-oop-vs-js-ts",
   "slug": "csharp-oop-vs-js-ts",
-  "title": "C# OOP versus JavaScript and TypeScript",
+  "title": "C# OOP versus JavaScript and TypeScript (runtime vs erased)",
   "moduleId": "csharp-05-object-oriented-csharp",
   "order": 7,
-  "hook": "TypeScript looks like C# in a slide deck. The CLR keeps types, accessibility, and virtual slots at run time. The TS compiler erases them. Interviews fail when you describe C# as “TS with a runtime.”",
+  "hook": "TypeScript classes look like C# in a slide deck, but the Common Language Runtime (CLR) keeps types, access modifiers, and virtual dispatch slots at run time. The TypeScript compiler erases them — and interviews fail when you describe C# as just TypeScript with a runtime.",
   "sections": [
     {
-      "heading": "Nominal metadata versus structural erase",
-      "prose": "A C# class, interface, or record is a named CLR type. Casts and is/as check that type. A TypeScript interface is a compile-time shape; two different interface names with the same fields are interchangeable, and they vanish in the JS output. C# privacy (module 04) is enforced by the runtime: reflection can still skip it if you ask, but ordinary IL cannot read a private field from another type. TS private is a compiler error; JS #fields are a different, weaker analogue."
-    },
-    {
-      "heading": "Dispatch, identity, and values",
-      "prose": "C# virtual dispatch uses a method table. JS looks up a property on the prototype chain, which you can mutate at runtime. C# structs are real value types; TS object types are never copied as values. Records give you generated value equality; JS still needs a library or JSON.stringify hacks. None of this makes C# “better” — it makes the answers different when you debug a Redis DTO that looked equal in JSON but missed a Dictionary lookup.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "typescript",
-          "label": "TS structural typing that C# would reject",
-          "code": "interface CacheEntry { key: string }\ninterface AuthHint { key: string }\nconst hint: AuthHint = { key: \"sess-1\" };\nconst entry: CacheEntry = hint; // TS: OK, same shape",
-          "explanation": "TypeScript allows the assignment. In C#, AuthHint and CacheEntry as distinct classes or interfaces are not assignable without a relationship. That is nominal typing backed by metadata."
+          "type": "prose",
+          "text": "This topic compares how **object-oriented programming (OOP)** works in C# versus JavaScript and TypeScript. The core difference: C# types are **nominal** and exist as Common Language Runtime (CLR) metadata at run time. TypeScript types are **structural** and vanish when the compiler emits JavaScript. That single fact explains privacy, interfaces, virtual dispatch, value types, and why a Redis DTO that looked equal in JSON can still miss a Dictionary lookup in C#."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "nominal typing",
+              "longForm": "nominal typing",
+              "plainDefinition": "Types are equal only if they share a declared relationship (same class, implements interface). C# uses nominal typing.",
+              "example": "`AuthHint` and `CacheEntry` as separate classes are not interchangeable."
+            },
+            {
+              "term": "structural typing",
+              "longForm": "structural typing",
+              "plainDefinition": "Types are compatible if their shapes match, regardless of name. TypeScript uses structural typing.",
+              "example": "`const hint: AuthHint = { key: \"s\" }; const entry: CacheEntry = hint;` — TypeScript allows this."
+            },
+            {
+              "term": "type erasure",
+              "longForm": "type erasure",
+              "plainDefinition": "The process of removing type information during compilation. TypeScript erases types; C# preserves them in IL and CLR metadata.",
+              "example": "A TypeScript interface does not exist in the emitted .js file."
+            },
+            {
+              "term": "virtual dispatch",
+              "longForm": "virtual dispatch",
+              "plainDefinition": "Runtime method routing through a method table. C# virtual/override uses this. JavaScript uses prototype chain lookup instead.",
+              "example": "`handler.Parse(raw)` calls the override on the runtime type."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What to say in a mixed-stack interview",
-      "prose": "You ship both: a .NET worker and a TS client. Say: the client’s types are documentation the bundler deletes; the worker’s types are the CLR’s. Auth tokens validated on the server are records or classes with private key material. The browser object that holds the same JWT is a string plus a parsed JSON object with no access modifiers. Polymorphism on the server is virtual or interface dispatch; on the client it is functions on objects."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "If you ship both a .NET worker and a TypeScript client, you debug them differently. On the server, `private` is enforced by the CLR — ordinary Intermediate Language (IL) cannot read a private field from another type. On the client, TypeScript `private` is a compile-time error that disappears in the bundle. Auth tokens validated on the server are records with generated equality; the browser holds the same JSON as a plain object with no access modifiers and no `GetHashCode`."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "The one-sentence summary",
+          "body": "The TypeScript compiler strips types. The CLR loads them. That difference drives every answer on this page."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Tracing a type from source to runtime",
+          "items": [
+            {
+              "title": "C#: compile to IL with metadata",
+              "body": "Roslyn emits Intermediate Language (IL) that includes type names, access modifiers, virtual slots, and interface implementations. The CLR loads and enforces them."
+            },
+            {
+              "title": "TypeScript: compile to JavaScript without types",
+              "body": "tsc removes interfaces, type aliases, and access modifiers. The output is plain JavaScript objects and functions."
+            },
+            {
+              "title": "C#: cast and is/as check at runtime",
+              "body": "`if (handler is LtiHandler lti)` — the CLR inspects the object's actual type metadata."
+            },
+            {
+              "title": "TypeScript: type checks end at compile time",
+              "body": "`if (handler instanceof LtiHandler)` works only for classes (runtime constructors), not for interfaces or type aliases."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "C# metadata versus TypeScript erasure",
+            "source": "flowchart LR\n  subgraph csharp [C# path]\n    CS[C# source] --> IL[IL plus metadata]\n    IL --> CLR[CLR loads types]\n    CLR --> RT[Runtime checks\\ncasts, virtual, private]\n  end\n  subgraph ts [TypeScript path]\n    TS[TS source] --> JS[JavaScript output]\n    JS --> V8[V8 runs objects]\n    V8 --> PROT[Prototype lookup\\nno interface type]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Structural typing that C# would reject",
+            "code": "interface CacheEntry { key: string }\ninterface AuthHint { key: string }\n\nconst hint: AuthHint = { key: \"sess-1\" };\nconst entry: CacheEntry = hint; // TS: OK — same shape\n\n// At runtime this is just: const entry = hint;\n// No CacheEntry or AuthHint type exists in the .js file",
+            "explanation": "Line 1–2: two interfaces with identical shapes. Line 5: TypeScript allows the assignment because types are structural. Line 7: the emitted JavaScript has no type information — just a plain object assignment."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Nominal typing enforced by the CLR",
+            "code": "class CacheEntry\n{\n    public string Key { get; init; } = \"\";\n}\n\nclass AuthHint\n{\n    public string Key { get; init; } = \"\";\n}\n\nAuthHint hint = new() { Key = \"sess-1\" };\n// CacheEntry entry = hint; // Compiler error — no relationship\nCacheEntry entry = new() { Key = hint.Key }; // Must copy explicitly",
+            "explanation": "Line 1 and 6: two classes with identical shapes but different names. Line 12: the compiler rejects the assignment — C# requires a declared relationship. Line 13: you must create a new instance or write a mapping. The CLR enforces this at compile time."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Virtual dispatch has no honest JS equivalent",
+            "code": "abstract class AuthHandler\n{\n    public virtual string Provider => \"base\";\n}\n\nsealed class LtiHandler : AuthHandler\n{\n    public override string Provider => \"lti\";\n}\n\nAuthHandler h = new LtiHandler();\nConsole.WriteLine(h.Provider); // lti — CLR method table dispatch\n\n// In JS, this is prototype lookup — you can mutate\n// LtiHandler.prototype.Provider at runtime. C# slots are fixed in metadata.",
+            "explanation": "Line 2: virtual opens a CLR dispatch slot. Line 7: override fills it. Line 11: calling through the base type dispatches to `LtiHandler`. In JavaScript, method lookup walks the prototype chain and can be changed at runtime — there is no fixed virtual table."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "OOP features side by side",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Type survives compilation", "Yes — IL and CLR metadata", "No — interfaces and types erased"],
+            ["Privacy enforcement", "CLR metadata; runtime enforced", "TS private is compile-time; JS #field is per-instance"],
+            ["Interface", "CLR contract; cast and is work", "Compile-time shape check only"],
+            ["Inheritance limit", "One base class; many interfaces", "extends one class; prototypes mutable"],
+            ["Value types", "struct and record struct copy by value", "No user-defined value types"],
+            ["Equality protocol", "Equals, GetHashCode, IEquatable<T>", "=== is reference; no hash contract"],
+            ["Virtual dispatch", "Method table (virtual/override)", "Prototype chain property lookup"],
+            ["Records", "Generated equality, with, ToString", "Object spread approximates with"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Calling TypeScript private the same as C# private",
+          "body": "TypeScript `private` is a compile-time check — the emitted JavaScript has no access restriction. C# `private` is enforced by the CLR at runtime through metadata. They are not equivalent."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming a TypeScript interface exists in a stack trace",
+          "body": "When debugging a .NET exception, `is IAttemptStore` and interface names appear in stack traces. A TypeScript interface name never appears at runtime because it was erased during compilation."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "C# accessibility and interfaces survive as metadata; TS types erase.",
-    "C# is nominally typed at runtime; TS is structural at compile time.",
-    "Value types and virtual slots have no honest JS equivalent."
+    "C# accessibility and interfaces survive as metadata; TypeScript types erase.",
+    "C# is nominally typed at runtime; TypeScript is structural at compile time.",
+    "Value types and virtual slots have no honest JavaScript equivalent."
   ],
   "commonPitfalls": [
-    "Calling TS private “the same as C# private.”",
-    "Assuming a TS interface will exist in a stack trace."
+    "Calling TypeScript private the same as C# private.",
+    "Assuming a TypeScript interface will exist in a stack trace."
   ],
   "relatedTopicIds": [
     "csharp-04-access-modifiers",
@@ -48,13 +186,13 @@
     {
       "language": "typescript",
       "concept": "type erase",
-      "note": "tsc strips types. The CLR loads them. This is the whole page in one sentence.",
+      "note": "The TypeScript compiler strips types. The CLR loads them. This is the whole page in one sentence.",
       "futureTopicSlug": "typescript/compiler/erase"
     },
     {
       "language": "javascript",
       "concept": "runtime objects only",
-      "note": "JS has objects, prototypes, and modules. No IL, no method table you control with virtual, no private metadata.",
+      "note": "JavaScript has objects, prototypes, and modules. No IL, no method table you control with virtual, no private metadata.",
       "futureTopicSlug": "javascript/runtime/objects"
     }
   ],

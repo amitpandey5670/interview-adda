@@ -1,26 +1,153 @@
 {
   "id": "csharp-01-sdk-project-language-version",
   "slug": "sdk-project-language-version",
-  "title": "SDK projects, LangVersion, implicit usings",
+  "title": "Project files, language version, and auto-imports",
   "moduleId": "csharp-01-program-and-compilation",
   "order": 3,
-  "hook": "The `.csproj` is the build contract: SDK, TFM, and usually the C# version. Pinning `LangVersion` to `latest` is how CI boxes disagree.",
+  "hook": "Every modern C# app has a small XML project file that tells the build system which .NET version to target and which C# syntax to allow. Pin your settings to the target framework — not to \"latest\" — so every machine builds the same way.",
   "sections": [
     {
-      "heading": "SDK-style project and language version",
-      "prose": "Modern apps use an SDK-style project: `<Project Sdk=\"Microsoft.NET.Sdk\">` plus `<TargetFramework>net10.0</TargetFramework>`. The TFM selects the default C# version — .NET 10 means C# 14 unless you override. Visual Studio hides a language-version dropdown because the supported pairing is TFM-driven: a newer LangVersion than the TFM is unsupported. If you must override, set `<LangVersion>14.0</LangVersion>` (or `preview`) in the csproj or `Directory.Build.props`. Do not use `latest`; it means “whatever compiler is installed,” so two build agents can accept different syntax. Dump the actual pair with `#error version` in a file — the compiler replies with compiler and language versions.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "xml",
-          "label": "Wrong vs right LangVersion",
-          "code": "<!-- Wrong: machine-dependent syntax -->\n<LangVersion>latest</LangVersion>\n\n<!-- Right: TFM implies C# 14 on net10.0; override only when you mean it -->\n<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <ImplicitUsings>enable</ImplicitUsings>\n    <Nullable>enable</Nullable>\n  </PropertyGroup>\n</Project>",
-          "explanation": "net10.0 + current SDK already compiles as C# 14. Explicit latest makes builds non-reproducible across SDK installs."
+          "type": "prose",
+          "text": "An SDK-style project file (.csproj) is the build contract for your app. It declares the Software Development Kit (SDK) to use, the Target Framework Moniker (TFM) like net10.0, and optional settings such as LangVersion and ImplicitUsings. The TFM picks the default C# language version — .NET 10 maps to C# 14. You rarely need to set LangVersion manually; the pairing is designed to stay in sync."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TFM",
+              "shortForm": "TFM",
+              "longForm": "Target Framework Moniker",
+              "plainDefinition": "A string like net10.0 that tells the build which .NET runtime and API surface your app targets.",
+              "example": "<TargetFramework>net10.0</TargetFramework> means .NET 10 APIs are available."
+            },
+            {
+              "term": "LangVersion",
+              "longForm": "C# language version",
+              "plainDefinition": "A project setting that controls which C# syntax features the compiler accepts.",
+              "example": "net10.0 defaults to C# 14; you can override with <LangVersion>14.0</LangVersion>."
+            },
+            {
+              "term": "ImplicitUsings",
+              "longForm": "Implicit usings",
+              "plainDefinition": "A project setting that auto-generates global using statements for common namespaces like System and System.Linq.",
+              "example": "With ImplicitUsings enabled, Console.WriteLine works without writing using System;."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Implicit usings",
-      "prose": "`<ImplicitUsings>enable</ImplicitUsings>` injects a generated `global using` set (`System`, `System.Collections.Generic`, `System.Linq`, `System.Threading.Tasks`, and more depending on SDK). That is why a new console app can call `Console.WriteLine` and `List<T>` with no `using`. It is project sugar, not a language keyword that “imports the world.” Disable it in a library if you want every dependency visible in source — common in shared CSV-import utilities that should not accidentally pull `System.Net.Http`."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Reproducible builds depend on pinned settings. Setting LangVersion to latest means \"whatever compiler is installed\" — two Continuous Integration (CI) agents can accept different syntax and fail unpredictably. The TFM also gates which runtime APIs exist: raising LangVersion without raising TFM leads to code that compiles but cannot find runtime types. Implicit usings reduce boilerplate in apps but can hide dependencies in libraries where you want every namespace visible in source."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Default rule",
+          "body": "Let the TFM choose the language version. Override LangVersion only when you have a deliberate reason, and never use latest in shared or production projects."
+        }
+      ]
+    },
+    {
+      "heading": "How project settings flow",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From csproj to compiled app",
+          "items": [
+            {
+              "title": "SDK attribute selects the build SDK",
+              "body": "<Project Sdk=\"Microsoft.NET.Sdk\"> pulls in default compile, test, and publish targets."
+            },
+            {
+              "title": "TFM selects runtime + default LangVersion",
+              "body": "net10.0 implies C# 14 and .NET 10 Base Class Library (BCL) APIs."
+            },
+            {
+              "title": "Implicit usings inject global imports",
+              "body": "The build generates a GlobalUsings.cs with namespaces like System, System.Collections.Generic, and System.Threading.Tasks."
+            },
+            {
+              "title": "Roslyn compiles with the resolved settings",
+              "body": "You can verify the actual pair with #error version in any .cs file."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Project settings resolution",
+            "source": "flowchart TD\n  A[.csproj file] --> B[SDK: Microsoft.NET.Sdk]\n  A --> C[TargetFramework net10.0]\n  C --> D[Default LangVersion C# 14]\n  A --> E[ImplicitUsings enable]\n  E --> F[Generated global usings]\n  B --> G[dotnet build]\n  D --> G\n  F --> G\n  G --> H[IL assembly output]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Recommended SDK-style project",
+            "code": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n    <TargetFramework>net10.0</TargetFramework>\n    <ImplicitUsings>enable</ImplicitUsings>\n    <Nullable>enable</Nullable>\n  </PropertyGroup>\n</Project>",
+            "explanation": "net10.0 plus the current SDK already compiles as C# 14. No LangVersion line needed. Nullable enable turns on null-safety annotations."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Wrong vs right LangVersion",
+            "code": "<!-- Wrong: machine-dependent syntax -->\n<LangVersion>latest</LangVersion>\n\n<!-- Right: explicit only when you mean it -->\n<LangVersion>14.0</LangVersion>",
+            "explanation": "latest tracks the installed compiler, not a stable language version. Two build agents with different SDKs can disagree on what compiles."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Check compiler and language version",
+            "code": "#error version\n// Uncomment the line above and build.\n// The compiler reports something like:\n// \"CS8304: ... compiler version ... language version ...\"",
+            "explanation": "A quick way to see what Roslyn resolved for your project. Remove or comment out before shipping."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Project config parallels",
+          "headers": ["C# setting", "Closest JS/TS equivalent", "Key difference"],
+          "rows": [
+            ["TargetFramework (TFM)", "engines in package.json + @types/node", "TFM selects runtime APIs and default language version"],
+            ["LangVersion", "No direct equivalent (TS target is looser)", "C# LangVersion gates syntax features tightly"],
+            ["ImplicitUsings", "No direct equivalent", "Auto-imports namespaces already in referenced assemblies"],
+            ["Nullable enable", "strictNullChecks in tsconfig", "Both add compile-time null safety"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Raising LangVersion without raising TFM, then hitting missing runtime APIs. Thinking implicit usings replace NuGet references — they only import namespaces from assemblies you already reference. Copy-pasting Directory.Build.props LangVersion across C# and Visual Basic projects — the version numbers are not interchangeable between languages."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -43,7 +170,7 @@
     {
       "language": "typescript",
       "concept": "tsconfig target vs language",
-      "note": "`compilerOptions.target` and `lib` are closer to TFM than to LangVersion. `latest` in tsconfig is similarly a “depends which tsc” risk.",
+      "note": "compilerOptions.target and lib are closer to TFM than to LangVersion. Using latest in tsconfig has the same \"depends which tsc\" risk as LangVersion=latest.",
       "futureTopicSlug": "typescript/compiler/tsconfig"
     }
   ],
@@ -51,6 +178,10 @@
     {
       "title": "Configure language version",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/configure-language-version"
+    },
+    {
+      "title": "Implicit usings",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/project-sdk/overview#implicit-using-directives"
     }
   ],
   "animationHint": "timeline"

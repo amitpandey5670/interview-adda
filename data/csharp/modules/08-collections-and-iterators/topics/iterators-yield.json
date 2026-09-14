@@ -1,30 +1,159 @@
 {
   "id": "csharp-08-iterators-yield",
   "slug": "iterators-yield",
-  "title": "Iterators and yield",
+  "title": "Iterators and yield (deferred sequences)",
   "moduleId": "csharp-08-collections-and-iterators",
   "order": 4,
-  "hook": "yield return does not run your method. It builds a state machine that runs on MoveNext. That is why a CSV importer can look instant and then blow up on the first foreach — or twice if you enumerate twice.",
+  "hook": "yield return does not run your method body right away. It builds a state machine that executes one item at a time when the caller loops — that is why a CSV import can look instant and then fail on the first foreach.",
   "sections": [
     {
-      "heading": "Deferred execution",
-      "prose": "An iterator method returns IEnumerable<T> or IEnumerator<T> (or the non-generic twins). The compiler generates a nested class that stores locals and a resume point. The first MoveNext runs until the first yield return; the next MoveNext continues after it. yield break ends the sequence. You cannot mix a normal return of a collection with yield in the same method. Exceptions from the iterator body surface when the consumer pulls the next item, not when you called ReadRows(path). That delay is the feature and the bug.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "CSV rows yielded, not buffered",
-          "code": "IEnumerable<string[]> ReadCsvRows(string path)\n{\n    using StreamReader reader = File.OpenText(path);\n    string? line;\n    while ((line = reader.ReadLine()) is not null)\n    {\n        yield return line.Split(',');\n    }\n}\n\nIEnumerable<string[]> rows = ReadCsvRows(\"attempts.csv\"); // file not read yet\nforeach (string[] row in rows) Import(row);              // first pass\nforeach (string[] row in rows) Audit(row);               // second pass reopens? No — this example\n// re-executes the iterator, which opens the file again.",
-          "explanation": "Each foreach creates a new enumerator and re-opens the file. To snapshot, materialize with ToList once, then walk the list."
+          "type": "prose",
+          "text": "An iterator method uses yield return to produce items lazily — one at a time, on demand. The compiler transforms your method into a state machine class that remembers where it paused. The method returns immediately with an IEnumerable<T> object; the actual work happens when the consumer calls MoveNext. yield break ends the sequence early. You cannot mix yield return with a normal return of a collection in the same method."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "iterator",
+              "longForm": "iterator method",
+              "plainDefinition": "A method that uses yield return or yield break to produce a sequence lazily, one item per MoveNext call.",
+              "example": "IEnumerable<string> ReadLines(string path) { yield return line; }"
+            },
+            {
+              "term": "yield return",
+              "longForm": "yield return",
+              "plainDefinition": "Pauses the method and hands one item to the caller. The method resumes after that item is consumed.",
+              "example": "yield return row; pauses until the next foreach iteration."
+            },
+            {
+              "term": "deferred execution",
+              "longForm": "deferred execution",
+              "plainDefinition": "Work that is postponed until someone actually asks for the next item — not when the method is called.",
+              "example": "ReadCsvRows(path) returns immediately; the file opens on the first MoveNext."
+            },
+            {
+              "term": "state machine",
+              "longForm": "compiler-generated state machine",
+              "plainDefinition": "A nested class the compiler creates to store local variables and the resume point between yield returns.",
+              "example": "Your simple while loop becomes a class with a switch on the current state."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Multiple enumeration and resources",
-      "prose": "LINQ is built on this model; composing Where/Select stacks iterators. Calling Count() then foreach enumerates twice. If the source is an open network stream or a non-rewindable SQS enumerator you invented, the second pass is empty or throws. using inside an iterator is valid: Dispose runs when the enumerator is disposed, which foreach does. Returning an iterator that closes over a Stream you dispose in the caller is a use-after-dispose. Materialize or keep the using around the foreach, not around the call that only constructed the iterator."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Deferred execution lets you process a 400,000-line CSV without loading it all into memory first. LINQ is built entirely on this model — Where, Select, and Take all stack iterators. The danger: calling Count() then foreach enumerates twice. If the source is a network stream or a non-rewindable resource, the second pass is empty or throws. Exceptions from the iterator body surface at MoveNext, not when you called the method."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Two foreach calls, two executions",
+          "body": "Each foreach creates a new enumerator and re-runs the iterator from the start. To snapshot, call ToList() once, then walk the list as many times as you need."
+        }
+      ]
     },
     {
-      "heading": "Async iterators",
-      "prose": "yield return in an async IAsyncEnumerable<T> method is how you stream SQS pages without buffering the world. await foreach consumes it. That state machine, CancellationToken via [EnumeratorCancellation], and IAsyncDisposable are module 13. If an interviewer asks “can yield be async?,” say yes, IAsyncEnumerable, then point forward."
+      "heading": "How yield works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Deferred execution lifecycle",
+          "items": [
+            {
+              "title": "Call the iterator method",
+              "body": "var rows = ReadCsvRows(path); returns immediately. No file I/O has happened yet."
+            },
+            {
+              "title": "First MoveNext (first foreach)",
+              "body": "The state machine runs until the first yield return, producing one item. The file opens here."
+            },
+            {
+              "title": "Subsequent MoveNext calls",
+              "body": "Each call resumes after the previous yield return until yield break or the method ends."
+            },
+            {
+              "title": "Dispose cleans up",
+              "body": "When the enumerator is disposed (foreach does this), any using blocks inside the iterator run their cleanup."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "yield return timeline",
+            "source": "sequenceDiagram\n  participant Caller\n  participant Iterator\n  participant File\n  Caller->>Iterator: ReadCsvRows(path)\n  Note over Iterator: Returns immediately\n  Caller->>Iterator: MoveNext (1st foreach)\n  Iterator->>File: Open and read line 1\n  Iterator-->>Caller: yield return row 1\n  Caller->>Iterator: MoveNext\n  Iterator->>File: Read line 2\n  Iterator-->>Caller: yield return row 2\n  Caller->>Iterator: Dispose\n  Iterator->>File: Close"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "CSV rows yielded, not buffered",
+            "code": "IEnumerable<string[]> ReadCsvRows(string path)\n{\n    using StreamReader reader = File.OpenText(path);\n    string? line;\n    while ((line = reader.ReadLine()) is not null)\n    {\n        yield return line.Split(',');\n    }\n}",
+            "explanation": "The using block keeps the file open for the lifetime of the enumerator. Dispose (called by foreach) closes the file when iteration ends."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Deferred call versus enumeration",
+            "code": "IEnumerable<string[]> rows = ReadCsvRows(\"attempts.csv\");\n// File not read yet — only the iterator object exists\n\nforeach (string[] row in rows)\n    Import(row);    // first pass — file opens here\n\nforeach (string[] row in rows)\n    Audit(row);     // second pass — file opens AGAIN",
+            "explanation": "Each foreach creates a new enumerator and re-executes the iterator from scratch. To snapshot, materialize once: var snapshot = rows.ToList();"
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Materialize to avoid double enumeration",
+            "code": "IEnumerable<string[]> rows = ReadCsvRows(\"attempts.csv\");\nList<string[]> snapshot = rows.ToList(); // reads entire file once\n\nforeach (string[] row in snapshot) Import(row);\nforeach (string[] row in snapshot) Audit(row); // same data, no re-read",
+            "explanation": "ToList() forces full enumeration and stores every item in memory. Use this when you know you will walk the data more than once."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Generators in C# versus JavaScript",
+          "headers": ["Aspect", "C# yield return", "JS function* / yield"],
+          "rows": [
+            ["Syntax", "yield return in a method", "yield in a function*"],
+            ["Return type", "IEnumerable<T> or IAsyncEnumerable<T>", "Generator object"],
+            ["Consumption", "foreach or LINQ", "for...of or spread"],
+            ["Re-iteration", "New enumerator, re-runs method", "Generator exhausted; call factory again"],
+            ["Async variant", "yield return in async method (module 13)", "async function* with for await...of"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Disposing the StreamReader before the caller enumerates — the iterator needs the stream alive. Using yield to wrap a List you already built — you added a state machine for no benefit. Assuming iterator exceptions happen at the call site — they surface at MoveNext when the consumer pulls the next item."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [

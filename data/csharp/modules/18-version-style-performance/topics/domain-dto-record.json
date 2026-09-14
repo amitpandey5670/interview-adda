@@ -1,49 +1,152 @@
 {
   "id": "csharp-18-domain-dto-record",
   "slug": "domain-dto-record",
-  "title": "Domain, DTO, and record — allocation-aware",
+  "title": "Domain, Data Transfer Object (DTO), and record — allocation-aware",
   "moduleId": "csharp-18-version-style-performance",
   "order": 4,
-  "hook": "A record is a language feature. A DTO is a serialization shape. A domain type is where invariants live. Collapsing the three is how Redis JSON becomes your business model.",
+  "hook": "Domain models enforce business rules. Data Transfer Objects (DTOs) cross API boundaries. Records fit immutable DTOs with value equality — but every mapping and copy is an allocation you should notice on CSV import and high-traffic Redis paths.",
   "sections": [
     {
-      "heading": "Three jobs, three types",
-      "prose": "A domain `Attempt` has an id that does not change when scores change, a constructor that rejects empty tenant ids, and methods that apply events. Equality is identity, or an explicit value object nested inside. A DTO (`AttemptCacheDto`) exists to round-trip JSON to Redis or an SQS body: public init properties, no behavior, no invariants beyond “serializer succeeded.” A `record` (module 04) gives positional syntax, value equality, and `with`. That is a gift for DTOs and for small value objects (`record struct Money`, `readonly record struct RedisKey`). It is a trap for entities: `attempt with { Score = 0 }` clones without running `ApplyScore`. RabbitMQ messages are DTOs. The consumer maps them into domain commands. Do not share one type across the bus and the aggregate.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Split the cache shape from the entity",
-          "code": "public sealed class Attempt\n{\n    public Attempt(string id, string tenantId)\n    {\n        if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException(\"id\");\n        Id = id;\n        TenantId = tenantId;\n    }\n\n    public string Id { get; }\n    public string TenantId { get; }\n    public int Score { get; private set; }\n    public void ApplyScore(int score) => Score = score >= 0 ? score : throw new ArgumentOutOfRangeException(nameof(score));\n}\n\npublic sealed record AttemptCacheDto(string Id, string TenantId, int Score);\n\npublic static Attempt ToDomain(this AttemptCacheDto dto)\n{\n    var attempt = new Attempt(dto.Id, dto.TenantId);\n    attempt.ApplyScore(dto.Score);\n    return attempt;\n}",
-          "explanation": "The record is the Redis JSON contract. ToDomain runs the constructor and ApplyScore. A with-expression on AttemptCacheDto never bypasses that if you do not map blindly."
+          "type": "prose",
+          "text": "Domain entities live in the core layer with invariants — Order cannot ship without lines. DTOs are serializable shapes for HTTP, queues, and cache values — often records. Mapping between them (manual, Mapster, source generator) allocates. For hot paths, read-only structs or span-parsed rows may replace heap DTOs — module 17 CSV topic."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "DTO",
+              "shortForm": "DTO",
+              "longForm": "Data Transfer Object",
+              "plainDefinition": "Type designed to carry data across a boundary without behavior.",
+              "example": "public record UserResponse(int Id, string Email);"
+            },
+            {
+              "term": "Domain model",
+              "longForm": "Domain entity",
+              "plainDefinition": "Object with business rules and invariants, not tied to transport format.",
+              "example": "class Order { public void Ship() { /* validates state */ } }"
+            },
+            {
+              "term": "Mapping",
+              "longForm": "Object mapping",
+              "plainDefinition": "Converting between domain and DTO representations.",
+              "example": "new UserResponse(user.Id, user.Email) — allocates new record."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Allocation: what to copy, what to slice",
-      "prose": "CSV import (module 17) should parse into primitives and only then construct a DTO or entity. Holding `ReadOnlySpan<char>` inside a class is illegal; you either intern a `string` the domain must own or you keep the row as a stack-local parse. `record struct` DTOs avoid a heap object per row if the fields are small and you do not box them. `record class` DTOs are fine for Redis payloads you already allocate. Collection expressions (C# 12) that build `List<AttemptCacheDto>` from a million rows still allocate a million objects — the syntax did not make it free. Map at the boundary once; do not map DTO → anonymous type → record → entity on every property get.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Parse then allocate once",
-          "code": "static bool TryMapRow(ReadOnlySpan<char> line, out AttemptCacheDto dto)\n{\n    dto = default!;\n    if (!TryReadScore(line, out var id, out var score)) return false;\n    dto = new AttemptCacheDto(id.ToString(), tenantId: \"import\", score);\n    return true;\n}",
-          "explanation": "The span dies at the method end. The DTO owns strings it must store. Do not keep a span-based “flyweight entity” on a class field."
+          "type": "prose",
+          "text": "Exposing domain entities directly from EF Core APIs couples persistence to HTTP and causes over-fetching. Over-mapping — domain to DTO to view model on every Redis hit — doubles allocations. CSV import of millions of rows should stream DTOs or parse into structs, not materialize List<ExpandoObject>."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Layering rule",
+          "body": "Controllers and message handlers speak DTOs. Domain services speak domain types. Map at the edge once."
         }
       ]
     },
     {
-      "heading": "Auth tokens and other secrets",
-      "prose": "An auth token DTO may be a `record` with `string AccessToken` for logging boundaries you must never log. The domain validator (module 16 attributes on the method, not on the record) consumes it and returns a principal. Do not put `Validate()` on the DTO so every serializer instance becomes a security API. Keep behavior on types you version as public API with CI guards (module 16); keep DTOs boring."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choose the right shape",
+          "items": [
+            { "title": "API response", "body": "record DTO with only needed fields." },
+            { "title": "Business logic", "body": "Domain class with methods and invariants." },
+            { "title": "Cache value", "body": "Compact DTO serializable to JSON — watch size." },
+            { "title": "Bulk import hot path", "body": "Struct row or span parse before optional DTO." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Domain vs DTO flow",
+            "source": "flowchart LR\n  HTTP[HTTP JSON] --> DTO[record DTO]\n  DTO -->|map once| DOM[Domain entity]\n  DOM -->|persist| DB[(Database)]\n  DTO -->|serialize| Redis[(Redis cache)]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Domain vs DTO",
+            "code": "public sealed class Order\n{\n    public void Ship(DateOnly shipDate)\n    {\n        if (Lines.Count == 0) throw new InvalidOperationException(\"Empty order\");\n        ShippedAt = shipDate;\n    }\n    public IReadOnlyList<OrderLine> Lines { get; } = [];\n    public DateOnly? ShippedAt { get; private set; }\n}\n\npublic record OrderDto(int Id, DateOnly? ShippedAt);",
+            "explanation": "Behavior stays in domain. DTO crosses API with no Ship method."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Allocation-light CSV row",
+            "code": "public readonly record struct CsvRow(int UserId, int Score);\n\npublic static IEnumerable<CsvRow> ParseRows(StreamReader reader)\n{\n    string? line;\n    while ((line = reader.ReadLine()) is not null)\n    {\n        if (TryParseRow(line.AsSpan(), out var uid, out var score))\n            yield return new CsvRow(uid, score);\n    }\n}",
+            "explanation": "record struct avoids heap allocation per row versus class DTO — module 17 parsing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Generic result wrapper at boundary",
+            "code": "public async Task<Result<OrderDto>> GetAsync(int id, CancellationToken ct)\n{\n    var order = await _repo.FindAsync(id, ct);\n    return order is null\n        ? Result<OrderDto>.NotFound()\n        : Result<OrderDto>.Ok(new OrderDto(order.Id, order.ShippedAt));\n}",
+            "explanation": "Map to DTO once at the edge. Result type from module 09 for expected misses."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Layer types",
+          "headers": ["Layer", "C#", "TypeScript API"],
+          "rows": [
+            ["Transport", "record DTO", "interface ResponseDto"],
+            ["Domain", "class with methods", "domain module with functions"],
+            ["Mapping", "explicit or Mapster", "mapper functions or Zod parse"],
+            ["Hot path", "record struct, span", "typed arrays, plain objects"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "EF entities returned from minimal APIs. Triple mapping domain→DTO→view. class DTO for million-row import when struct suffices. Giant DTOs cached in Redis."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Domain types enforce invariants; DTOs serialize; records supply value equality and with-expressions.",
-    "Do not with-clone an entity to skip its methods.",
-    "Promote span slices to strings only when a heap object must own the data."
+    "Domain has behavior; DTOs cross boundaries; records suit immutable DTOs.",
+    "Map at the edge once; avoid mapping chains on hot paths.",
+    "record struct can reduce allocations for bulk import rows."
   ],
   "commonPitfalls": [
-    "Using the same record for EF-shaped domain, Redis, and SQS “to save mapping.”",
-    "record struct that contains a List — the struct copy is shallow; you thought you were safe.",
-    "Parsing CSV into List<string> then into a record — you paid Split and then paid the DTO."
+    "Leaking persistence models to HTTP.",
+    "Allocating new DTO on every cache hit when reference could be reused safely.",
+    "Ignoring DTO size in Redis memory."
   ],
   "relatedTopicIds": [
     "csharp-17-stackalloc-csv",
@@ -55,21 +158,17 @@
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "interface DTO vs class entity",
-      "note": "TS interfaces vanish at runtime, so teams often use one type for JSON and behavior. C# types survive in metadata; you can and should keep a class entity distinct from a record DTO.",
-      "futureTopicSlug": "typescript/types/interfaces-vs-classes"
+      "concept": "Zod parse at boundary",
+      "note": "Zod validates wire shape like DTO plus validation attributes in C#. Domain logic stays separate from transport types.",
+      "futureTopicSlug": "typescript/validation/zod"
     }
   ],
   "officialSources": [
     {
-      "title": "Records",
+      "title": "Record types",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/record"
-    },
-    {
-      "title": "Identifier names (record primary constructor parameters)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "csv-import"
+  "scenarioTag": "csv-import",
+  "animationHint": "compare"
 }

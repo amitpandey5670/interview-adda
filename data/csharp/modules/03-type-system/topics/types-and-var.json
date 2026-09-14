@@ -1,33 +1,163 @@
 {
   "id": "csharp-03-types-and-var",
   "slug": "types-and-var",
-  "title": "Types and var",
+  "title": "Declared types and var (type inference)",
   "moduleId": "csharp-03-type-system",
   "order": 1,
-  "hook": "Every variable has a compile-time type. `var` asks the compiler to infer it from the initializer; it is not JavaScript `var` and not TypeScript `any`.",
+  "hook": "Every variable in C# has a type the compiler knows before your program runs. The `var` keyword asks the compiler to figure out that type from the value you assign — it is not JavaScript `var` and not a free pass like TypeScript `any`.",
   "sections": [
     {
-      "heading": "Declared type versus inferred type",
-      "prose": "C# is strongly typed: the compiler rejects operations that the type does not support (`int + bool` is an error). You can write the type (`int count = 10`) or `var count = 10` — both are `int`. `var` requires an initializer; `var x;` does not compile. Inference uses the right-hand side, including target-typed `new` (`List<string> names = new()`). Method parameters and returns cannot be `var`. After inference, the variable is as static as if you typed the name. That is why `var dict = new Dictionary<string, AuthToken>()` is fine in a worker: the IDE and the compiler still know the type.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "var is inference, not dynamic",
-          "code": "var attemptCap = 999;          // int\n// attemptCap = \"999\";         // compile error\n\nvar grades = new List<decimal>(); // List<decimal>\n\n// Wrong: no initializer\n// var pending;",
-          "explanation": "If the RHS is `null` with no target, inference fails. Give an explicit type or use a typed null (`string? s = null`)."
+          "type": "prose",
+          "text": "A **type** tells the compiler what kind of data a variable holds — a whole number (`int`), text (`string`), true/false (`bool`), and so on. You can write the type yourself (`int count = 10`) or let the compiler infer it with `var` (`var count = 10`). After either spelling, `count` is an `int` for the rest of its life. C# is **statically typed**: the type is fixed at compile time and checked on every use."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "static type",
+              "longForm": "static type",
+              "plainDefinition": "The type the compiler assigns to a variable. It never changes after declaration and is enforced on every operation.",
+              "example": "Once `var x = 10` makes `x` an `int`, you cannot assign `\"hello\"` to `x`."
+            },
+            {
+              "term": "var",
+              "longForm": "var (type inference keyword)",
+              "plainDefinition": "A C# keyword that tells the compiler to infer the variable's type from the initializer on the right-hand side.",
+              "example": "`var name = \"Ada\";` is exactly the same as `string name = \"Ada\";` after compilation."
+            },
+            {
+              "term": "initializer",
+              "longForm": "initializer",
+              "plainDefinition": "The value (or expression) you assign when declaring a variable. `var` requires one — you cannot write `var x;` alone.",
+              "example": "`var total = 1 + 2;` — the compiler sees `3` and picks `int`."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Types catch mistakes before you ship. If you try `int count = 10; count = \"ten\";`, the build fails immediately — no silent corruption at run time. In a worker that reads an Amazon Simple Queue Service (SQS) message, knowing `attemptCount` is an `int` (not a loose string) prevents bad math and bad retries. `var` is a readability tool: when the right-hand side already makes the type obvious (`new List<string>()`), spelling `var` avoids repeating yourself without losing safety."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "`var` is compile-time type inference. The Intermediate Language (IL) output is identical to writing the type name. It is unrelated to JavaScript `var` hoisting and unrelated to the `dynamic` keyword."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From source code to a fixed type",
+          "items": [
+            {
+              "title": "You write a declaration",
+              "body": "Either `int score = 95` or `var score = 95`. Both forms include an initializer."
+            },
+            {
+              "title": "The compiler infers or reads the type",
+              "body": "For `var`, the compiler looks at the right-hand side. `95` is an `int` literal, so the variable becomes `int`. Target-typed `new` also works: `List<string> names = new()` — the empty `new()` picks up `List<string>` from the left side."
+            },
+            {
+              "title": "The type is locked in",
+              "body": "From this point, every assignment must match. The compiler rejects `score = \"A\"` with a clear error."
+            },
+            {
+              "title": "IL stores the real type",
+              "body": "Whether you wrote `var` or `int`, the compiled assembly metadata says `Int32`. There is no run-time type lookup for `var`."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "How var resolves a type",
+            "source": "flowchart LR\n  A[\"var count = 10\"] --> B[Roslyn compiler]\n  B --> C[\"Inferred type: int\"]\n  C --> D[\"IL metadata: Int32\"]\n  D --> E[CLR runs with fixed type]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "var is inference, not dynamic",
+            "code": "var attemptCap = 999;          // int\n// attemptCap = \"999\";         // compile error — type is locked\n\nvar grades = new List<decimal>(); // List<decimal>\n\n// Wrong: var without an initializer\n// var pending;",
+            "explanation": "Line 1: `999` is an `int` literal, so `attemptCap` is `int`. Line 4: `new List<decimal>()` makes the type obvious — `var` saves typing `List<decimal>` twice. Line 7: `var` always needs a value on the right; `var pending;` does not compile."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Target-typed new with explicit left side",
+            "code": "Dictionary<string, int> retries = new();\n\n// Same type, shorter right side:\nvar cache = new Dictionary<string, string>();\n\ncache[\"session\"] = \"abc123\";\n// cache[42] = \"x\";  // compile error — key must be string",
+            "explanation": "Line 1: C# 9+ lets `new()` copy the type from the left (`Dictionary<string,int>`). Line 4: `var` infers `Dictionary<string,string>` from the constructor. Line 7: the compiler still knows key and value types — wrong key type is caught at build time."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "When var picks a too-general type",
+            "code": "object payload = ReadMessage();\n\n// Inference follows the static type of the RHS:\nvar data = payload;   // var becomes object, not your DTO\n\n// Fix: name the real type\nvar envelope = (SqsEnvelope)payload;\n// or: SqsEnvelope envelope = (SqsEnvelope)payload;",
+            "explanation": "Line 4: `var` infers from the expression's compile-time type. Because `payload` is declared `object`, `data` is also `object` — you lose access to `Body` without a cast. Line 7: cast first (or assign to a typed variable) so the compiler knows the real shape."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "var in three languages",
+          "headers": ["Feature", "C# var", "JavaScript var", "TypeScript let"],
+          "rows": [
+            ["What it does", "Infers a static type from initializer", "Declares a binding (function-scoped)", "Infers a type, erased at run time"],
+            ["Type changes?", "No — locked after declaration", "Yes — any value anytime", "No at compile time; yes at run time"],
+            ["Needs initializer?", "Yes", "No (`undefined` until set)", "No (but strict mode may warn)"],
+            ["Survives compilation?", "Yes — type in IL metadata", "N/A — JS is the output", "No — becomes plain JavaScript"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Equating C# `var` with JavaScript `var` (scope and hoisting) or with `dynamic` (run-time binding). Using `var` when the right-hand side is `object` and you needed a specific Data Transfer Object (DTO) — inference will pick `object`. Thinking `var` is slower: it is purely a compile-time shortcut with zero run-time cost."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "`var` is compile-time inference, identical in IL to writing the type name.",
-    "You cannot change a variable’s type after declaration.",
-    "Parameters, fields without initializers, and `var` without RHS are not inference sites."
+    "`var` is compile-time inference; IL is identical to writing the type name.",
+    "You cannot change a variable's type after declaration.",
+    "Parameters, fields without initializers, and `var` without a right-hand side are not inference sites."
   ],
   "commonPitfalls": [
     "Equating C# `var` with JS `var` (scope/hoisting) or with `dynamic`.",
-    "Using `var` when the RHS is a factory that returns `object` and you needed a more specific type — inference will pick `object`.",
-    "Thinking `var` is slower. It is not a run-time lookup."
+    "Using `var` when the right-hand side is a factory that returns `object` and you needed a more specific type.",
+    "Thinking `var` is slower — it is not a run-time lookup."
   ],
   "relatedTopicIds": [
     "csharp-03-built-in-types",
@@ -38,13 +168,13 @@
     {
       "language": "javascript",
       "concept": "var/let/const",
-      "note": "JS `var` is a binding with function scope. C# `var` is only a spelling for an inferred static type.",
+      "note": "JavaScript `var` is a binding with function scope and no static type. C# `var` is only a spelling for an inferred static type that never changes.",
       "futureTopicSlug": "javascript/bindings/var-let-const"
     },
     {
       "language": "typescript",
       "concept": "let inference",
-      "note": "TS `let n = 1` infers `number` similarly, but TS types still erase. C# inferred types remain in metadata.",
+      "note": "TypeScript `let n = 1` infers `number` similarly, but TypeScript types erase at run time. C# inferred types remain in assembly metadata the Common Language Runtime (CLR) can read.",
       "futureTopicSlug": "typescript/types/inference"
     }
   ],

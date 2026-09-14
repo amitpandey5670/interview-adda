@@ -1,32 +1,181 @@
 {
   "id": "csharp-12-standard-operators",
   "slug": "standard-operators",
-  "title": "Standard operators: SelectMany, grouping, joining",
+  "title": "Standard operators: SelectMany, grouping, and joining (LINQ transforms)",
   "moduleId": "csharp-12-linq",
   "order": 2,
-  "hook": "Reporting an exam is flattening answers per attempt, grouping by question, and joining to a skill map — SelectMany, GroupBy, Join. Not three nested for-loops you cannot test.",
+  "hook": "LINQ standard operators are the building blocks behind every query: filter with Where, project with Select, flatten nested collections with SelectMany, group with GroupBy, and combine sequences with Join.",
   "sections": [
     {
-      "heading": "Projection, flattening, grouping",
-      "prose": "Where filters. Select projects one-to-one. SelectMany projects one-to-many and concatenates; two from clauses are that operator. GroupBy is deferred and non-streaming: it consumes the source, then yields IGrouping<TKey,TElement>. OrderBy is the same buffering class. Redis cache invalidation lists keyed by tenant are a GroupBy. Attempt.Answers is a SelectMany. Prefer method syntax when the lambda needs an index overload that query syntax cannot say.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "SelectMany then GroupBy on attempts",
-          "code": "public sealed record Attempt(string Id, string Tenant, IReadOnlyList<Answer> Answers);\npublic sealed record Answer(string QuestionId, bool Correct);\n\npublic IEnumerable<(string QuestionId, int CorrectCount)> CorrectByQuestion(\n    IEnumerable<Attempt> attempts) =>\n    attempts\n        .SelectMany(a => a.Answers)\n        .GroupBy(ans => ans.QuestionId)\n        .Select(g => (g.Key, g.Count(a => a.Correct)));",
-          "explanation": "Select would yield sequences of answers. SelectMany yields answers. GroupBy buffers all answers before the first tuple appears."
+          "type": "prose",
+          "text": "Standard query operators are extension methods on IEnumerable<T> and IQueryable<T> defined in System.Linq. Where filters elements. Select projects one-to-one. SelectMany projects one-to-many and flattens the result — two from clauses in query syntax are SelectMany. GroupBy collects elements sharing a key into IGrouping<TKey, TElement>. Join performs an inner equijoin on matching keys. GroupJoin (join … into) keeps the outer element and a sequence of inner matches — useful for left-outer-join patterns with DefaultIfEmpty."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "SelectMany",
+              "plainDefinition": "Maps each element to a sequence, then flattens all sequences into one.",
+              "example": "attempts.SelectMany(a => a.Answers) flattens all answers across attempts.",
+              "longForm": "SelectMany"
+            },
+            {
+              "term": "GroupBy",
+              "plainDefinition": "Partitions elements by a key. Returns IGrouping<TKey, TElement> groups. Deferred but buffers the entire source.",
+              "example": "answers.GroupBy(a => a.QuestionId)",
+              "longForm": "GroupBy"
+            },
+            {
+              "term": "Join",
+              "plainDefinition": "Inner equijoin: keeps pairs where outer and inner keys match. Requires equals, not ==.",
+              "example": "from a in answers join s in skills on a.Id equals s.Id",
+              "longForm": "Join"
+            },
+            {
+              "term": "IGrouping",
+              "plainDefinition": "A key plus the elements that share it. Enumerable over the group; .Key gives the grouping key.",
+              "example": "foreach (var g in grouped) { g.Key; foreach (var item in g) { } }",
+              "longForm": "IGrouping"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Join and GroupJoin",
-      "prose": "Join is an inner equijoin: join skill in skills on answer.QuestionId equals skill.QuestionId. GroupJoin (join … into) keeps the outer element and an inner sequence that may be empty — a grouped left join you then flatten with DefaultIfEmpty for a true left outer join. Providers may ignore an orderby on a source before a join; sort after you have the result shape. Cache-aside lookups (id -> Redis payload) are usually a dictionary, not Join, when the inner sequence is already in memory and keyed.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Join answers to a skill catalog",
-          "code": "public sealed record Skill(string QuestionId, string Name);\n\npublic IEnumerable<string> SkillHits(\n    IEnumerable<Answer> answers,\n    IEnumerable<Skill> catalog) =>\n    from ans in answers\n    join skill in catalog on ans.QuestionId equals skill.QuestionId\n    where ans.Correct\n    select skill.Name;",
-          "explanation": "equals is required; you cannot write == in the join clause. This is an inner join: answers with no skill row disappear."
+          "type": "prose",
+          "text": "These operators replace nested for-loops you cannot easily unit-test. Reporting an exam means flattening answers per attempt (SelectMany), grouping by question (GroupBy), and joining to a skill catalog (Join). Knowing which operator to reach for — and whether it streams or buffers — prevents performance surprises on hot paths. SelectMany is a classic interview question because candidates confuse it with Select of a collection."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Streaming vs buffering",
+          "body": "Where and Select stream as they read. GroupBy and OrderBy buffer the entire source before yielding the first result. Plan accordingly on large collections."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Building a report query",
+          "items": [
+            {
+              "title": "Flatten nested data",
+              "body": "SelectMany turns each attempt's answer list into individual answers in one sequence."
+            },
+            {
+              "title": "Group by key",
+              "body": "GroupBy partitions answers by QuestionId. The operator reads everything first, then yields groups."
+            },
+            {
+              "title": "Aggregate within groups",
+              "body": "Select or Count inside each group produces summary tuples like (QuestionId, CorrectCount)."
+            },
+            {
+              "title": "Join to a lookup table",
+              "body": "Join matches answers to a skill catalog on QuestionId. Unmatched answers disappear (inner join)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "SelectMany vs Select vs GroupBy",
+            "source": "flowchart TD\n  A[Attempts with Answers] --> B{Operator?}\n  B -->|Select| C[One output per attempt\\ne.g. attempt.Id]\n  B -->|SelectMany| D[Flatten all answers\\ninto one sequence]\n  D --> E[GroupBy QuestionId]\n  E --> F[IGrouping per question]\n  F --> G[Count correct per group]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SelectMany then GroupBy on attempts",
+            "code": "public sealed record Attempt(string Id, string Tenant, IReadOnlyList<Answer> Answers);\npublic sealed record Answer(string QuestionId, bool Correct);\n\npublic IEnumerable<(string QuestionId, int CorrectCount)> CorrectByQuestion(\n    IEnumerable<Attempt> attempts) =>\n    attempts\n        .SelectMany(a => a.Answers)       // flatten: one Answer per element\n        .GroupBy(ans => ans.QuestionId)   // buffer all, then group\n        .Select(g => (g.Key, g.Count(a => a.Correct)));",
+            "explanation": "Select would yield IEnumerable<Answer> per attempt (nested). SelectMany yields flat Answer elements. GroupBy buffers all answers before the first tuple appears."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Join answers to a skill catalog",
+            "code": "public sealed record Skill(string QuestionId, string Name);\n\npublic IEnumerable<string> SkillHits(\n    IEnumerable<Answer> answers,\n    IEnumerable<Skill> catalog) =>\n    from ans in answers\n    join skill in catalog on ans.QuestionId equals skill.QuestionId\n    where ans.Correct\n    select skill.Name;",
+            "explanation": "equals is required in join clauses — you cannot write ==. This is an inner join: answers with no matching skill row are dropped."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "GroupJoin for left-outer join pattern",
+            "code": "var leftOuter = from att in attempts\n                join ans in allAnswers on att.Id equals ans.AttemptId into answersForAttempt\n                from ans in answersForAttempt.DefaultIfEmpty()\n                select new { att.Id, Answer = ans };\n\n// GroupJoin keeps the outer element even when the inner sequence is empty.\n// DefaultIfEmpty turns an empty group into one null element.",
+            "explanation": "join … into creates a GroupJoin. Flattening with DefaultIfEmpty produces a left-outer-join shape. Without DefaultIfEmpty, attempts with no answers are omitted."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "LINQ operators vs JavaScript equivalents",
+          "headers": [
+            "C# operator",
+            "JavaScript equivalent",
+            "Key difference"
+          ],
+          "rows": [
+            [
+              "SelectMany",
+              "flatMap",
+              "LINQ is deferred; flatMap is eager on arrays"
+            ],
+            [
+              "GroupBy",
+              "Object.groupBy (ES2024)",
+              "LINQ GroupBy is deferred and buffers; Object.groupBy is eager"
+            ],
+            [
+              "Join",
+              "No built-in — build a Map",
+              "LINQ Join is typed, deferred, and uses equals"
+            ],
+            [
+              "Where",
+              "filter",
+              "LINQ defers; Array.filter runs immediately"
+            ],
+            [
+              "Select",
+              "map",
+              "LINQ defers; Array.map runs immediately"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using Select when you meant SelectMany, then wondering why the type is IEnumerable<List<T>>. Calling GroupBy then mutating the source before enumerating the groups. Running N+1 dictionary lookups inside a Select that should have been a Join or a ToDictionary first. Using == instead of equals in a join clause."
         }
       ]
     }

@@ -1,30 +1,166 @@
 {
   "id": "csharp-05-interfaces",
   "slug": "interfaces",
-  "title": "Interfaces",
+  "title": "Interfaces (contracts with default methods)",
   "moduleId": "csharp-05-object-oriented-csharp",
   "order": 4,
-  "hook": "An interface is a CLR contract a class or struct can implement many of. Default interface methods let you evolve that contract. Explicit implementation hides a member until you cast.",
+  "hook": "An interface is a contract — a list of members that a class or struct promises to provide. Unlike a base class, you can implement many interfaces, which is how C# adds extra capabilities without using up your single inheritance slot.",
   "sections": [
     {
-      "heading": "Contracts, not types with fields",
-      "prose": "Interfaces declare members without instance fields. Classes, structs, and records implement them. A struct implementing an interface boxes when you store it as the interface type — relevant for cache-key structs. Interfaces are how a worker depends on IBus without taking a RabbitMQ type. That is composition with a type-checked seam (previous composition topic)."
-    },
-    {
-      "heading": "Default interface methods and explicit implementation",
-      "prose": "Default interface methods (C# 8) put a body on the interface. Existing implementers compile against the new member without source changes; they can still override it. Diamond inheritance of defaults is resolved with explicit reimplementation rules — interviews like this. Explicit implementation (IBus.Publish) keeps the method off the class’s public surface so a type can implement two interfaces with the same member name without polluting IntelliSense.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "DIM plus explicit implementation",
-          "code": "interface IBus\n{\n    Task PublishAsync(string key, CancellationToken ct);\n    Task PublishAsync(string key) => PublishAsync(key, CancellationToken.None);\n}\n\nsealed class RabbitBus : IBus\n{\n    Task IBus.PublishAsync(string key, CancellationToken ct) => Task.CompletedTask;\n}\n\nIBus bus = new RabbitBus();\nawait bus.PublishAsync(\"grading.completed\");",
-          "explanation": "PublishAsync without a token is a default interface method. The core method is explicit: you must use the IBus view. The class surface stays a sealed worker collaborator."
+          "type": "prose",
+          "text": "An **interface** declares members without instance fields. Classes, structs, and records can **implement** multiple interfaces. An interface is a Common Language Runtime (CLR) contract: the runtime knows which types implement it, and you can cast to the interface type. This is how a worker depends on `IBus` without taking a concrete `RabbitBus` type — composition with a type-checked seam."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "interface",
+              "longForm": "interface",
+              "plainDefinition": "A named contract of members (methods, properties, events) that implementing types must provide. No instance fields allowed.",
+              "example": "`interface IBus { Task PublishAsync(string key, CancellationToken ct); }`"
+            },
+            {
+              "term": "DIM",
+              "shortForm": "DIM",
+              "longForm": "Default Interface Method",
+              "plainDefinition": "An interface member with a body, added in C# 8. Existing implementers get the default without recompiling.",
+              "example": "`void Log(string msg) => Console.WriteLine(msg);` inside an interface."
+            },
+            {
+              "term": "explicit implementation",
+              "longForm": "explicit interface implementation",
+              "plainDefinition": "Implementing an interface member with the interface name prefix. The member is hidden from the class's public surface unless you cast to the interface.",
+              "example": "`Task IBus.PublishAsync(string key, CancellationToken ct) => ...;`"
+            },
+            {
+              "term": "boxing",
+              "longForm": "boxing",
+              "plainDefinition": "Wrapping a value type (struct) in a heap object when it is stored as an interface or object reference.",
+              "example": "A struct implementing `IEquatable<T>` boxes when cast to `IEquatable<T>`."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Versioning",
-      "prose": "Adding a non-default method to a public interface is a breaking change. DIM is the evolution hatch, with the caveat that implementers who never recompile still get your default, for better or worse. Prefer small interfaces (ISP) over kitchen-sink IWorkerBase."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interfaces are the primary way to define replaceable dependencies in .NET services. Your worker takes `IAttemptStore`, not `SqlAttemptStore`. Tests inject an in-memory fake. Production injects the real database adapter. Default Interface Methods (DIM) let you evolve a public interface by adding a member with a default body — existing implementers compile without changes. Explicit implementation disambiguates when two interfaces declare the same member name."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Struct-to-interface boxing",
+          "body": "When a struct implements an interface and you store it as the interface type, the CLR boxes it — copies the struct onto the heap wrapped in an object. For hot paths with small value types, keep the concrete struct type instead of the interface reference."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Implementing and using an interface",
+          "items": [
+            {
+              "title": "Declare the interface",
+              "body": "Define the contract with method and property signatures. No fields, no constructors."
+            },
+            {
+              "title": "Implement on a class or struct",
+              "body": "Add `: IMyInterface` to the type declaration and provide every member."
+            },
+            {
+              "title": "Depend on the interface, not the concrete type",
+              "body": "Constructor parameters and fields use `IBus`, not `RabbitBus`. The composition root wires the concrete type."
+            },
+            {
+              "title": "Cast when you need the interface view",
+              "body": "For explicit implementations, call through the interface type: `((IBus)bus).PublishAsync(key, ct)`."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "One class, many interfaces",
+            "source": "flowchart TD\n  WORKER[AttemptWorker] -->|implements| IH[IAttemptHandler]\n  WORKER -->|implements| ID[IDisposable]\n  WORKER -->|uses| IB[IBus]\n  WORKER -->|uses| IS[IAttemptStore]\n  RB[RabbitBus] -.->|implements| IB\n  SQL[SqlAttemptStore] -.->|implements| IS"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Default interface method plus explicit implementation",
+            "code": "interface IBus\n{\n    Task PublishAsync(string key, CancellationToken ct);\n    Task PublishAsync(string key) =>\n        PublishAsync(key, CancellationToken.None);\n}\n\nsealed class RabbitBus : IBus\n{\n    Task IBus.PublishAsync(string key, CancellationToken ct)\n    {\n        // publish to RabbitMQ\n        return Task.CompletedTask;\n    }\n}\n\nIBus bus = new RabbitBus();\nawait bus.PublishAsync(\"grading.completed\");",
+            "explanation": "Line 4: DIM provides a convenience overload with a default body. Line 9: explicit implementation keeps `PublishAsync` off `RabbitBus`'s public surface. Line 16: the DIM overload is visible through the `IBus` reference and calls the explicit core method."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Multiple interfaces on one worker",
+            "code": "interface IAttemptHandler\n{\n    Task HandleAsync(string messageId, CancellationToken ct);\n}\n\ninterface IHealthCheck\n{\n    bool IsHealthy();\n}\n\nsealed class GradingWorker(IAttemptStore store) : IAttemptHandler, IHealthCheck\n{\n    public Task HandleAsync(string messageId, CancellationToken ct) =>\n        store.ProcessAsync(messageId, ct);\n\n    public bool IsHealthy() => store.CanConnect();\n}",
+            "explanation": "Line 11: one class implements two interfaces — no extra base class needed. Line 13: `IAttemptHandler` behavior. Line 16: `IHealthCheck` behavior. The host can register this type for both roles."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Struct implementing an interface — boxing awareness",
+            "code": "interface ICacheKey\n{\n    string Value { get; }\n}\n\nreadonly struct RedisKey(string value) : ICacheKey\n{\n    public string Value { get; } = value;\n}\n\nICacheKey key = new RedisKey(\"tenant:acme\"); // boxes the struct\nRedisKey direct = new RedisKey(\"tenant:acme\"); // no boxing",
+            "explanation": "Line 5: struct implements the interface. Line 10: storing as `ICacheKey` boxes the struct onto the heap. Line 11: keeping the concrete struct type avoids boxing. In hot cache-key paths, prefer the struct type directly."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Interfaces across languages",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Typing model", "Nominal — must declare implements", "Structural — any matching object satisfies the type"],
+            ["Runtime presence", "CLR metadata; casts and is checks work", "Erased — no runtime interface type"],
+            ["Default methods", "DIM with bodies on the interface (C# 8)", "No runtime default; optional properties in TS only"],
+            ["Explicit implementation", "Hides member from class surface", "Not applicable — no nominal implementation"],
+            ["Multiple contracts", "Many interfaces per class", "implements many; structural matching"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Fat interfaces (Interface Segregation Principle violation)",
+          "body": "An `IWorkerBase` with twenty methods forces every implementer to provide fakes for methods it never uses. Split into small, focused interfaces: `IAttemptStore`, `IBus`, `IClock`. Callers depend only on what they need."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Forgetting DIM visibility rules",
+          "body": "A default interface method is only callable through the interface type unless the implementing class redeclares it. If you add a DIM and callers use the concrete type, they will not see the new member until they cast or the class redeclares it."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -46,13 +182,13 @@
     {
       "language": "typescript",
       "concept": "structural interfaces",
-      "note": "TS interfaces are structural and erased. A matching object literal satisfies them. C# interfaces are nominal and require an implements (or a generated wrapper).",
+      "note": "TypeScript interfaces are structural and erased. A matching object literal satisfies them. C# interfaces are nominal and require an implements clause.",
       "futureTopicSlug": "typescript/types/structural-typing"
     },
     {
       "language": "javascript",
       "concept": "duck typing",
-      "note": "JS will call obj.publish() if it exists. C# will not compile a call without a type that has the member; interface casts fail at runtime if the object is the wrong CLR type.",
+      "note": "JavaScript will call obj.publish() if it exists. C# will not compile a call without a type that has the member; interface casts fail at runtime if the object is the wrong CLR type.",
       "futureTopicSlug": "javascript/objects/duck-typing"
     }
   ],

@@ -1,36 +1,171 @@
 {
   "id": "csharp-06-what-is-an-exception",
   "slug": "what-is-an-exception",
-  "title": "What is an exception",
+  "title": "What is an exception (Common Language Runtime failure signal)",
   "moduleId": "csharp-06-exceptions-and-using",
   "order": 1,
-  "hook": "An exception is an object derived from System.Exception, thrown with throw, that unwinds the stack until a matching catch or the thread dies. JavaScript can throw a string. C# will not compile that.",
+  "hook": "When something goes wrong in C#, the runtime raises an exception — a typed object that carries a message and a stack trace. JavaScript can throw a string; C# requires a real Exception type.",
   "sections": [
     {
-      "heading": "The CLR model",
-      "prose": "Microsoft’s exception overview is blunt: exceptions are types under System.Exception; throw creates a control transfer; the runtime walks frames looking for catch; if nothing handles it, the thread — and often the process — is finished. The object carries Message, StackTrace, InnerException, and sometimes HRESULT. You do not use exceptions for ordinary not-found on a hot cache lookup; you use TryGet or nullable returns. You do use them for broken invariants, I/O that cannot complete, and cancelled work (OperationCanceledException)."
-    },
-    {
-      "heading": "Versus JavaScript throw",
-      "prose": "JS throw 42, throw 'nope', throw { code: 500 } are all legal. catch (e) then guesses. TypeScript cannot fully close that hole. In C#, throw new InvalidOperationException(\"lease expired\") is typed; catch clauses match on type (next topics). That is why a Node worker and a .NET SQS worker log failures differently: one may have a string, the other has a type you can filter.",
-      "snippets": [
+      "heading": "What is an exception?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Only Exception-derived throw",
-          "code": "static AuthToken RequireToken(string? raw)\n{\n    if (string.IsNullOrWhiteSpace(raw))\n        throw new ArgumentException(\"token missing\", nameof(raw));\n    return new AuthToken(\"sub\", \"iss\", DateTimeOffset.UtcNow.AddHours(1));\n}",
-          "explanation": "The compiler rejects throw raw or throw 401. Callers catch ArgumentException or let it bubble. AuthToken is the record from module 05."
+          "type": "prose",
+          "text": "An **exception** is an object derived from `System.Exception`. You create one with `throw`, and the **Common Language Runtime (CLR)** walks back up the call stack until it finds a matching `catch` block or the thread ends. The object carries a human-readable **Message**, a **StackTrace** showing where the failure started, and optionally an **InnerException** when one failure wraps another. Exceptions are for *unexpected* problems — broken invariants, failed I/O, invalid arguments — not for ordinary \"not found\" results on a hot lookup path."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Exception",
+              "longForm": "System.Exception",
+              "plainDefinition": "The base type for all failure objects in .NET. Every throw must use a type that inherits from Exception.",
+              "example": "throw new ArgumentException(\"token missing\");"
+            },
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The .NET runtime that executes your compiled code, manages memory, and handles exception unwinding.",
+              "example": "When throw runs, the CLR searches stack frames for a compatible catch."
+            },
+            {
+              "term": "StackTrace",
+              "longForm": "stack trace",
+              "plainDefinition": "A text record of which methods were running when the exception was thrown. Essential for debugging.",
+              "example": "at AuthService.RequireToken(String raw) in AuthService.cs:line 12"
+            },
+            {
+              "term": "throw",
+              "longForm": "throw statement",
+              "plainDefinition": "The keyword that signals failure and transfers control to the nearest matching catch or kills the thread.",
+              "example": "throw new InvalidOperationException(\"lease expired\");"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What this module defers",
-      "prose": "If a Task faults and nobody observes the exception, that is an async story — unobserved task exceptions are module 13. If you thought a destructor would catch leaks, that is finalization — module 14. Here we stay on throw, catch, wrap, and Dispose."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Typed exceptions let callers and workers decide what to recover from. A queue consumer can retry on a timeout but let a programming bug bubble up. Because C# enforces the type system at compile time, you never wonder whether the caught value is a string, a number, or a real error object — unlike JavaScript, where `catch (e)` is a guessing game."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Exceptions are not control flow",
+          "body": "Do not use throw/catch inside a tight CSV import loop to signal \"row skipped.\" Use return values, `TryGet` patterns, or nullable results for expected outcomes. Reserve exceptions for states you cannot continue from normally."
+        }
+      ]
+    },
+    {
+      "heading": "How exception unwinding works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From throw to handler",
+          "items": [
+            {
+              "title": "throw creates the object",
+              "body": "Your code constructs an Exception-derived object and executes throw. The CLR records the current stack frame."
+            },
+            {
+              "title": "Stack walk begins",
+              "body": "The runtime pops frames one by one, looking for a catch whose type matches the thrown object."
+            },
+            {
+              "title": "catch runs or thread dies",
+              "body": "If a matching catch is found, its block runs. If nothing matches, the exception is unhandled and the thread — often the whole process — terminates."
+            },
+            {
+              "title": "finally still runs",
+              "body": "Any finally blocks attached to try statements along the unwind path execute before control leaves that try scope — even when rethrowing."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Exception unwinding on the stack",
+            "source": "flowchart TD\n  A[Method A calls B] --> B[Method B calls C]\n  B --> C[Method C throws ArgumentException]\n  C --> D{Catch in C?}\n  D -->|no| E{Catch in B?}\n  E -->|yes| F[Handler runs in B]\n  E -->|no| G{Catch in A?}\n  G -->|no| H[Unhandled — thread ends]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Only Exception-derived values compile",
+            "code": "static AuthToken RequireToken(string? raw)\n{\n    if (string.IsNullOrWhiteSpace(raw))\n        throw new ArgumentException(\"token missing\", nameof(raw));\n    return new AuthToken(\"sub\", \"iss\", DateTimeOffset.UtcNow.AddHours(1));\n}",
+            "explanation": "Line 3: throw requires a type under System.Exception. The compiler rejects throw raw or throw 401. Line 4: AuthToken is the record from module 05 — a valid return when the input is fine."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Reading Message and StackTrace",
+            "code": "try\n{\n    RequireToken(null);\n}\ncatch (ArgumentException ex)\n{\n    Console.WriteLine(ex.Message);      // \"token missing\"\n    Console.WriteLine(ex.StackTrace);   // frames from RequireToken upward\n    Console.WriteLine(ex.ParamName);    // \"raw\" — ArgumentException detail\n}",
+            "explanation": "Line 6: Message is the developer-facing text you passed to the constructor. Line 7: StackTrace shows the call path — preserve it; never reset with throw ex (next topics)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Try-pattern instead of throw for expected misses",
+            "code": "static bool TryGetScore(string id, out int score)\n{\n    if (!_cache.TryGetValue(id, out score))\n    {\n        score = 0;\n        return false; // expected miss — not an exception\n    }\n    return true;\n}",
+            "explanation": "Line 3: a cache miss is normal. Returning false avoids throwing on every lookup. Reserve throw for states that mean \"something is broken.\""
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Exceptions in C# vs JS/TS",
+          "headers": ["Aspect", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["What you can throw", "Must be System.Exception (or derived)", "Any value — string, number, plain object"],
+            ["Catch typing", "catch (ArgumentException ex) is exact", "catch (e) — TS uses unknown; runtime can be anything"],
+            ["Stack trace", "StackTrace property on the exception object", "Error.stack on Error instances; absent on thrown strings"],
+            ["Unhandled failure", "Thread dies; host may terminate the process", "Uncaught exception logs; Node may exit depending on policy"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Throwing strings like JavaScript",
+          "body": "throw \"not found\" does not compile in C#. Translating Node habits directly leads to compile errors — which is the point. Always throw a typed Exception."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using exceptions in hot loops",
+          "body": "Throwing and catching inside a million-row CSV parse is slow and hides logic. Use return codes or Try-methods for expected branches."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "throw requires System.Exception (or derived).",
+    "throw requires System.Exception (or derived) — not arbitrary values.",
     "Unhandled exceptions unwind to the thread start; hosts may tear down the process.",
-    "Do not use exceptions for expected cache misses."
+    "Use TryGet / nullable returns for expected misses, not exceptions."
   ],
   "commonPitfalls": [
     "Translating JS habits: throwing strings or anonymous objects.",
@@ -46,13 +181,13 @@
     {
       "language": "javascript",
       "concept": "throw any value",
-      "note": "JS exceptions are not a type hierarchy you can rely on. C# exceptions always derive from Exception.",
+      "note": "JavaScript lets you throw anything — a string, a number, a plain object. C# exceptions always derive from Exception, so catch clauses can rely on types.",
       "futureTopicSlug": "javascript/errors/throw"
     },
     {
       "language": "typescript",
       "concept": "unknown in catch",
-      "note": "TS catch (e: unknown) is the honest typing because throw is untyped. C# catch (ArgumentException ex) is exact.",
+      "note": "TypeScript catch (e: unknown) is honest typing because throw is untyped at runtime. C# catch (ArgumentException ex) is exact and checked by the compiler.",
       "futureTopicSlug": "typescript/errors/unknown-catch"
     }
   ],

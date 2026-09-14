@@ -1,41 +1,152 @@
 {
   "id": "csharp-18-idiomatic-csharp",
   "slug": "idiomatic-csharp",
-  "title": "Idiomatic C# after five years",
+  "title": "Idiomatic C# after five years (style that scales)",
   "moduleId": "csharp-18-version-style-performance",
   "order": 3,
-  "hook": "Five years of shipping .NET is visible in names, in what you make public, and in what you refuse to clever. It is not visible in using every C# 14 syntax toy.",
+  "hook": "Idiomatic C# is not clever code — it is code other .NET engineers read without friction: async all the way for I/O, sealed by default, composition over inheritance, pattern matching over nested ifs, and names that match the Base Class Library (BCL).",
   "sections": [
     {
-      "heading": "Names the platform already agreed on",
-      "prose": "The compiler accepts many identifiers; .NET convention does not. PascalCase for types, namespaces, and public members. Interfaces start with `I`. Attribute types end with `Attribute`. Enums: singular unless they are flags. camelCase for parameters and locals. Private/internal instance fields: `_camelCase`. Static fields: `s_`, thread-static: `t_` (runtime style; not the Visual Studio default). Constants: PascalCase even when private. No consecutive `__` — the compiler reserves those. Type parameters: `T` or `TSession`. Primary constructor parameters: camelCase on classes/structs, PascalCase on records because they become properties. Verbatim `@if` is for interop names, not cute locals. Enforce with IDE code-style rules, not a wiki.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "A worker type that looks like BCL",
-          "code": "public interface IAttemptCache\n{\n    Task<AttemptDto?> GetAsync(string key, CancellationToken cancellationToken);\n}\n\npublic sealed class RedisAttemptCache : IAttemptCache\n{\n    private readonly IConnectionMultiplexer _mux;\n    private static readonly TimeSpan s_defaultTtl = TimeSpan.FromMinutes(15);\n\n    public RedisAttemptCache(IConnectionMultiplexer mux) => _mux = mux;\n}",
-          "explanation": "I-prefix, Async suffix, CancellationToken last, _mux, s_defaultTtl. Interviewers read this in one glance and move on — that is the point of convention."
+          "type": "prose",
+          "text": "After five years you default to: IAsyncEnumerable for streaming, records for immutable DTOs, early returns, guard clauses, Dependency Injection constructor injection, and ConfigureAwait(false) in libraries. You avoid Hungarian notation, underscore prefixes on locals, and Java-style getters in favor of properties. You use var when the type is obvious from the right-hand side."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "BCL",
+              "shortForm": "BCL",
+              "longForm": "Base Class Library",
+              "plainDefinition": "Core .NET APIs shipped with the runtime (System.*).",
+              "example": "List<T>, Task, Span<T> — naming follows BCL patterns."
+            },
+            {
+              "term": "Guard clause",
+              "longForm": "Guard clause pattern",
+              "plainDefinition": "Early validation that returns or throws before main logic.",
+              "example": "if (id <= 0) throw new ArgumentOutOfRangeException(nameof(id));"
+            },
+            {
+              "term": "Sealed",
+              "longForm": "sealed modifier",
+              "plainDefinition": "Prevents further inheritance — default for classes not designed as base classes.",
+              "example": "public sealed class OrderService { }"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Language features as defaults, not decorations",
-      "prose": "Idiomatic 2026 C# uses file-scoped namespaces, NRT enabled (module 07), `using` declarations (module 06), `await` with `ConfigureAwait` only when you are a library that must not capture a sync context (module 13), collection expressions when the target type is obvious (module 08), pattern matching instead of `is` plus cast (module 11), and `Span` on parse hot paths (module 17). It does not use `dynamic`, does not `lock (this)`, does not catch `Exception` to return null, and does not expose `public` fields. Extension members (C# 14) belong in a carefully named static class for a library; they do not belong as a way to hide a God helper. `field` accessors are idiomatic when the extra backing field was noise; they are not idiomatic when you already have a well-named `_email`."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Code review at senior level is about readability and failure modes, not syntax trivia. Idiomatic services use async Redis, return Result types instead of exceptions for expected failures (module 09), and keep controllers thin. Matching Microsoft naming guidelines makes onboarding faster — critical for teams shipping microservices."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Read like the BCL",
+          "body": "Before inventing a pattern, check how System.Text.Json or ASP.NET Core does it — that is the style bar."
+        }
+      ]
     },
     {
-      "heading": "What seniority sounds like",
-      "prose": "You name the runtime when it matters (module 14 GC, module 15 `Lock`). You keep unsafe in an interop project (module 17). You refuse to make a type public so a test compiles (module 16). You write the SQS handler as a typed method, not reflection. That list is this entire track. Idiomatic C# is the intersection of identifier-names guidance and those engineering defaults — not a second copy of the feature map."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Refactor toward idiomatic",
+          "items": [
+            { "title": "Replace sync I/O", "body": "GetAsync, OpenAsync, ReadAsync — module 13." },
+            { "title": "Simplify branching", "body": "Switch expressions and patterns — module 11." },
+            { "title": "Immutable DTOs", "body": "record with init-only properties." },
+            { "title": "Seal and compose", "body": "Inject interfaces; avoid deep inheritance trees." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Idiomatic service shape",
+            "source": "flowchart TD\n  A[Minimal API endpoint] --> B[Application service sealed]\n  B --> C[async Redis or DB]\n  B --> D[record DTOs]\n  B --> E[Result not exception for expected miss]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Guard clauses and early return",
+            "code": "public async Task<User?> GetUserAsync(string id, CancellationToken ct)\n{\n    if (string.IsNullOrWhiteSpace(id))\n        throw new ArgumentException(\"Id required\", nameof(id));\n\n    var cached = await _cache.GetAsync<User>(CacheKey(id), ct);\n    if (cached is not null)\n        return cached;\n\n    return await _db.Users.FindAsync(id, ct);\n}",
+            "explanation": "Validate first, happy path reads top-to-bottom without deep nesting."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Pattern over nested if",
+            "code": "public IActionResult MapError(Exception ex) => ex switch\n{\n    NotFoundException n => NotFound(n.Message),\n    ValidationException v => BadRequest(v.Errors),\n    OperationCanceledException => StatusCode(499),\n    _ => Problem(\"Unexpected error\")\n};",
+            "explanation": "Switch expression exhaustiveness is clearer than if-else chains for typed errors."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Constructor injection",
+            "code": "public sealed class OrderService(IOrderRepository repo, ICache cache)\n{\n    public async Task SubmitAsync(OrderDto order, CancellationToken ct) =>\n        await repo.SaveAsync(order, ct);\n}",
+            "explanation": "Primary constructor (C# 12) plus sealed class — modern idiomatic service registration target."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Style parallels",
+          "headers": ["Habit", "Idiomatic C#", "Idiomatic TypeScript"],
+          "rows": [
+            ["Immutability", "record, init", "readonly, const, satisfies"],
+            ["Async I/O", "async/await throughout", "async/await, no sync fs in handlers"],
+            ["Naming", "PascalCase public, _camel private field", "camelCase vars, PascalCase types"],
+            ["Errors", "Result or typed exceptions", "Result types or neverthrow patterns"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Java-style GetUser/setUser instead of User property. public fields on DTOs. God classes with 2000 lines. Blocking async (.Result) in ASP.NET handlers."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Follow .NET identifier conventions; the compiler will not do it for you.",
-    "Prefer the modern defaults (NRT, file-scoped namespaces, patterns, spans) over demonstrating every new keyword.",
-    "Senior code hides power (unsafe, reflection, public surface) behind small, named boundaries."
+    "Idiomatic = async I/O, sealed classes, records, patterns, guard clauses.",
+    "Match BCL naming and composition patterns.",
+    "Readability and failure modes beat clever one-liners."
   ],
   "commonPitfalls": [
-    "Hungarian notation or Java `getFoo` on public C# properties.",
-    "Primary constructor parameters on a record named like locals (`firstName`) so the public property looks wrong.",
-    "Enabling every C# 14 syntax in a file that still uses `ArrayList`."
+    "Sync I/O in async-named methods.",
+    "Deep inheritance instead of composition.",
+    "Non-descriptive abbreviations in public APIs."
   ],
   "relatedTopicIds": [
     "csharp-18-domain-dto-record",
@@ -46,18 +157,18 @@
   ],
   "jsTsCorrelations": [
     {
-      "language": "javascript",
-      "concept": "camelCase public API",
-      "note": "JS/TS public fields are typically camelCase. C# public members are PascalCase. Do not “make it look like Node” in a C# library consumed by other C#.",
-      "futureTopicSlug": "javascript/style/naming"
+      "language": "typescript",
+      "concept": "Clean TypeScript habits",
+      "note": "Early return, readonly data, async handlers — same readability goals as idiomatic C# services.",
+      "futureTopicSlug": "typescript/style"
     }
   ],
   "officialSources": [
     {
-      "title": "Identifier names — rules and conventions",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names"
+      "title": "C# coding conventions",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "redis-cache"
+  "scenarioTag": "redis-cache",
+  "animationHint": "compare"
 }

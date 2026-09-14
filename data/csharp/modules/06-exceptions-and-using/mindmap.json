@@ -1,26 +1,52 @@
 {
   "moduleId": "csharp-06-exceptions-and-using",
   "title": "Exceptions and using map",
-  "nodes": [
-    { "id": "root", "label": "Failure and cleanup" },
-    { "id": "exn", "label": "System.Exception", "parentId": "root" },
-    { "id": "try", "label": "try / catch / finally", "parentId": "root" },
-    { "id": "when", "label": "when filters", "parentId": "try" },
-    { "id": "tree", "label": "Hierarchy", "parentId": "exn" },
-    { "id": "worker", "label": "Worker catch vs bubble", "parentId": "tree" },
-    { "id": "throw", "label": "throw vs throw ex", "parentId": "root" },
-    { "id": "wrap", "label": "InnerException wrap", "parentId": "throw" },
-    { "id": "using", "label": "using / await using", "parentId": "root" },
-    { "id": "disp", "label": "IDisposable (SkiaSharp)", "parentId": "using" },
-    { "id": "later", "label": "Later modules", "parentId": "root" },
-    { "id": "fin", "label": "Finalizers → module 14", "parentId": "later" },
-    { "id": "task", "label": "Unobserved Task → module 13", "parentId": "later" }
+  "intro": "This module teaches how C# signals and handles failures. You will learn what an exception is, how try/catch/finally and when filters work, which types to catch at a worker boundary, why throw; preserves the stack trace, and how using calls IDisposable for deterministic cleanup of native resources like SkiaSharp surfaces.",
+  "overviewDiagram": {
+    "type": "mermaid",
+    "title": "Failure handling and cleanup flow",
+    "source": "flowchart TD\n  START[Normal code runs] --> THROW{Failure?}\n  THROW -->|no| OK[Continue]\n  THROW -->|yes| UNWIND[CLR unwinds stack]\n  UNWIND --> CATCH{Matching catch or when filter?}\n  CATCH -->|yes| HANDLE[Handler runs]\n  CATCH -->|no| DIE[Unhandled — thread ends]\n  HANDLE --> FINALLY[finally runs cleanup]\n  FINALLY --> RETHROW{throw; or continue?}\n  RETHROW -->|rethrow| UNWIND\n  RETHROW -->|done| OK\n  OK --> USING[using calls Dispose]\n  USING --> DONE[Resources released]"
+  },
+  "conceptCards": [
+    {
+      "id": "card-exception",
+      "title": "What is an exception",
+      "summary": "A typed object derived from System.Exception. throw signals failure; the CLR unwinds the stack until a catch matches or the thread dies.",
+      "example": "throw new ArgumentException(\"token missing\");",
+      "topicSlug": "what-is-an-exception"
+    },
+    {
+      "id": "card-trycatch",
+      "title": "try, catch, finally, and filters",
+      "summary": "try wraps risky code. catch handles specific types. finally always runs. when filters catch a subset without swallowing sibling failures.",
+      "example": "catch (HttpRequestException ex) when (ex.StatusCode == TooManyRequests)",
+      "topicSlug": "try-catch-finally"
+    },
+    {
+      "id": "card-hierarchy",
+      "title": "Exception hierarchy",
+      "summary": "Catch specific types at boundaries. Retry transient faults like TimeoutException. Let programming bugs bubble — never catch (Exception) { return; } in a worker.",
+      "example": "catch (TimeoutException ex) { Log(ex); throw; }",
+      "topicSlug": "exception-hierarchy"
+    },
+    {
+      "id": "card-throw",
+      "title": "throw versus throw ex",
+      "summary": "throw; rethrows and preserves StackTrace. throw ex; resets it — the classic bug. Wrap with InnerException once at a boundary.",
+      "example": "catch (JsonException ex) { throw new InvalidOperationException(\"invalid\", ex); }",
+      "topicSlug": "throw-vs-throw-ex"
+    },
+    {
+      "id": "card-using",
+      "title": "using and IDisposable",
+      "summary": "using is try/finally that calls Dispose. Essential for SkiaSharp and file streams. await using calls DisposeAsync for async resources.",
+      "example": "using var surface = SKSurface.Create(info);",
+      "topicSlug": "using-and-idisposable"
+    }
   ],
-  "edges": [
-    { "from": "exn", "to": "try", "label": "unwind stack" },
-    { "from": "try", "to": "worker", "label": "SQS: recover or DLQ" },
-    { "from": "throw", "to": "try", "label": "preserve stack with throw;" },
-    { "from": "using", "to": "try", "label": "compiler try/finally" },
-    { "from": "disp", "to": "fin", "label": "Dispose, not Finalize" }
-  ]
+  "revisionDiagram": {
+    "type": "mermaid",
+    "title": "Exceptions and using concept map",
+    "source": "mindmap\n  root((Failure and cleanup))\n    Exception typed CLR signal\n      throw requires Exception derived\n      Message StackTrace InnerException\n      Not for expected cache misses\n    try catch finally\n      Most derived catch first\n      when filter subset\n      finally always runs\n    Hierarchy choices\n      ArgumentException bad input\n      TimeoutException retry worker\n      OperationCanceledException shutdown\n      TypeInitializationException type dead\n    Rethrow rules\n      throw semicolon preserves stack\n      throw ex semicolon destroys stack\n      InnerException wrap once\n    using IDisposable\n      Compiler try finally Dispose\n      SkiaSharp native memory\n      await using DisposeAsync\n      Finalizers module 14"
+  }
 }

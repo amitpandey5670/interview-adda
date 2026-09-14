@@ -1,32 +1,143 @@
 {
   "id": "csharp-11-with-immutability",
   "slug": "with-immutability",
-  "title": "with expressions and immutability",
+  "title": "with expressions and immutability (non-destructive record updates)",
   "moduleId": "csharp-11-pattern-matching",
   "order": 4,
-  "hook": "Under high concurrency, copy a policy record with with and hand the snapshot to the worker. Do not mutate a shared scoring object while 999 submits land.",
+  "hook": "Under high concurrency, copy a scoring policy record with with and hand the snapshot to a worker — do not mutate a shared object while hundreds of submit requests land.",
   "sections": [
     {
-      "heading": "Records, copy, with",
-      "prose": "A record (class or struct) gives you value-based equality, a Deconstruct, and a copy constructor. with uses that copy constructor, then assigns the properties you name. The original instance is unchanged. init-only properties are settable during with. Ordinary classes do not get with unless you provide the copy machinery yourself. record struct copies the struct; there is no extra heap object unless nested references exist.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Snapshot a scoring policy for a submit burst",
-          "code": "public sealed record ScoringPolicy(int PassMark, bool AllowLate, DateTimeOffset? ClosesAt);\n\npublic ScoringPolicy FreezeForSubmit(ScoringPolicy live, DateTimeOffset utc)\n    => live with\n    {\n        AllowLate = false,\n        ClosesAt = utc\n    };\n\n// live is unchanged; workers receive frozen.",
-          "explanation": "Each submit path reads frozen. Updating live later does not change in-flight copies. That is the immutability bargain."
+          "type": "prose",
+          "text": "The with expression creates a copy of a record (or a record struct) and sets the properties you name. The original instance is unchanged. Records get a compiler-generated copy constructor, value-based equality, and Deconstruct support — with builds on that machinery. Ordinary classes do not support with unless you implement the copy constructor yourself."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "with expression",
+              "longForm": "with expression",
+              "plainDefinition": "Syntax that copies a record and overrides selected properties: var next = current with { Prop = value }.",
+              "example": "var frozen = policy with { AllowLate = false }; leaves policy unchanged."
+            },
+            {
+              "term": "Shallow copy",
+              "longForm": "shallow copy",
+              "plainDefinition": "A copy that duplicates top-level fields but shares references to nested objects like lists.",
+              "example": "with copies the List reference — mutating that list affects both copies unless you replace the list."
+            },
+            {
+              "term": "init accessor",
+              "longForm": "init accessor",
+              "plainDefinition": "A property setter that runs only during object initialization or in a with expression.",
+              "example": "public int PassMark { get; init; } can be set in with { PassMark = 70 }."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Shallow copy is the trap",
-      "prose": "If a record contains a List<string> of allowed LMS domains, with copies the reference. Mutating that list from two attempts is still a race. Nested records can be nested with expressions. For collections, prefer immutable types or copy the list explicitly in the with initializer. Pattern matching pairs with with: match a policy, then produce the next state as a new record instead of setting fields.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Nested with plus a copied list",
-          "code": "public sealed record LtiConsumer(string Issuer, List<string> Audiences);\n\npublic LtiConsumer GrantAudience(LtiConsumer consumer, string audience)\n    => consumer with\n    {\n        Audiences = [.. consumer.Audiences, audience]\n    };",
-          "explanation": "Collection expressions copy into a new list. consumer.Audiences.Add(audience) would mutate the shared list and defeat with."
+          "type": "prose",
+          "text": "Immutability reduces race conditions. When many threads read a scoring policy during an exam submit burst, snapshots via with let each worker see a stable value without locking every field write. Pattern matching pairs naturally with with: match a policy shape, then produce the next state as a new record instead of mutating fields in place."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Shallow copy trap",
+          "body": "If a record holds a List<string>, with copies the list reference. Use collection expressions or ToList() in the with initializer to replace the list: Audiences = [.. consumer.Audiences, newOne]."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "How with copies a record",
+          "items": [
+            {
+              "title": "Start from the source record",
+              "body": "The compiler calls the record's copy constructor with the existing instance."
+            },
+            {
+              "title": "Apply property overrides",
+              "body": "Each name in the with { } block assigns a new value on the copy via init accessors."
+            },
+            {
+              "title": "Return the new instance",
+              "body": "The original reference still points at the old values. Your variable now holds the copy."
+            },
+            {
+              "title": "Watch nested references",
+              "body": "Reference-type fields that were not listed in with still point at the same nested objects."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "with creates a shallow copy",
+            "source": "flowchart LR\n  A[Original record] --> B[Copy constructor]\n  B --> C[New record instance]\n  D[with block overrides] --> C\n  A -.->|unchanged| A\n  C --> E[Shared nested List ref unless replaced]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Snapshot a scoring policy for a submit burst",
+            "code": "public sealed record ScoringPolicy(int PassMark, bool AllowLate, DateTimeOffset? ClosesAt);\n\npublic ScoringPolicy FreezeForSubmit(ScoringPolicy live, DateTimeOffset utc)\n    => live with\n    {\n        AllowLate = false,\n        ClosesAt = utc\n    };\n\n// live is unchanged; workers receive frozen.",
+            "explanation": "FreezeForSubmit returns a new ScoringPolicy. live.AllowLate and live.ClosesAt stay as they were. Each worker thread can read frozen without coordinating writes on live."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Nested with plus a copied list",
+            "code": "public sealed record LtiConsumer(string Issuer, List<string> Audiences);\n\npublic LtiConsumer GrantAudience(LtiConsumer consumer, string audience)\n    => consumer with\n    {\n        Audiences = [.. consumer.Audiences, audience]\n    };",
+            "explanation": "The collection expression [.. consumer.Audiences, audience] builds a new list. consumer.Audiences.Add(audience) would mutate the shared list and defeat the purpose of with."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Pattern match then produce next state with with",
+            "code": "public sealed record AttemptState(string Status, int Score, bool Submitted);\n\npublic AttemptState OnScore(AttemptState state, int newScore) => state switch\n{\n    { Submitted: true } => state,\n    { Score: < 0 } => throw new InvalidOperationException(\"Cannot score unsubmitted attempt with negative placeholder.\"),\n    _ => state with { Score = newScore }\n};",
+            "explanation": "The switch expression matches shape with property patterns. The default arm returns a new AttemptState via with instead of mutating state.Score in place."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "JavaScript object spread — const next = { ...live, allowLate: false } — is also a shallow copy with the same nested-reference trap. The difference: C# records add value-based equality and a compiler-generated copy constructor, so with is type-safe and idiomatic. JavaScript has no built-in value equality for plain objects."
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling with and then mutating a nested List on the new instance when the original still shares that list. Assuming record equality compares nested lists by value — List<T> uses reference equality unless you customize. Using with on an ordinary class — it will not compile without copy machinery. Expecting deep copy — with is always shallow at the top level."
         }
       ]
     }
@@ -52,7 +163,7 @@
     {
       "language": "javascript",
       "concept": "Object spread",
-      "note": "const next = { ...live, allowLate: false } is a shallow copy, same trap as with. JS has no compiler-generated value equality on that object.",
+      "note": "const next = { ...live, allowLate: false } is a shallow copy, same trap as with. JavaScript has no compiler-generated value equality on that object.",
       "futureTopicSlug": "javascript/objects/spread"
     }
   ],

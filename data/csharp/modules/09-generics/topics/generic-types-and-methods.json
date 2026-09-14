@@ -1,36 +1,158 @@
 {
   "id": "csharp-09-generic-types-and-methods",
   "slug": "generic-types-and-methods",
-  "title": "Generic types and methods",
+  "title": "Generic types and methods (open types, closed types, inference)",
   "moduleId": "csharp-09-generics",
   "order": 2,
-  "hook": "A generic type names T on the type. A generic method names T on the method. The compiler infers method type arguments from the call; you still close types when you new them up.",
+  "hook": "A generic type puts the type parameter on the class or struct. A generic method puts it on the method itself. You close types when you construct them, and the compiler usually infers method type arguments from what you pass in.",
   "sections": [
     {
-      "heading": "Declaring and closing",
-      "prose": "class CacheClient<T> is an open generic. CacheClient<SessionDto> is closed. You can nest: Dictionary<string, List<Message>>. Static fields of CacheClient<T> are per closed T — CacheClient<int> and CacheClient<string> do not share a static dictionary. That fact has bitten more than one “global stats” counter. Generic methods live on ordinary or generic types: static void Print<T>(T value). At the call site Print(42) infers T as int. Sometimes inference fails (when T appears only in the return type); then you write Parse<Message>(json).",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Type plus method",
-          "code": "sealed class RedisCache<T>\n{\n    private readonly IDatabase _db;\n    public RedisCache(IDatabase db) => _db = db;\n\n    public void Set(string key, T value, TimeSpan ttl) =>\n        _db.StringSet(key, JsonSerializer.Serialize(value), ttl);\n}\n\nstatic TValue GetOrAdd<TKey, TValue>(\n    Dictionary<TKey, TValue> map,\n    TKey key,\n    Func<TKey, TValue> factory)\n    where TKey : notnull\n{\n    if (map.TryGetValue(key, out TValue? existing))\n        return existing;\n    TValue created = factory(key);\n    map[key] = created;\n    return created;\n}",
-          "explanation": "RedisCache<T> closes T at construction. GetOrAdd infers TKey/TValue from the dictionary. notnull on TKey matches Dictionary’s own constraint."
+          "type": "prose",
+          "text": "An open generic type still has an unbound type parameter — for example class CacheClient<T>. A closed generic type supplies a real type — CacheClient<SessionDto>. Generic methods work the same way: static void Print<T>(T value) is open; Print(42) closes T as int through type inference. You can nest generics: Dictionary<string, List<Message>>. Interfaces, structs, records, and delegates can all be generic."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "open generic",
+              "longForm": "open generic type",
+              "plainDefinition": "A generic type or method that still has an unbound type parameter like T.",
+              "example": "List<T> is open; you cannot new List<T>() without supplying T."
+            },
+            {
+              "term": "closed generic",
+              "longForm": "closed generic type",
+              "plainDefinition": "A generic type or method where every type parameter has been replaced with a concrete type.",
+              "example": "List<string> is a closed generic constructed from List<T>."
+            },
+            {
+              "term": "type inference",
+              "longForm": "generic type inference",
+              "plainDefinition": "The compiler deducing type arguments from method call arguments so you do not write them explicitly.",
+              "example": "Print(42) infers T as int without writing Print<int>(42)."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Inference and overloads",
-      "prose": "Inference uses arguments, not assignments (mostly). var x = Empty<int>(); needs the type argument because nothing is passed. Collection expressions and target typing (C# 12+) can close a generic from the left-hand side: List<string> names = [\"a\"];. Overloaded generic methods are a compiler puzzle; if the interview goes there, prefer simplifying signatures over memorizing spec tie-breakers."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Generic types let you build reusable components — caches, repositories, pipelines — without duplicating code per DTO. Static fields on a generic class are per closed type: CacheClient<int> and CacheClient<string> do not share the same static dictionary. That detail has bitten many \"global stats\" counters. Generic methods let you write one algorithm — GetOrAdd, Max, Parse — that works across types while constraints (covered in the next topic) tell the compiler what T can do."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to use a generic type versus a generic method",
+          "body": "Put T on the class when the whole object is about one type (RedisCache<T>). Put T on the method when only that operation needs it (Parse<T>(json)). Do not create a ten-parameter generic God-class — split responsibilities instead."
+        }
+      ]
     },
     {
-      "heading": "Interfaces, structs, records, delegates",
-      "prose": "IComparable<T>, IEnumerable<T>, Func<T, TResult>, Task<T>, EventHandler<TEventArgs> are generic. You can declare generic records and generic structs. A generic struct still lives on the stack when it is a local (subject to the usual lifting in async). Do not make a giant generic God-class that takes ten type parameters; that is a missed opportunity to split."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Declaring, closing, and calling",
+          "items": [
+            {
+              "title": "Declare an open generic",
+              "body": "Write class Foo<T> or static void Bar<T>(T value). T is a placeholder."
+            },
+            {
+              "title": "Close the type at use site",
+              "body": "new RedisCache<SessionDto>(db) binds T to SessionDto for that instance."
+            },
+            {
+              "title": "Call a generic method",
+              "body": "Pass arguments; the compiler infers T from them. Print(42) → T is int."
+            },
+            {
+              "title": "Specify explicitly when inference fails",
+              "body": "When T appears only in the return type, write Parse<Message>(json) because nothing in the arguments names T."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Open versus closed generic",
+            "source": "flowchart TD\n  A[Open: List T] -->|supply string| B[Closed: List string]\n  A -->|supply int| C[Closed: List int]\n  B --> D[Separate static fields per closed type]\n  C --> D"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Generic type plus generic method",
+            "code": "sealed class RedisCache<T>\n{\n    private readonly IDatabase _db;\n    public RedisCache(IDatabase db) => _db = db;\n\n    public void Set(string key, T value, TimeSpan ttl) =>\n        _db.StringSet(key, JsonSerializer.Serialize(value), ttl);\n}\n\nstatic TValue GetOrAdd<TKey, TValue>(\n    Dictionary<TKey, TValue> map,\n    TKey key,\n    Func<TKey, TValue> factory)\n    where TKey : notnull\n{\n    if (map.TryGetValue(key, out TValue? existing))\n        return existing;\n    TValue created = factory(key);\n    map[key] = created;\n    return created;\n}",
+            "explanation": "RedisCache<T> closes T at construction — one cache instance per value type. GetOrAdd is a generic method that infers TKey and TValue from the dictionary argument. The notnull constraint on TKey matches Dictionary's own requirement."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Static fields are per closed type",
+            "code": "class Counter<T>\n{\n    public static int Count;\n    public Counter() => Count++;\n}\n\n_ = new Counter<int>();\n_ = new Counter<int>();\n_ = new Counter<string>();\n\nConsole.WriteLine(Counter<int>.Count);    // 2\nConsole.WriteLine(Counter<string>.Count); // 1",
+            "explanation": "Counter<int> and Counter<string> each get their own static Count field. This is not one shared counter — a common interview trap."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Inference and explicit type arguments",
+            "code": "List<string> names = [\"alice\", \"bob\"];     // target-typed collection expression\nPrint(names[0]);                              // infers T = string\n\nT? Empty<T>() => default;\nstring s = Empty<string>();                 // must specify T — no argument to infer from\n\nstatic void Print<T>(T value) => Console.WriteLine(value);",
+            "explanation": "Inference uses call arguments. When T only appears in the return type, you must write Empty<string>(). Collection expressions and target typing (C# 12+) can close generics from the left-hand side."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Generic types and methods across languages",
+          "headers": ["Aspect", "C#", "TypeScript"],
+          "rows": [
+            ["Generic class", "Real run-time type per closed T", "Erased — no per-T static fields"],
+            ["Method inference", "From arguments, similar rules", "From arguments, similar rules"],
+            ["Multi-parameter", "Dictionary<TKey, TValue>", "Map<K, V> or Record<K, V>"],
+            ["Nested generics", "Dictionary<string, List<T>>", "Record<string, T[]> — structural only"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming static fields on Generic<T> are shared across all T — they are per closed type. Fighting inference instead of writing Foo<T>(...) explicitly when the compiler cannot deduce T. Putting T on the class when only one method needed it, creating unnecessary coupling."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Open versus closed generic types; static state is per closed type.",
-    "Generic methods infer from arguments; specify T when they cannot.",
-    "Dictionary<TKey, TValue> is the canonical multi-parameter generic."
+    "Generic methods infer type arguments from call arguments; specify T when inference fails.",
+    "Dictionary<TKey, TValue> is the canonical two-parameter generic."
   ],
   "commonPitfalls": [
     "Assuming static fields on Generic<T> are shared across all T.",
@@ -46,7 +168,7 @@
     {
       "language": "typescript",
       "concept": "generic functions and classes",
-      "note": "TS infers similarly from arguments. There is no per-T static field because there is no runtime T.",
+      "note": "TypeScript infers type arguments similarly from call arguments. There is no per-T static field at run time because generic parameters erase.",
       "futureTopicSlug": "typescript/generics/functions"
     }
   ],

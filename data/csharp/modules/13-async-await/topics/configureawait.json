@@ -1,32 +1,189 @@
 {
   "id": "csharp-13-configureawait",
   "slug": "configureawait",
-  "title": "ConfigureAwait and SynchronizationContext",
+  "title": "ConfigureAwait and SynchronizationContext (where await resumes)",
   "moduleId": "csharp-13-async-await",
   "order": 5,
   "hook": "await captures a context if one exists. In UI apps that context is the UI thread. In ASP.NET Core and background workers, it usually is not — but libraries you share still need ConfigureAwait(false).",
   "sections": [
     {
-      "heading": "What SynchronizationContext is for",
-      "prose": "SynchronizationContext is a hook that says ‘resume this continuation here.’ WinForms and WPF install one so that after an HTTP await you can touch a control. Classic ASP.NET (not Core) had one that re-entered the request. ASP.NET Core and generic hosts do not install a request SynchronizationContext; continuations run on thread-pool threads. That is why ConfigureAwait(false) does not change much inside a .NET 10 API controller, but it still matters in a NuGet library that might be called from a UI or from a custom context. ConfigureAwait(false) means: do not marshal back; run the continuation on the completing thread (typically the pool). ConfigureAwait(true) is the default for a naked await.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Library Redis helper without capturing context",
-          "code": "public static class TokenCache\n{\n    public static async Task<string?> GetAuthPayloadAsync(\n        IDatabase redis,\n        string sessionId,\n        CancellationToken cancellationToken)\n    {\n        var value = await redis.StringGetAsync(sessionId)\n            .ConfigureAwait(false);\n        cancellationToken.ThrowIfCancellationRequested();\n        return value.IsNullOrEmpty ? null : value.ToString();\n    }\n}",
-          "explanation": "A reusable helper must not resume on a captured UI or legacy ASP.NET context. The worker and Kestrel hosts already have none."
+          "type": "prose",
+          "text": "SynchronizationContext is a hook that says 'resume this continuation here.' WinForms and WPF install one so that after an HTTP await you can touch a control on the UI thread. Classic ASP.NET (not Core) had one that re-entered the request. ASP.NET Core and generic hosts do not install a request SynchronizationContext — continuations run on thread-pool threads. ConfigureAwait(false) means: do not marshal back; run the continuation on the completing thread (typically the pool). ConfigureAwait(true) is the default for a naked await."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "SynchronizationContext",
+              "plainDefinition": "A mechanism that determines which thread runs a continuation after await.",
+              "example": "WPF's DispatcherSynchronizationContext posts back to the UI thread.",
+              "longForm": "SynchronizationContext"
+            },
+            {
+              "term": "ConfigureAwait(false)",
+              "plainDefinition": "Tells await not to capture the current SynchronizationContext. Continuation runs on any pool thread.",
+              "example": "await redis.StringGetAsync(key).ConfigureAwait(false);",
+              "longForm": "ConfigureAwait(false)"
+            },
+            {
+              "term": "Context capture",
+              "plainDefinition": "The default behavior: await remembers the current SynchronizationContext and resumes on it.",
+              "example": "In WinForms, await resumes on the UI thread so you can update controls.",
+              "longForm": "Context capture"
+            },
+            {
+              "term": "Deadlock",
+              "plainDefinition": "A thread blocked in .Result waiting for a continuation that needs the same thread to run.",
+              "example": "UI thread calls .Result on a Task whose continuation needs the UI thread.",
+              "longForm": "Deadlock"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Deadlocks that still appear in interviews",
-      "prose": "The textbook deadlock is: UI or ASP.NET classic thread calls .Result on a Task whose continuation needs that same context to finish. The thread is blocked in Result; the continuation never runs. ASP.NET Core does not have that deadlock, which is why ‘we never ConfigureAwait’ is a common and incomplete answer. Say: Core apps have no sync context, so blocking is still a scalability bug, not that classic deadlock. Libraries targeting both UI and servers should ConfigureAwait(false) after every await that does not need the caller’s context. Do not sprinkle it in application code that immediately uses request-scoped ambient state unless you understand the hop."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The textbook deadlock: a UI or classic ASP.NET thread calls .Result on a Task whose continuation needs that same context to finish. The thread is blocked in Result; the continuation never runs. ASP.NET Core does not have that deadlock, which is why 'we never ConfigureAwait' is a common but incomplete answer. Reusable libraries targeting both UI and servers should ConfigureAwait(false) after every await that does not need the caller's context."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview answer template",
+          "body": "Say: 'Core apps have no sync context, so blocking is still a scalability bug, not that classic deadlock. Libraries targeting both UI and servers should ConfigureAwait(false) unless they must return to the caller's context.'"
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Where does await resume?",
+          "items": [
+            {
+              "title": "Check for SynchronizationContext",
+              "body": "At each await, the runtime checks if a SynchronizationContext is installed."
+            },
+            {
+              "title": "Default (ConfigureAwait true)",
+              "body": "If a context exists, post the continuation to it. UI thread, legacy ASP.NET request thread."
+            },
+            {
+              "title": "ConfigureAwait(false)",
+              "body": "Skip context capture. Run the continuation on the thread that completed the I/O."
+            },
+            {
+              "title": "No context (ASP.NET Core)",
+              "body": "Both paths behave the same — continuations run on pool threads regardless."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "ConfigureAwait decision",
+            "source": "flowchart TD\n  A[await completes] --> B{SynchronizationContext?}\n  B -->|None — ASP.NET Core| P[Resume on pool thread]\n  B -->|Present — UI / legacy ASP.NET| C{ConfigureAwait?}\n  C -->|true default| U[Post to context thread]\n  C -->|false| P\n  U --> D{Risk: caller blocked on Result?}\n  D -->|Yes| X[Deadlock]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Library Redis helper without capturing context",
+            "code": "public static class TokenCache\n{\n    public static async Task<string?> GetAuthPayloadAsync(\n        IDatabase redis,\n        string sessionId,\n        CancellationToken cancellationToken)\n    {\n        var value = await redis.StringGetAsync(sessionId)\n            .ConfigureAwait(false);\n        cancellationToken.ThrowIfCancellationRequested();\n        return value.IsNullOrEmpty ? null : value.ToString();\n    }\n}",
+            "explanation": "A reusable helper must not resume on a captured UI or legacy ASP.NET context. The worker and Kestrel hosts already have none."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Classic deadlock pattern",
+            "code": "// WinForms button click handler on UI thread:\nprivate void LoadData_Click(object sender, EventArgs e)\n{\n    // DEADLOCK: UI thread blocked in Result,\n    // continuation needs UI thread to finish\n    var data = LoadDataAsync().Result;\n    label.Text = data;\n}\n\nprivate async Task<string> LoadDataAsync()\n{\n    var response = await httpClient.GetStringAsync(url);\n    // continuation tries to post back to UI thread\n    return response;\n}",
+            "explanation": "The UI thread is blocked in .Result. The continuation needs the UI thread. Neither can proceed. Fix: await instead of .Result, or ConfigureAwait(false) in the library."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Capture values before ConfigureAwait(false)",
+            "code": "public async Task ProcessRequestAsync(HttpContext context)\n{\n    var userId = context.User.FindFirst(\"sub\")?.Value; // capture first\n\n    var data = await FetchDataAsync(userId!)\n        .ConfigureAwait(false);\n\n    // context may not be valid on this thread — use captured userId\n    await SaveAsync(userId!, data);\n}",
+            "explanation": "After ConfigureAwait(false), you may be on a different thread. Capture ambient state (HttpContext values) before the await."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Thread resumption models",
+          "headers": [
+            "Aspect",
+            "C# ConfigureAwait",
+            "JavaScript"
+          ],
+          "rows": [
+            [
+              "Thread hopping",
+              "Can resume on a different pool thread",
+              "Microtasks always on the same JS thread"
+            ],
+            [
+              "UI thread guarantee",
+              "Default await captures UI context",
+              "No concept — single JS thread"
+            ],
+            [
+              "Library best practice",
+              "ConfigureAwait(false) in libraries",
+              "No equivalent needed"
+            ],
+            [
+              "Deadlock risk",
+              ".Result + captured UI context",
+              "No deadlock — but blocking blocks the loop"
+            ],
+            [
+              "ASP.NET Core",
+              "No SynchronizationContext — both paths same",
+              "N/A"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Claiming ConfigureAwait(false) is required in every ASP.NET Core controller method. Using .Result in a library that later gets called from WinForms, recreating the classic deadlock. Capturing HttpContext after ConfigureAwait(false) and assuming you are still on the request thread. Sprinkling ConfigureAwait in application code without understanding why."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "SynchronizationContext, if present, is where await resumes by default.",
     "ASP.NET Core has no request SynchronizationContext; blocking is still wrong.",
-    "Reusable libraries should ConfigureAwait(false) unless they must return to the caller’s context."
+    "Reusable libraries should ConfigureAwait(false) unless they must return to the caller's context."
   ],
   "commonPitfalls": [
     "Claiming ConfigureAwait(false) is required in every ASP.NET Core controller method.",

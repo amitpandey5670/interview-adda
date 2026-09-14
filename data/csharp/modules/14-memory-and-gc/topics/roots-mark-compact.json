@@ -1,37 +1,178 @@
 {
   "id": "csharp-14-roots-mark-compact",
   "slug": "roots-mark-compact",
-  "title": "Roots, mark, and compact",
+  "title": "Roots, mark, and compact (how the GC finds live objects)",
   "moduleId": "csharp-14-memory-and-gc",
   "order": 3,
-  "hook": "The GC never asks ‘who still needs this object?’ It asks ‘what can still be reached from roots?’ Then it marks, fixes pointers, and slides survivors together.",
+  "hook": "The garbage collector starts from roots — stack slots, static fields, and handles — marks everything reachable, then compacts surviving objects so free memory is contiguous.",
   "sections": [
     {
-      "heading": "Roots are the starting set",
-      "prose": "Microsoft lists the usual roots: stack locals the JIT reports as live, CPU registers, static fields, GC handles, and the finalizer queue. Anything not reachable from that graph is garbage, even if some other dead object still points at it. Static caches of attempt payloads are roots until you remove the entry — a classic leak that looks like ‘the GC is broken.’ A static event handler holding a lambda over a large graph is the same bug. Before a collection, managed threads are suspended (with background/workstation variants overlapping some work). That is a stop-the-world phase for marking, even when much of the work is concurrent in modern runtimes.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "A static root that outlives every request",
-          "code": "public static class AttemptScratch\n{\n    private static readonly Dictionary<string, byte[]> Payloads = [];\n\n    public static void Remember(string attemptId, byte[] payload) =>\n        Payloads[attemptId] = payload;\n}",
-          "explanation": "Every byte[] stays reachable from a static dictionary. Gen 2 will never reclaim it. Use a sized MemoryCache with expiration instead."
+          "type": "prose",
+          "text": "A garbage collection pass has phases: find roots, mark reachable objects, optionally relocate survivors, and update references. Roots include thread stacks, static fields, interop handles (GCHandle), and the finalizer queue. Unmarked objects are reclaimed. Compaction moves live SOH objects together to reduce fragmentation."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Root",
+              "longForm": "GC root",
+              "plainDefinition": "A starting reference the collector treats as definitely live.",
+              "example": "A local variable still in scope is a root."
+            },
+            {
+              "term": "Mark",
+              "longForm": "Mark phase",
+              "plainDefinition": "Traverse the object graph from roots and flag reachable objects.",
+              "example": "If your cache dictionary is rooted, every value it holds stays live."
+            },
+            {
+              "term": "Compact",
+              "longForm": "Compaction phase",
+              "plainDefinition": "Move surviving objects to eliminate gaps on the SOH.",
+              "example": "After compacting, bump allocation can reuse one contiguous block."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Mark, relocate, compact",
-      "prose": "Marking builds the live set. Relocating updates references to where objects will live after they move. Compacting copies survivors toward the older end of the segment so allocation can bump a pointer again. If almost nothing died, compacting can be skipped. LOH compaction is the exception, not the rule. Interior pointers (refs into the middle of an object) are why the GC must update every managed reference, including those on stacks. After compact, the next allocation pointer sits after the last survivor. This is the picture you should draw on a whiteboard: roots → graph → dead holes → slide live objects → patch pointers."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Redis connection singleton that still references a huge deserialized object keeps that object alive even if no request uses it anymore. Pinning (fixed, GCHandleType.Pinned) prevents compaction around pinned objects — important for interop. Understanding roots explains mysterious memory growth."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "What interviewers want",
+          "body": "Describe mark-and-compact from roots. Mention stacks, statics, and handles. Note LOH may not compact every time."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "GC collection phases",
+          "items": [
+            {
+              "title": "Suspend or coordinate threads",
+              "body": "Workstation and server GC use different strategies; some phases run concurrently."
+            },
+            {
+              "title": "Scan roots",
+              "body": "Stacks, statics, pinned handles, CPU registers."
+            },
+            {
+              "title": "Mark reachable graph",
+              "body": "Follow references from roots to every live object."
+            },
+            {
+              "title": "Sweep and compact",
+              "body": "Free dead objects; move survivors on SOH; update pointers."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Mark and compact flow",
+            "source": "flowchart LR\n  R[Roots\\nstack statics handles] --> M[Mark phase\\nreachable objects]\n  M --> S[Sweep dead]\n  S --> C[Compact SOH\\nupdate references]\n  C --> F[Free contiguous space]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Static root keeps objects alive",
+            "code": "private static readonly Dictionary<string, byte[]> _cache = new();\n\npublic void Store(string key, byte[] data) => _cache[key] = data;\n// Entire byte[] graph rooted until removed from static dictionary",
+            "explanation": "Static fields are GC roots for the process lifetime unless cleared."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Pinning with GCHandle",
+            "code": "var arr = new byte[64];\nvar handle = GCHandle.Alloc(arr, GCHandleType.Pinned);\ntry\n{\n    IntPtr ptr = handle.AddrOfPinnedObject();\n    // pass ptr to native code\n}\nfinally\n{\n    handle.Free();\n}",
+            "explanation": "Pinned objects cannot move during compaction until the handle is freed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Stack root until scope ends",
+            "code": "public void ParseRow(ReadOnlySpan<char> line)\n{\n    var builder = new StringBuilder(line.Length);\n    builder.Append(line);\n    // builder is reachable from stack root until method returns\n}",
+            "explanation": "Locals in scope are roots. After return, builder becomes collectable if unreferenced."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Reachability models",
+          "headers": [
+            "Aspect",
+            "CLR mark-compact",
+            "JavaScript V8"
+          ],
+          "rows": [
+            [
+              "Roots",
+              "Stacks, statics, handles",
+              "Engine-internal roots; closures keep outer vars live"
+            ],
+            [
+              "Compaction",
+              "SOH compacted; LOH optional",
+              "V8 compacts/heaps differently per generation"
+            ],
+            [
+              "Pinning",
+              "GCHandle, fixed keyword",
+              "No direct equivalent in JS"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Static caches that never evict entries. Pinning more than necessary and fragmenting the heap. Assuming GC will collect an object still referenced from an event handler closure."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Reachability from roots, not ‘I am done with this variable in my head.’",
-    "Statics, caches, and event handlers are the leaks that survive gen 2.",
-    "Compact restores bump allocation; LOH often skips that copy."
+    "GC starts from roots: stacks, statics, handles.",
+    "Mark follows references; compact moves survivors on SOH.",
+    "Pinning blocks compaction for that object."
   ],
   "commonPitfalls": [
-    "Growing a static Dictionary as a Redis ‘backup’ and blaming GC for RSS.",
-    "Assuming unused fields are collected while the parent object is still rooted.",
-    "Pinning large buffers across an await, which blocks compact for that object."
+    "Long-lived static dictionaries holding large values.",
+    "Forgetting to Free() a GCHandle.",
+    "Believing unreachable cyclic graphs need reference counting — CLR GC handles cycles."
   ],
   "relatedTopicIds": [
     "csharp-14-stack-heap-layout",
@@ -41,8 +182,8 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Mark-sweep / mark-compact in V8",
-      "note": "V8 also marks from roots (stack, handles, globals). Old-space compaction and concurrent marking exist, but you do not get CLR-style generations 0/1/2 as a public tuning model.",
+      "concept": "Reachability",
+      "note": "JS engines also trace from roots. Closures and globals are common hidden roots in Node services.",
       "futureTopicSlug": "javascript/runtime/gc"
     }
   ],
@@ -52,6 +193,6 @@
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "redis-cache"
+  "scenarioTag": "redis-cache",
+  "animationHint": "flow"
 }

@@ -1,37 +1,163 @@
 {
   "id": "csharp-15-high-concurrency-scenario",
   "slug": "high-concurrency-scenario",
-  "title": "199 to 999 users and Redis stampede",
+  "title": "High concurrency scenario (199 to 999 users and cache stampede)",
   "moduleId": "csharp-15-concurrency-and-threading",
   "order": 5,
-  "hook": "The attempt-submit path that was fine at 199 concurrent users fails at 999 in a specific way: every request misses the cache together, stampedes Redis or the origin, and if you ‘fixed’ it with a lock around I/O, you serialized the entire fleet.",
+  "hook": "When traffic jumps from 199 to 999 concurrent users, a cold Redis key can trigger a cache stampede — hundreds of threads miss cache and hammer the database at once. Fix it with single-flight loading, semaphores, and never holding locks across I/O.",
   "sections": [
     {
-      "heading": "What breaks at 999",
-      "prose": "At 199 concurrent submits, a 5 ms Redis GET and a rare miss to the origin hide a lot of sins: a static Dictionary, a lock around the miss, a sync-over-async client. At 999, misses cluster after TTL expiry (especially a deploy that flushes keys). Thread-pool injection lags. Server GC sees a gen-0 spike from per-request buffers. A lock(_gate) around StringGetAsync either deadlocks on await or, if you block, makes 999 users share one round-trip at a time. The fix is single-flight per cache key: the first miss creates a Task that fills Redis; everyone else awaits that Task. Mutation of the in-flight map uses ConcurrentDictionary or a tiny lock that does not include the I/O. TTL jitter (expiry plus random 0–30s) stops lockstep expiry. SemaphoreSlim(8) can cap origin load if the fill is a database, still without holding a Monitor during the query.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Single-flight Redis fill without locking I/O",
-          "code": "public sealed class AttemptCache(IDatabase redis)\n{\n    private readonly ConcurrentDictionary<string, Task<string?>> _inflight = new();\n\n    public Task<string?> GetAsync(string attemptId, CancellationToken cancellationToken)\n    {\n        return _inflight.GetOrAdd(attemptId, id => FillAsync(id, cancellationToken));\n    }\n\n    private async Task<string?> FillAsync(string attemptId, CancellationToken cancellationToken)\n    {\n        try\n        {\n            var hit = await redis.StringGetAsync(attemptId);\n            if (!hit.IsNullOrEmpty)\n            {\n                return hit.ToString();\n            }\n\n            var origin = await LoadOriginAsync(attemptId, cancellationToken);\n            await redis.StringSetAsync(attemptId, origin, TimeSpan.FromSeconds(30 + Random.Shared.Next(30)));\n            return origin;\n        }\n        finally\n        {\n            _inflight.TryRemove(attemptId, out _);\n        }\n    }\n}",
-          "explanation": "GetOrAdd still can start two fills in a tight race; for interviews mention CompareExchange of a Task or a keyed SemaphoreSlim(1) if the origin must run exactly once. Never lock around the awaits."
+          "type": "prose",
+          "text": "A cache stampede happens when many parallel requests discover the same cache miss and all load the backing store simultaneously. Single-flight (also called request coalescing) ensures only one loader runs per key while others await the same Task. SemaphoreSlim limits outbound database connections. Combine with async I/O (module 13), allocation awareness (module 14), and concurrent collections from this module."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Cache stampede",
+              "longForm": "Cache stampede (thundering herd)",
+              "plainDefinition": "Many clients miss cache at once and overload the origin data source.",
+              "example": "999 users request profile/42 when Redis key expired."
+            },
+            {
+              "term": "Single-flight",
+              "longForm": "Single-flight loading",
+              "plainDefinition": "Deduplicate in-flight loads so one fetch satisfies many waiters.",
+              "example": "ConcurrentDictionary<string, Task<User>> tracks ongoing loads per key."
+            },
+            {
+              "term": "Thundering herd",
+              "longForm": "Thundering herd problem",
+              "plainDefinition": "Many workers wake or proceed at once after a shared event.",
+              "example": "All threads pass cache miss check before any sets Redis."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "How this sits next to async and GC",
-      "prose": "Module 13 already told you to await Redis and pass CancellationToken so a shutdown at 999 in-flight submits cancels cleanly. Module 14 told you not to allocate a 200 KB payload per miss on the LOH. This module adds: do not serialize those awaits with a lock, do not Task.Run the GET, and do not use a process-wide Mutex. If SkiaSharp preview generation is on the same path, push it through a bounded Channel so CPU work cannot take all pool threads from I/O completions. The senior sentence: scale from 199 to 999 is cache coherency plus pool health plus GC, not ‘add more locks.’"
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "This is a classic senior interview scenario tying async, locking, caching, and LINQ deferred execution together. Wrong fixes — global lock around Redis get and DB query — serialize all keys and destroy throughput. Right fixes — per-key single-flight, short-lived in-memory gate, Redis SET NX, or stale-while-revalidate."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview story arc",
+          "body": "Describe the spike, measure DB connection count, implement single-flight with ConcurrentDictionary of Task, add SemaphoreSlim on DB pool, verify allocation rate did not spike from ToList on hot path."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Surviving a traffic spike",
+          "items": [
+            {
+              "title": "Detect stampede",
+              "body": "Redis miss rate and DB connection count spike together."
+            },
+            {
+              "title": "Coalesce per key",
+              "body": "First miss starts Task; subsequent misses await same Task."
+            },
+            {
+              "title": "Limit DB fan-out",
+              "body": "SemaphoreSlim caps concurrent queries even across keys."
+            },
+            {
+              "title": "Warm or stagger expiry",
+              "body": "Jitter TTL; background refresh before expiry."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Single-flight cache load",
+            "source": "sequenceDiagram\n  participant R1 as Request 1\n  participant R2 as Request 2\n  participant SF as Single-flight\n  participant DB as Database\n  R1->>SF: miss key K\n  SF->>DB: start load K\n  R2->>SF: miss key K\n  SF-->>R2: await same Task\n  DB-->>SF: result\n  SF-->>R1: result\n  SF-->>R2: result"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Single-flight with ConcurrentDictionary",
+            "code": "private readonly ConcurrentDictionary<string, Task<User?>> _inflight = new();\n\npublic async Task<User?> GetUserAsync(string id, CancellationToken ct)\n{\n    var cached = await _redis.GetAsync<User>(\"user:\" + id, ct);\n    if (cached is not null) return cached;\n\n    var task = _inflight.GetOrAdd(id, static (key, self) => self.LoadAndCacheAsync(key), this);\n    try { return await task; }\n    finally { _inflight.TryRemove(id, out _); }\n}",
+            "explanation": "GetOrAdd ensures one LoadAndCacheAsync per id at a time. Others await the shared Task."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "DB throttle semaphore",
+            "code": "private readonly SemaphoreSlim _dbGate = new(32);\n\nprivate async Task<User?> LoadAndCacheAsync(string id)\n{\n    await _dbGate.WaitAsync();\n    try\n    {\n        var user = await _db.Users.FindAsync(id);\n        await _redis.SetAsync(\"user:\" + id, user, TimeSpan.FromMinutes(5));\n        return user;\n    }\n    finally { _dbGate.Release(); }\n}",
+            "explanation": "Even with single-flight per key, many keys can still hit DB — cap total concurrent queries."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Anti-pattern: lock across Redis",
+            "code": "// BAD — serializes all cache access\nlock (_global)\n{\n    var hit = _redis.Get<User>(key); // sync block\n    if (hit is null)\n        hit = _db.Load(key);         // still inside lock\n    return hit;\n}",
+            "explanation": "Global lock plus blocking I/O destroys concurrency. Never hold locks across network calls."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Stampede mitigation",
+          "headers": ["Technique", "C# service", "Node.js service"],
+          "rows": [
+            ["Single-flight", "ConcurrentDictionary<Task>", "Map of in-flight Promises"],
+            ["Limit concurrency", "SemaphoreSlim", "p-limit npm package"],
+            ["Distributed lock", "Redis RedLock patterns", "Same Redis patterns"],
+            ["Async I/O", "await Redis/DB", "await redis.get / prisma"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Global lock on cache path. Forgetting to remove completed entries from _inflight — memory leak of Task references. Materializing entire user list with LINQ ToList on every miss. Ignoring CancellationToken when coalesced waiters cancel."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Stampede: thundering herd on TTL or cold cache. Single-flight a shared Task per key.",
-    "Never lock across Redis. Lock or ConcurrentDictionary only for the in-flight map.",
-    "Jitter TTLs, bound CPU offload, watch thread-pool starvation and LOH together."
+    "Cache stampede: many parallel misses overload the origin.",
+    "Single-flight coalesces in-flight loads per key.",
+    "Never lock across Redis, HTTP, or database I/O."
   ],
   "commonPitfalls": [
-    "lock around the entire GetOrCreate including HTTP.",
-    "MemoryCache without stampede protection (GetOrCreate is not single-flight across all versions/patterns).",
-    "Flushing all Redis keys on deploy, guaranteeing a herd."
+    "Global lock around cache and DB.",
+    "No semaphore on total DB concurrency.",
+    "Synchronous Redis in async API."
   ],
   "relatedTopicIds": [
     "csharp-13-cancellation-tokens",
@@ -43,22 +169,18 @@
   ],
   "jsTsCorrelations": [
     {
-      "language": "javascript",
-      "concept": "Promise memoization for in-flight fetches",
-      "note": "A Map<string, Promise<T>> in Node is the same single-flight idea. The JS version cannot data-race the Map on one thread, but it can still stampede if you forget to store the Promise before awaiting.",
-      "futureTopicSlug": "javascript/async/inflight-cache"
+      "language": "typescript",
+      "concept": "Promise deduplication",
+      "note": "Storing Map<string, Promise<T>> for in-flight loads is the same single-flight pattern as ConcurrentDictionary<string, Task<T>>.",
+      "futureTopicSlug": "typescript/patterns/single-flight"
     }
   ],
   "officialSources": [
     {
       "title": "Managed threading best practices",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
-    },
-    {
-      "title": "Asynchronous programming with async and await",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "high-concurrency"
+  "scenarioTag": "high-concurrency",
+  "animationHint": "flow"
 }

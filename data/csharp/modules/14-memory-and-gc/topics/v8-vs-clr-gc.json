@@ -1,37 +1,164 @@
 {
   "id": "csharp-14-v8-vs-clr-gc",
   "slug": "v8-vs-clr-gc",
-  "title": "V8 GC versus CLR GC",
+  "title": "V8 garbage collection versus CLR garbage collection (comparison)",
   "moduleId": "csharp-14-memory-and-gc",
   "order": 7,
-  "hook": "Both engines are generational tracing collectors. The knobs, the large-object story, and the threading model are where a senior answer splits.",
+  "hook": "Both V8 (JavaScript) and the Common Language Runtime (CLR) use generational garbage collection, but they differ in tuning knobs, large-object handling, and how async and threads interact with memory pressure.",
   "sections": [
     {
-      "heading": "Shared ideas",
-      "prose": "V8 and the CLR both allocate in a nursery (V8 new space, CLR gen 0), promote survivors to an old generation, mark from roots, and compact or sweep. Both pause mutators for at least some phases. Both struggle when you keep large object graphs from globals or statics. A Redis-sized buffer in Node is a typed array or Buffer; in CLR it is a byte[] that may sit on the LOH. Closures retain graphs in both heaps. That is enough to say they are cousins. It is not enough to say they are the same GC.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "javascript",
-          "label": "Same leak shape, different heap",
-          "code": "const payloads = new Map();\nfunction remember(attemptId, bytes) {\n  payloads.set(attemptId, bytes);\n}",
-          "explanation": "A module-level Map in Node is a root, like a static Dictionary in C#. Neither GC will free entries you still reference."
+          "type": "prose",
+          "text": "V8 divides the JavaScript heap into young and old generations with incremental and concurrent collection. The CLR divides the managed heap into generations 0–2 plus a Large Object Heap (LOH). V8 runs mostly in a single-threaded event loop per isolate; the CLR coordinates multiple threads with server or workstation GC. Neither gives you manual free() for ordinary objects — both trace from roots."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "V8",
+              "longForm": "V8 JavaScript engine",
+              "plainDefinition": "Google's JavaScript engine used in Chrome and Node.js with generational GC.",
+              "example": "Node.js runs your TypeScript-compiled JavaScript on V8."
+            },
+            {
+              "term": "Isolate",
+              "longForm": "V8 isolate",
+              "plainDefinition": "An isolated V8 instance with its own heap and event loop context.",
+              "example": "Each Node worker thread has its own isolate."
+            },
+            {
+              "term": "Generational hypothesis",
+              "longForm": "Generational garbage collection hypothesis",
+              "plainDefinition": "Most objects die young, so collecting young generations often is efficient.",
+              "example": "Both V8 nursery and CLR gen 0 exploit this."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Where they diverge",
-      "prose": "The CLR exposes generations 0/1/2, SOH versus LOH, workstation versus server GC, and DATAS. V8 uses scavenge in new space, concurrent marking in old space, and incremental sweeping; operators set --max-old-space-size, not gcServer. V8’s main JS heap is tightly bound to one JS thread; worker threads have their own isolates. The CLR heap is process-wide and many managed threads allocate into it (server GC: one heap per CPU). CLR finalizers run on a dedicated thread; JS FinalizationRegistry callbacks are queued as tasks on the event loop. CLR can compact the LOH on demand; V8’s handling of large objects is internal. When an interviewer asks ‘how is GC different from Node?’, lead with: same reachability idea, different generation layout, different threading, different production knobs, and Dispose/SafeHandle has no exact Node equivalent besides explicit close."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "If you come from Node, you might expect one heap and --max-old-space-size. A .NET API on server GC has multiple heaps and explicit LOH behavior. Async in JavaScript does not free the event loop thread the same way C# async frees thread-pool threads — but both can still allocate heavily on hot paths. Interviewers want you to compare models, not claim one engine has no GC."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Bridge sentence for interviews",
+          "body": "Both are tracing generational GCs. CLR adds server GC, LOH, and IDisposable for native resources. V8 tuning is coarser from application code."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Side-by-side mental model",
+          "items": [
+            {
+              "title": "Allocation",
+              "body": "JS object literals and closures on V8 heap; C# new on CLR managed heap."
+            },
+            {
+              "title": "Young collection",
+              "body": "V8 scavenges nursery; CLR collects gen 0 SOH."
+            },
+            {
+              "title": "Promotion",
+              "body": "Survivors move to old gen in V8 or gen 1/2 in CLR."
+            },
+            {
+              "title": "Large objects",
+              "body": "CLR LOH at ~85 KB; V8 uses different heuristics for large TypedArrays and buffers."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "V8 vs CLR GC",
+            "source": "flowchart LR\n  subgraph V8[\"V8 / Node\"]\n    V1[Young gen] --> V2[Old gen]\n    V3[Single isolate heap]\n  end\n  subgraph CLR[\"CLR / .NET\"]\n    C1[Gen 0 SOH] --> C2[Gen 2 + LOH]\n    C3[Server GC multi-heap]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "CLR allocation and generation",
+            "code": "var objects = new List<object>();\nfor (int i = 0; i < 10_000; i++)\n    objects.Add(new byte[100]); // small SOH objects\nGC.Collect(0); // demo only — not for production\nConsole.WriteLine($\"Gen 0 collections: {GC.CollectionCount(0)}\");",
+            "explanation": "Many small allocations stress gen 0. Production code should not call GC.Collect."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "V8 allocation pattern (Node)",
+            "code": "const objects = [];\nfor (let i = 0; i < 10000; i++)\n  objects.push(Buffer.alloc(100));\n// V8 young gen collects short-lived buffers\n// Tune with NODE_OPTIONS=--max-old-space-size=512",
+            "explanation": "Node Buffer allocations live on the V8 heap. Tuning is mainly heap size, not server/workstation modes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Native resources only in CLR",
+            "code": "await using var conn = new NpgsqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable for native DB handles — no direct V8 equivalent",
+            "explanation": "CLR apps often pair GC with explicit Dispose for unmanaged resources. JS relies on GC plus addon-specific cleanup."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "V8 vs CLR at a glance",
+          "headers": ["Aspect", "CLR GC", "V8 GC"],
+          "rows": [
+            ["Generations", "0, 1, 2 + LOH", "Young + old (+ incremental)"],
+            ["Service tuning", "Server GC, DATAS, heap limits", "max-old-space-size, mostly opaque"],
+            ["Threads", "Multi-threaded server GC", "Per-isolate; worker threads separate heaps"],
+            ["Native cleanup", "IDisposable / IAsyncDisposable", "Addon .destroy() or finalization"],
+            ["Async model", "Task frees thread pool threads", "Event loop concurrency, not OS threads per await"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Claiming JavaScript has no GC. Assuming CLR LOH rules apply to V8 buffers. Ignoring IDisposable because 'GC will handle it' for native wrappers."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Both: nursery, old generation, roots, mark, leaks via globals.",
-    "CLR: gen 0/1/2, LOH, server GC, process-wide heaps, finalizer thread.",
-    "V8: isolate per worker, --max-old-space-size, no IDisposable story for native addons other than explicit lifetime."
+    "Both V8 and CLR use generational tracing GC.",
+    "CLR adds server GC, LOH, and explicit native disposal patterns.",
+    "Node tuning is heap size; .NET tuning includes GC mode and container limits."
   ],
   "commonPitfalls": [
-    "Saying Node has no GC generations.",
-    "Claiming server GC exists in V8 under another name.",
-    "Equating Isolate.Dispose in Node with CLR Dispose of a bitmap — different layers."
+    "Treating V8 and CLR heaps as identical.",
+    "Forgetting native resources need Dispose in .NET.",
+    "Overstating async as 'no allocations' in either runtime."
   ],
   "relatedTopicIds": [
     "csharp-14-generations-soh-loh",
@@ -42,15 +169,25 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "V8 scavenger and old-space concurrent mark",
-      "note": "Use this topic as the pair for a Node GC deep dive: new-space scavenge versus CLR gen 0, old-space versus gen 2, and heap size flags versus GCHeapHardLimit.",
+      "concept": "V8 garbage collection",
+      "note": "V8 uses generational, incremental, and concurrent collection. You tune Node with heap size flags, not server/workstation GC.",
       "futureTopicSlug": "javascript/runtime/gc"
+    },
+    {
+      "language": "typescript",
+      "concept": "Promises vs Task memory story",
+      "note": "Both async models allocate continuation objects. C# also allocates async state machines; JS allocates Promise reactions.",
+      "futureTopicSlug": "typescript/async/promises"
     }
   ],
   "officialSources": [
     {
-      "title": "Fundamentals of garbage collection",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+      "title": ".NET garbage collection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/"
+    },
+    {
+      "title": "V8 garbage collection",
+      "url": "https://v8.dev/blog/trash-talk"
     }
   ],
   "animationHint": "compare"

@@ -1,38 +1,184 @@
 {
   "id": "csharp-12-query-vs-method-syntax",
   "slug": "query-vs-method-syntax",
-  "title": "Query syntax versus method syntax",
+  "title": "Query syntax versus method syntax (two spellings of LINQ)",
   "moduleId": "csharp-12-linq",
   "order": 1,
-  "hook": "from row in csv where ... select is not SQL. The compiler rewrites it to Where and Select on whatever sequence you gave it.",
+  "hook": "Language Integrated Query (LINQ) lets you filter and transform collections with either SQL-like keywords or chained method calls. The C# compiler rewrites both spellings into the same method calls — there is no performance difference.",
   "sections": [
     {
-      "heading": "Three parts of a query, two spellings",
-      "prose": "Microsoft’s introduction is still the interview scaffold: obtain a source, create a query, execute the query. Creating the query does not hit the source. Query syntax leads with from so the range variable is in scope for where and select — the opposite order of SQL. Method syntax is a chain of extension members. The C# spec defines the translation; you should not claim one is faster. Readability decides. Count, ToList, and First have no from-clause spelling; you append them as methods either way.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Same CSV filter, both spellings",
-          "code": "string[] rows = [\"att,pass,82\", \"att,fail,41\", \"hdr,ignore,0\"];\n\nIEnumerable<string> q =\n    from row in rows\n    let parts = row.Split(',')\n    where parts[0] == \"att\" && int.Parse(parts[2]) >= 50\n    select parts[1];\n\nIEnumerable<string> m = rows\n    .Select(row => row.Split(','))\n    .Where(parts => parts[0] == \"att\" && int.Parse(parts[2]) >= 50)\n    .Select(parts => parts[1]);",
-          "explanation": "let becomes a transparent identifier, implemented as an extra Select. Execution still waits for foreach or a materializing operator."
+          "type": "prose",
+          "text": "LINQ is a set of operators and language clauses that query any sequence implementing IEnumerable<T> or IQueryable<T>. You can write queries in two styles: query syntax (from … where … select) or method syntax (a chain of .Where, .Select, and similar extension methods). The compiler translates query syntax into method calls. Both styles produce the same deferred execution plan. Creating a query does not touch the source data — execution waits until you enumerate or call an immediate operator like Count or ToList."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "LINQ",
+              "shortForm": "LINQ",
+              "longForm": "Language Integrated Query",
+              "plainDefinition": "A C# feature that lets you write queries over collections using either keyword syntax or method chains.",
+              "example": "from row in rows where row.Score > 50 select row.Name"
+            },
+            {
+              "term": "Query syntax",
+              "plainDefinition": "SQL-inspired keywords (from, where, select, join) that the compiler rewrites into method calls.",
+              "example": "from x in items where x.Active select x.Name",
+              "longForm": "Query syntax"
+            },
+            {
+              "term": "Method syntax",
+              "plainDefinition": "A chain of extension methods like Where, Select, and OrderBy on a sequence.",
+              "example": "items.Where(x => x.Active).Select(x => x.Name)",
+              "longForm": "Method syntax"
+            },
+            {
+              "term": "Range variable",
+              "plainDefinition": "The loop variable introduced by from (e.g., row in rows). It is in scope for where and select.",
+              "example": "from row in rows — row is the range variable",
+              "longForm": "Range variable"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Mixing and translation",
-      "prose": "You can write (from x in xs where p(x) select x).ToList(). Nested from becomes SelectMany. group … by … becomes GroupBy. join … on … equals … becomes Join; into makes GroupJoin. If the source is IQueryable, those methods are Queryable’s overloads that take expression trees. The syntax on the page looks identical. That identical look is the trap the IQueryable topic unpacks.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Query syntax plus a method that has no keyword",
-          "code": "var passing = (from row in rows\n               where row.Contains(\"pass\", StringComparison.Ordinal)\n               select row).Count();",
-          "explanation": "Count is immediate. The where/select plan runs once inside Count. There is no query-syntax count clause."
+          "type": "prose",
+          "text": "Knowing both spellings lets you read any LINQ code and choose the style that is clearest. Query syntax puts the range variable first (from row in rows), which is the opposite of SQL's SELECT-first order — a common source of confusion. Method syntax is required for operators that have no keyword equivalent: Count, Any, ToList, ElementAt, and SelectMany overloads with an index. In interviews, saying query syntax is \"SQL\" or faster than methods is a red flag. The real decision is readability."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When interviewers ask which style to use",
+          "body": "Say: \"They compile to the same thing. I use query syntax for multi-clause joins and groupings, and method syntax when I need operators without keywords or index overloads.\""
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From query text to execution",
+          "items": [
+            {
+              "title": "Obtain a source",
+              "body": "Start with any IEnumerable<T> or IQueryable<T> — an array, List, or database query."
+            },
+            {
+              "title": "Build a query (deferred)",
+              "body": "Write query or method syntax. The compiler rewrites keywords to Where, Select, GroupBy, Join, and SelectMany calls. No data is read yet."
+            },
+            {
+              "title": "Execute the query",
+              "body": "foreach, ToList, Count, First, or any immediate operator runs the plan against the current source."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Query syntax compiles to method syntax",
+            "source": "flowchart LR\n  A[Query syntax\\nfrom x in xs\\nwhere p\\nselect f] --> B[C# compiler]\n  B --> C[Method syntax\\nxs.Where(p).Select(f)]\n  C --> D[IEnumerable plan]\n  D --> E[foreach / ToList / Count]\n  E --> F[Results]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same filter, both spellings",
+            "code": "string[] rows = [\"att,pass,82\", \"att,fail,41\", \"hdr,ignore,0\"];\n\n// Query syntax — from comes first so row is in scope\nIEnumerable<string> query =\n    from row in rows\n    let parts = row.Split(',')\n    where parts[0] == \"att\" && int.Parse(parts[2]) >= 50\n    select parts[1];\n\n// Method syntax — same logic as a chain\nIEnumerable<string> method = rows\n    .Select(row => row.Split(','))\n    .Where(parts => parts[0] == \"att\" && int.Parse(parts[2]) >= 50)\n    .Select(parts => parts[1]);",
+            "explanation": "let becomes an extra Select with a transparent identifier. Both variables store a deferred plan — neither runs until you enumerate."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Mixing query syntax with method-only operators",
+            "code": "var passingCount = (from row in rows\n                    where row.Contains(\"pass\", StringComparison.Ordinal)\n                    select row).Count();\n\n// Count has no query-syntax keyword — append it as a method.\n// Count is immediate: the where/select plan runs once inside Count.",
+            "explanation": "Parenthesize the query expression, then call .Count(). This is the standard pattern when you need an operator with no keyword."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Nested from becomes SelectMany",
+            "code": "var attempts = new[] { new { Id = 1, Answers = new[] { \"A\", \"B\" } } };\n\n// Query syntax: two from clauses\nvar flatQuery = from att in attempts\n                from ans in att.Answers\n                select ans;\n\n// Compiler rewrites to SelectMany\nvar flatMethod = attempts.SelectMany(att => att.Answers);",
+            "explanation": "Two from clauses in query syntax always translate to SelectMany. group … by … becomes GroupBy; join … on … equals … becomes Join."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "LINQ query syntax vs Array methods",
+          "headers": [
+            "Aspect",
+            "C# LINQ",
+            "JavaScript Array"
+          ],
+          "rows": [
+            [
+              "Syntax options",
+              "Query keywords or method chains",
+              "Method chains only (no query keywords)"
+            ],
+            [
+              "Execution",
+              "Deferred until enumeration (most operators)",
+              "Eager — filter/map return new arrays immediately"
+            ],
+            [
+              "Compiler rewrite",
+              "from/where/select → Where/Select",
+              "No rewrite — methods are the source"
+            ],
+            [
+              "Mixing styles",
+              "Query expression + .Count() works",
+              "Always method chains"
+            ],
+            [
+              "Type safety",
+              "Compile-time generic types",
+              "TypeScript types erase at run time"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming query syntax talks to a database because it looks like SQL — it runs on whatever IEnumerable or IQueryable source you gave it. Writing SELECT-first SQL order in C# and expecting it to compile. Believing one spelling is faster than the other. Forgetting that let adds an extra projection step."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Query syntax translates to method calls; no magic SQL.",
+    "Query syntax translates to method calls; no magic SQL and no performance difference.",
     "from is first so the range variable is in scope — unlike SQL SELECT-first.",
     "Some operators are method-only: Count, Any, ToList, ElementAt.",
     "Identical lambdas become Func on IEnumerable and Expression on IQueryable."
@@ -51,7 +197,7 @@
     {
       "language": "javascript",
       "concept": "Array map/filter chains",
-      "note": "rows.filter(...).map(...) is method syntax. JS has no query-expression compiler. Each Array method usually returns a new array immediately — eager — unlike LINQ’s deferred Where.",
+      "note": "rows.filter(...).map(...) is method syntax. JavaScript has no query-expression compiler. Each Array method usually returns a new array immediately — eager — unlike LINQ's deferred Where.",
       "futureTopicSlug": "javascript/arrays/map-filter"
     }
   ],

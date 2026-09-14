@@ -1,30 +1,151 @@
 {
   "id": "csharp-08-when-not-to-invent",
   "slug": "when-not-to-invent",
-  "title": "When not to invent a collection",
+  "title": "When not to invent a collection (use the BCL)",
   "moduleId": "csharp-08-collections-and-iterators",
   "order": 6,
-  "hook": "The BCL already has the pipe, the set, and the list. A custom “AsyncQueue” in a worker is usually Channel<T> with extra bugs. Name it, then wait for module 15.",
+  "hook": "The Base Class Library (BCL) already has the pipe, the set, and the list. Writing a custom AsyncQueue in a worker is usually Channel<T> with extra bugs — name the right type and move on.",
   "sections": [
     {
-      "heading": "Use the type that already exists",
-      "prose": "Need a growable buffer? List<T>. Need lookup? Dictionary<TKey, TValue> or FrozenDictionary after startup. Need uniqueness? HashSet<T>. Need FIFO in one thread? Queue<T>. Need a snapshot for many readers? ImmutableArray or ImmutableDictionary. Need a bounded in-memory producer/consumer between async methods? Channel<T> in System.Threading.Channels. Channel<T> is the standard library answer for “I have SQS-poll tasks producing Message and a processor consuming them inside the process.” Concurrency, WaitToReadAsync, and bounded capacity are module 15 (concurrency and threading). This topic exists so you do not spend an interview writing a lock around Queue<T> from first principles when the interviewer wanted Channel.CreateBounded<Message>(10).",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Name Channel, do not implement it",
-          "code": "// In-process pipe between a poller and a processor:\n// Channel<Message> channel = Channel.CreateBounded<Message>(new BoundedChannelOptions(32)\n// {\n//     SingleReader = true,\n//     SingleWriter = false\n// });\n// Full API, backpressure, and threading rules: module 15.\n\nList<Message> thisProcessBatch = []; // this module: a simple buffer is still a List",
-          "explanation": "If the data never leaves the process and producers are async, Channel<T> is the type. If you just accumulated one ReceiveMessage page, List is enough."
+          "type": "prose",
+          "text": "Before you write a custom collection class, check whether the BCL already solves your problem. Need a growable buffer? List<T>. Need lookup? Dictionary<TKey, TValue> or FrozenDictionary after startup. Need uniqueness? HashSet<T>. Need a snapshot many readers share? ImmutableArray or ImmutableDictionary. Need a bounded in-memory pipe between async methods? Channel<T> in System.Threading.Channels. Custom collections are justified when you have a domain-specific invariant — not because you wanted a class named MessageBag."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Channel",
+              "longForm": "Channel<T>",
+              "plainDefinition": "A thread-safe, bounded or unbounded pipe for passing items between producers and consumers inside one process.",
+              "example": "Channel<Message> pipe = Channel.CreateBounded<Message>(32);"
+            },
+            {
+              "term": "ConcurrentDictionary",
+              "longForm": "ConcurrentDictionary<TKey, TValue>",
+              "plainDefinition": "A thread-safe dictionary from System.Collections.Concurrent for shared mutable maps under high concurrency.",
+              "example": "ConcurrentDictionary<string, int> counters = new();"
+            },
+            {
+              "term": "ImmutableDictionary",
+              "longForm": "ImmutableDictionary<TKey, TValue>",
+              "plainDefinition": "A read-only dictionary from System.Collections.Immutable. Updates return a new copy; safe to share across threads.",
+              "example": "ImmutableDictionary<string, bool> flags = builder.ToImmutable();"
+            },
+            {
+              "term": "FrozenDictionary",
+              "longForm": "FrozenDictionary<TKey, TValue>",
+              "plainDefinition": "An optimized read-only dictionary built at startup for maximum lookup speed.",
+              "example": "FrozenDictionary<string, int> lookup = source.ToFrozenDictionary();"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Do not wrap Redis or SQS in a fake IList",
-      "prose": "A Dictionary is not Redis. A Queue is not SQS. Implementing IEnumerable on a type that silently talks to the network on MoveNext hides latency and retries. Prefer an explicit client method that returns IReadOnlyList<T> or IAsyncEnumerable<T> (module 13) so the caller sees the I/O. Custom collections are justified when you have a domain-specific invariant (a ring buffer you measured, a specialized graph). They are not justified because you wanted a class named MessageBag."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Inventing a new collection type is a smell unless you can name the invariant List cannot express. A custom thread-safe list with public lock fields is reinventing ConcurrentBag badly. Exposing ConcurrentQueue as a substitute for SQS loses durability. Building a custom enumerator that hits Redis on every MoveNext hides latency and retries from the caller. Interviews test whether you know the standard library — not whether you can write a lock around Queue<T> from first principles."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Name the BCL type first",
+          "body": "If asked how to coordinate producers in one process, say Channel<T>. If asked how to store tenant feature flags for a Lambda lifetime, say Dictionary or FrozenDictionary loaded at startup."
+        }
+      ]
     },
     {
-      "heading": "Interview cue",
-      "prose": "If asked “how would you coordinate producers in one process?”, say Channel<T>, then ConcurrentQueue if they constrain you to older APIs, then lock+Queue as the last sketch. If asked “how would you store tenant feature flags for the lifetime of a Lambda?”, say Dictionary or FrozenDictionary loaded at startup, backed by Redis if it must be shared across instances. Inventing a new collection type is a smell unless you can name the invariant List cannot express."
+      "heading": "How to choose the right type",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Decision checklist",
+          "items": [
+            {
+              "title": "Is the data in one process?",
+              "body": "Yes → BCL in-memory types. No → external store (Redis, SQS, database)."
+            },
+            {
+              "title": "Do multiple threads write?",
+              "body": "Yes → ConcurrentDictionary, Channel<T>, or a lock around a simple type. No → List, Dictionary, Queue are fine."
+            },
+            {
+              "title": "Is the data read-only after startup?",
+              "body": "Yes → ImmutableArray, ImmutableDictionary, or FrozenDictionary for fast shared reads."
+            },
+            {
+              "title": "Is it a producer/consumer pipe?",
+              "body": "Yes → Channel<T> with bounded capacity and backpressure. Full API in module 15."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "BCL collection landscape",
+            "source": "flowchart TD\n  Need{What do you need?}\n  Need -->|Growable buffer| L[List T]\n  Need -->|Key lookup| D[Dictionary or FrozenDictionary]\n  Need -->|Uniqueness| H[HashSet T]\n  Need -->|FIFO single thread| Q[Queue T]\n  Need -->|Async producer consumer| C[Channel T module 15]\n  Need -->|Thread-safe shared map| CD[ConcurrentDictionary]\n  Need -->|Read-only snapshot| IM[ImmutableArray or ImmutableDictionary]\n  Need -->|Distributed durable queue| SQS[SQS not a BCL type]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Name Channel, do not implement it",
+            "code": "// In-process pipe between a poller and a processor:\n// Channel<Message> channel = Channel.CreateBounded<Message>(\n//     new BoundedChannelOptions(32)\n//     {\n//         SingleReader = true,\n//         SingleWriter = false\n//     });\n// Full API, backpressure, and threading rules: module 15.\n\nList<Message> thisProcessBatch = [];\n// This module: a simple buffer is still a List",
+            "explanation": "If data never leaves the process and producers are async, Channel<T> is the type. If you just accumulated one ReceiveMessage page, List is enough."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Do not disguise I/O as IEnumerable",
+            "code": "// Bad: hidden network call on every MoveNext\n// IEnumerable<Message> GetAll() { yield return redis.Get(...); }\n\n// Good: explicit I/O boundary\nasync Task<IReadOnlyList<Message>> FetchPageAsync()\n{\n    var response = await sqs.ReceiveMessageAsync(...);\n    return response.Messages;\n}",
+            "explanation": "Prefer an explicit client method that returns IReadOnlyList<T> or IAsyncEnumerable<T> (module 13) so the caller sees the I/O cost."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "FrozenDictionary for startup config",
+            "code": "Dictionary<string, bool> raw = LoadFeatureFlagsFromRedis();\nFrozenDictionary<string, bool> flags = raw.ToFrozenDictionary();\n\n// flags is read-only and optimized for fast lookup\n// Safe to share across all request handlers in the Lambda",
+            "explanation": "Load once at startup, freeze for fast shared reads. No locks needed because nothing mutates after freezing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Node.js has no built-in Channel or ConcurrentDictionary. Node streams and async iterators are the analogue of IAsyncEnumerable and Channel — not of Array.push in a loop. In TypeScript, you might reach for a library like p-queue for bounded concurrency; in C#, Channel<T> is in the standard library. The lesson is the same: do not reinvent a pipe when the runtime or standard library already ships one."
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Writing a thread-safe list with public lock fields instead of using ConcurrentBag or Channel<T>. Exposing ConcurrentQueue as a substitute for SQS and losing durability. Building a custom enumerator that hits Redis on every MoveNext — hide I/O behind explicit methods."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [

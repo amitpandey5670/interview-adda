@@ -23,6 +23,10 @@ export class TopicPage {
   protected readonly topic = signal<Topic | null>(null);
   protected readonly related = signal<TopicLink[]>([]);
 
+  protected topicId(): string {
+    return this.topic()?.id ?? '';
+  }
+
   constructor() {
     this.route.paramMap.subscribe(() => this.runForRender(() => this.load()));
   }

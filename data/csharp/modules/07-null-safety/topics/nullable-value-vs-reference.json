@@ -1,41 +1,178 @@
 {
   "id": "csharp-07-nullable-value-vs-reference",
   "slug": "nullable-value-vs-reference",
-  "title": "Nullable value types vs nullable references",
+  "title": "Nullable value types vs nullable references (struct wrapper vs annotation)",
   "moduleId": "csharp-07-null-safety",
   "order": 1,
-  "hook": "The same ? suffix means two different machines: on int it is a struct that can be empty; on string it is a sticky note for the compiler. Mixing them in a Redis miss or a CSV empty cell is a classic interview failure.",
+  "hook": "The same `?` suffix means two different things in C#. On numbers and dates it is a real struct that can be empty; on strings and classes it is a note for the compiler only.",
   "sections": [
     {
-      "heading": "T? on a value type is Nullable<T>",
-      "prose": "A value type cannot hold a null reference. int, DateTimeOffset, and bool always have a bit pattern. When a CSV column or a SQL NULL must mean “no score,” C# gives you Nullable<T>, spelled T?. It is a struct with HasValue and Value. Default(int?) has HasValue false. Assigning a null int? into an int does not compile; you use ??, GetValueOrDefault, or an explicit cast that throws InvalidOperationException if HasValue is false. Lifted operators (+, *, ++) return null if any operand is null. Comparison is the trap: (10 >= (int?)null) is false, and (10 < (int?)null) is also false. Equality is the exception — two null int? values compare equal. Boxing a null Nullable<T> produces a null object reference, not a boxed Nullable wrapper. That last sentence is a favorite follow-up.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "CSV optional score as int?",
-          "code": "int? ParseOptionalScore(string cell)\n{\n    if (string.IsNullOrWhiteSpace(cell)) return null;\n    return int.Parse(cell, CultureInfo.InvariantCulture);\n}\n\nint displayed = ParseOptionalScore(row[\"score\"]) ?? 0;\n// displayed is a real int. The ? lived only on the nullable struct.",
-          "explanation": "Empty CSV cells become HasValue false. Coalesce at the boundary so the rest of the pipeline uses a non-nullable int."
+          "type": "prose",
+          "text": "C# uses one punctuation mark — `?` — for two separate null stories. On a **value type** like `int` or `DateTime`, `T?` is shorthand for `System.Nullable<T>`, a struct that stores either a value or an empty state. On a **reference type** like `string` or a custom class, `T?` is a **nullable reference type (NRT)** annotation: it tells the compiler the variable might hold a null reference, but it does not create a new Common Language Runtime (CLR) type."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Nullable<T>",
+              "shortForm": "T?",
+              "longForm": "Nullable value type",
+              "plainDefinition": "A struct wrapper that lets a value type (int, bool, DateTime) represent “no value” without using a reference.",
+              "example": "`int? score = null;` means HasValue is false."
+            },
+            {
+              "term": "NRT",
+              "shortForm": "NRT",
+              "longForm": "Nullable reference type annotation",
+              "plainDefinition": "A compiler-only marker on reference types. `string?` and `string` are the same CLR type; the `?` changes warnings, not memory layout.",
+              "example": "`string? json = redis.Get(key);` warns if you use `.Length` without a check."
+            },
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The .NET runtime that executes your compiled code. It has always allowed null references on classes; NRT does not change that.",
+              "example": "A null `string?` still throws NullReferenceException at run time if you dereference it."
+            },
+            {
+              "term": "HasValue",
+              "longForm": "HasValue property",
+              "plainDefinition": "On `Nullable<T>`, returns true when a real value is stored and false when the nullable is empty.",
+              "example": "`if (score.HasValue) Console.WriteLine(score.Value);`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "T? on a reference type is not a new CLR type",
-      "prose": "string? still is System.String. Arrays, class instances, and interface handles have always been able to be null at run time. Nullable reference types (NRT) record intent: string should not be null; string? might. The JIT does not get a different layout. Redis GET returning null, an SQS message attribute that was omitted, and an auth cookie that was never set are all still null references. You model them as string? so the compiler demands a check before .Length. You model a cache key you just built as string so assigning null is a warning. If you need a value-type “missing” flag, use Nullable<T>. If you need a missing object, use a nullable reference plus a runtime check — not a fake empty string that later poisons Redis keys."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Mixing these two meanings causes real bugs. A CSV import with an empty score column should use `int?`, not `0` (which looks like a real score). A Redis cache miss should be `string?`, not an empty string sentinel that collides with valid data. In interviews, saying “`string?` is a different type at run time” is wrong — only `int?` is a different CLR type."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Quick discriminator",
+          "body": "If `T` is a struct (`int`, `DateTime`, `bool`), `T?` is `Nullable<T>` — real runtime type. If `T` is a class or interface, `T?` is an annotation — same runtime type as `T`."
+        }
+      ]
     },
     {
-      "heading": "What to say when they look the same in source",
-      "prose": "In C# 14 / .NET 10 templates both spellings use ?. The discriminator is the underlying type: if T is a struct, you get Nullable<T>; if T is a class, you get an annotation. Unconstrained generics make this painful — T? then means “default if T is a struct, null annotation if T is a class.” That is why MaybeNull exists (next topics) and why Dictionary.TryGetValue uses an out parameter instead of returning T?. For interviews, draw the line: runtime representation versus compiler null-state."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From source code to run time",
+          "items": [
+            {
+              "title": "Write `int?` or `string?` in source",
+              "body": "Both use the `?` suffix, but the compiler resolves them differently based on whether the underlying type is a value type or reference type."
+            },
+            {
+              "title": "Compiler emits IL (Intermediate Language)",
+              "body": "`int?` becomes `System.Nullable<int>` in the assembly. `string?` becomes `System.String` — identical to plain `string`."
+            },
+            {
+              "title": "Just-In-Time compiler (JIT) runs the code",
+              "body": "Nullable structs live on the stack or inline in objects. Null references are still null pointers on the heap — NRT never adds a wrapper."
+            },
+            {
+              "title": "Use checks at boundaries",
+              "body": "Test `HasValue` or use `??` for value types. Use `is not null` or `?.` for reference types before dereferencing."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Two paths for the same ? suffix",
+            "source": "flowchart TD\n  Q[You write T?] --> VT{T is a value type?}\n  VT -->|yes| ST[Nullable struct at run time]\n  ST --> HV[HasValue / Value / ??]\n  VT -->|no| AN[Annotation only at compile time]\n  AN --> WARN[Compiler warns on unsafe use]\n  AN --> NRE[NullReferenceException still possible at run time]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Optional CSV score as int?",
+            "code": "int? ParseOptionalScore(string cell)\n{\n    if (string.IsNullOrWhiteSpace(cell))\n        return null;\n    return int.Parse(cell, CultureInfo.InvariantCulture);\n}\n\nint displayed = ParseOptionalScore(row[\"score\"]) ?? 0;",
+            "explanation": "Line 3: empty cells return null — HasValue is false. Line 7: `??` converts the nullable struct to a plain `int` for the rest of the pipeline."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Lifted operators on int?",
+            "code": "int? a = 10;\nint? b = null;\n\nint? sum = a + b;       // null — any null operand makes result null\nbool less = a < b;      // false — relational compare with null is false\nbool equal = b == null; // true — equality with null works as expected",
+            "explanation": "Line 4: arithmetic operators are “lifted” — if any operand is null, the result is null. Lines 5–6: `<` with null is false (a common interview trap); `== null` is the reliable test."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "string? is still System.String at run time",
+            "code": "#nullable enable\nstring BuildKey(string tenantId, string userId)\n    => $\"session:{tenantId}:{userId}\";\n\nstring? ReadJson(string? raw)\n    => string.IsNullOrWhiteSpace(raw) ? null : raw;\n\nint Length(string? json)\n    => json is not null ? json.Length : 0;",
+            "explanation": "Line 2: non-nullable parameters — assigning null is a warning. Line 5: return type `string?` models a missing value. Line 8: pattern match narrows null-state so `.Length` is safe."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Nullable models in C# vs JS/TS",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Missing number", "`int?` is a real struct with HasValue", "No built-in struct; use `number | null` or `undefined`"],
+            ["Missing string", "`string?` is annotation only; run time is still null", "`string | null` is erased; run time is still null"],
+            ["Two empties", "One `null` plus HasValue on structs", "Both `null` and `undefined` exist in JS"],
+            ["Boxing null int?", "Boxes to a null object reference, not a boxed struct", "Not applicable — no value-type boxing"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using 0 or empty string as “missing”",
+          "body": "An empty CSV cell is not the same as a score of zero. A Redis miss is not the same as an empty string token. Use `int?` and `string?` to model absence, then coalesce at the boundary."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming T? in generics is always a reference annotation",
+          "body": "On an unconstrained generic `T`, `T?` means “default if T is a struct, nullable annotation if T is a class.” That is why APIs use `MaybeNull` attributes instead of returning `T?` blindly."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "int? is System.Nullable<int>. string? is System.String with a compiler annotation.",
-    "Lifted arithmetic yields null; relational comparisons with null yield false except == / !=.",
-    "Boxing a null Nullable<T> boxes to a null reference, not a boxed struct."
+    "`int?` is `System.Nullable<int>` at run time. `string?` is `System.String` with a compiler annotation.",
+    "Lifted arithmetic on nullable value types returns null when any operand is null; relational comparisons with null yield false except `==` / `!=`.",
+    "Boxing a null `Nullable<T>` produces a null object reference, not a boxed struct."
   ],
   "commonPitfalls": [
-    "Calling GetType() on int? and expecting Nullable`1 — a non-null int? boxes to Int32.",
-    "Using an empty string as a Redis sentinel and then colliding with a real empty token.",
-    "Assuming T? in an unconstrained generic is always a nullable reference."
+    "Calling GetType() on a non-null `int?` and expecting `Nullable<int>` — it boxes to `Int32`.",
+    "Using an empty string as a Redis sentinel and colliding with a real empty token.",
+    "Assuming `T?` in an unconstrained generic is always a nullable reference."
   ],
   "relatedTopicIds": [
     "csharp-07-nrt-annotations",
@@ -48,13 +185,13 @@
     {
       "language": "typescript",
       "concept": "T | null vs optional ?",
-      "note": "TS unions are erased. C# int? is a real struct; string? is erased like TS string | null.",
+      "note": "TypeScript unions are erased at run time. C# `int?` is a real struct; `string?` is erased like `string | null` in TypeScript.",
       "futureTopicSlug": "typescript/types/union-null"
     },
     {
       "language": "javascript",
       "concept": "null vs undefined",
-      "note": "JS has two empties. C# has one null plus HasValue on Nullable<T>. CSV missing cells map cleaner to int? than to JS undefined.",
+      "note": "JavaScript has two “empty” values. C# has one `null` plus `HasValue` on nullable structs. Missing CSV cells map cleanly to `int?`.",
       "futureTopicSlug": "javascript/types/null-undefined"
     }
   ],

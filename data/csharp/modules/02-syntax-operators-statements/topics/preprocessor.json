@@ -1,33 +1,167 @@
 {
   "id": "csharp-02-preprocessor",
   "slug": "preprocessor",
-  "title": "Preprocessor directives",
+  "title": "Compiler directives (#if, #nullable, #region)",
   "moduleId": "csharp-02-syntax-operators-statements",
   "order": 7,
-  "hook": "C# “preprocessor” directives are compiler switches, not a separate C preprocessor. `#nullable` is a project-level safety switch whose behavior lives in the null-safety module.",
+  "hook": "C# compiler directives are switches the compiler reads before building your code. They are not a separate C preprocessor and they are not regular if statements — #if removes code entirely, while #nullable toggles static analysis warnings.",
   "sections": [
     {
-      "heading": "#if, #region, #pragma, #nullable",
-      "prose": "`#define TRACE` at the top of a file (or `DefineConstants` in the csproj) gates `#if TRACE` / `#elif` / `#else` / `#endif`. Use this for diagnostic-only logging in a RabbitMQ publisher, not for swapping entire implementations — that belongs in DI. `#region` / `#endregion` are editor folding; they mean nothing at run time. `#pragma warning disable CSXXXX` should be scoped and justified. `#error` and `#warning` emit diagnostics (`#error version` prints language version). `#line` rewrites diagnostic line numbers (generators). `#nullable enable|disable|restore` (and `enable warnings`) toggles nullable reference type analysis for the following code. Treat `#nullable` as a switch: it does not change CLR representation of `string` versus `string?` for references; the annotations and warnings are explained in module 07. File-based `#:` directives are SDK config, not this set.",
-      "snippets": [
+      "heading": "What are compiler directives?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Conditional compile versus nullable switch",
-          "code": "#if DEBUG\nConsole.WriteLine(\"rabbit mq publish dry-run\");\n#endif\n\n#region handlers\nvoid Handle() { }\n#endregion\n\n#nullable enable\nstring? token = ReadToken();\n#nullable restore",
-          "explanation": "#if strips code from the compilation. #nullable only changes static analysis. Do not mix them in your head."
+          "type": "prose",
+          "text": "A **compiler directive** starts with `#` and instructs the C# compiler to include, exclude, or annotate code before compilation finishes. `#if` / `#elif` / `#else` / `#endif` conditionally include code based on defined symbols like DEBUG. `#nullable` toggles nullable reference type analysis. `#region` / `#endregion` are editor folding markers with zero run-time effect. These are fundamentally different from regular if statements — `#if` strips tokens before the compiler even sees them."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "#if",
+              "longForm": "conditional compilation directive",
+              "plainDefinition": "Includes or excludes code blocks based on whether a compile-time symbol is defined. The excluded code is not compiled at all.",
+              "example": "#if DEBUG ... #endif — only present in Debug builds."
+            },
+            {
+              "term": "#nullable",
+              "longForm": "nullable context directive",
+              "plainDefinition": "Toggles nullable reference type (NRT) analysis for the following code. Does not change how string is stored at run time.",
+              "example": "#nullable enable makes the compiler warn when you assign null to a non-nullable string."
+            },
+            {
+              "term": "NRT",
+              "shortForm": "NRT",
+              "longForm": "Nullable Reference Types",
+              "plainDefinition": "A C# feature that uses ? annotations and compiler warnings to catch null reference bugs before run time. Full rules are in module 07.",
+              "example": "string? means the variable may be null; string means the compiler expects it never to be."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why directives are not if statements",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A regular if runs at run time and both branches are compiled. An #if runs at compile time and the false branch does not exist in the output assembly. Use #if for diagnostic-only logging in a RabbitMQ publisher, not for swapping entire implementations — that belongs in Dependency Injection (DI). #region is for editor folding only; it is not architecture. File-based #: directives in .NET 10 apps are SDK configuration, not this preprocessor set."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Where to define symbols",
+          "body": "Define DEBUG and TRACE at the project level via the .csproj or dotnet build -c Debug. You can also write #define TRACE at the top of a single file, but project-level constants are easier to manage."
+        }
+      ]
+    },
+    {
+      "heading": "How directives are processed",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Compile-time directive pipeline",
+          "items": [
+            {
+              "title": "Read directives",
+              "body": "The compiler scans for # lines before parsing regular code."
+            },
+            {
+              "title": "Evaluate conditions",
+              "body": "#if checks whether a symbol like DEBUG is defined in the current build configuration."
+            },
+            {
+              "title": "Strip or keep tokens",
+              "body": "Code in false branches is removed entirely — it is not dead code, it does not exist."
+            },
+            {
+              "title": "Apply nullable context",
+              "body": "#nullable enable turns on warnings for the following lines until #nullable restore or disable."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "#if versus regular if",
+            "source": "flowchart TD\n  A[Source code] --> B{#if DEBUG?}\n  B -->|Symbol defined| C[Keep debug code in compilation]\n  B -->|Symbol not defined| D[Remove debug code entirely]\n  C --> E[Compile remaining tokens]\n  D --> E\n  E --> F[Run-time: no if check needed for stripped code]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough: common directives",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Conditional compile versus nullable switch",
+            "code": "#if DEBUG\nConsole.WriteLine(\"rabbit mq publish dry-run\");\n#endif\n\n#region handlers\nvoid Handle() { }\nvoid Retry() { }\n#endregion\n\n#nullable enable\nstring? token = ReadToken(); // compiler warns if you forget null check\n#nullable restore",
+            "explanation": "#if strips code from the compilation. #nullable only changes static analysis warnings. Do not mix them in your head."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "#elif, #else, and #warning",
+            "code": "#if ENTERPRISE\n    const int MaxRetries = 10;\n#elif STANDARD\n    const int MaxRetries = 3;\n#else\n    const int MaxRetries = 1;\n#endif\n\n#warning Review MaxRetries before release\n// #error Version mismatch — uncomment to block compilation",
+            "explanation": "#elif and #else work like you expect at compile time. #warning emits a compiler warning; #error blocks compilation entirely."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "#pragma warning and scoped disable",
+            "code": "#pragma warning disable CS0618 // suppress obsolete warning for one migration\nLegacyApi.Call();\n#pragma warning restore CS0618\n\n// Prefer fixing the cause over blanket disables\n// #nullable disable at file scope silences warnings — fix types instead",
+            "explanation": "Scope #pragma warning disable to the smallest region possible. Disabling nullable at file scope to silence warnings is a smell — fix the types."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# vs JavaScript/TypeScript directives",
+          "headers": ["Feature", "C#", "JavaScript/TypeScript"],
+          "rows": [
+            ["Conditional compile", "#if DEBUG removes tokens", "No #if; bundlers drop unused modules"],
+            ["Null safety switch", "#nullable enable (analysis only)", "TypeScript strictNullChecks in tsconfig"],
+            ["Code folding", "#region / #endregion", "No equivalent"],
+            ["Block compilation", "#error stops the build", "No equivalent"],
+            ["File-based config", "#: in .NET 10 file apps (SDK)", "/// <reference> in TypeScript"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes to avoid",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Top pitfalls",
+          "body": "Shipping a #if DEBUG security bypass that is off in Release — still a design smell. Disabling nullable at file scope to silence warnings instead of fixing types. Confusing #: file-based directives with #if preprocessor directives. Using #region as a substitute for proper class decomposition."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "`#if` removes tokens before bind; it is not an `if` statement.",
-    "`#nullable` is an analyzer/compiler switch; full NRT rules are module 07.",
-    "`#region` is not architecture."
+    "#if removes tokens before bind; it is not an if statement.",
+    "#nullable is an analyzer/compiler switch; full Nullable Reference Type (NRT) rules are module 07.",
+    "#region is editor folding only — not architecture.",
+    "#: directives in file-based apps are SDK config, not preprocessor directives."
   ],
   "commonPitfalls": [
-    "Shipping a `#if DEBUG` security bypass that is off in Release — still a design smell.",
+    "Shipping a #if DEBUG security bypass that is off in Release — still a design smell.",
     "Disabling nullable at file scope to silence warnings instead of fixing types.",
-    "Confusing `#:` file-based directives with `#if`."
+    "Confusing #: file-based directives with #if.",
+    "Treating #region as a design tool instead of editor convenience."
   ],
   "relatedTopicIds": [
     "csharp-01-file-based-apps",
@@ -39,7 +173,7 @@
     {
       "language": "javascript",
       "concept": "Dead-code elimination vs if",
-      "note": "JS has no `#if`. Bundlers drop unused modules; C# `#if` drops tokens before compile. TS `/// <reference>` is a different kind of directive.",
+      "note": "JavaScript has no #if. Bundlers drop unused modules; C# #if drops tokens before compile. TypeScript /// <reference> is a different kind of directive.",
       "futureTopicSlug": "javascript/tooling/conditional-compile"
     }
   ],

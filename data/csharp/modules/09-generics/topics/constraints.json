@@ -1,34 +1,156 @@
 {
   "id": "csharp-09-constraints",
   "slug": "constraints",
-  "title": "Constraints on type parameters",
+  "title": "Constraints on type parameters (class, struct, new(), notnull)",
   "moduleId": "csharp-09-generics",
   "order": 3,
-  "hook": "Without a constraint, T is barely an object. with where, you can new it, compare it, treat it as an enum, or even allow a ref struct. Interviews expect the list, the exclusions, and the notnull warning.",
+  "hook": "Without a where clause, T is barely more useful than object. Constraints tell the compiler what operations T supports — construct it, compare it, treat it as an enum, or even allow a ref struct.",
   "sections": [
     {
-      "heading": "The catalog",
-      "prose": "where T : class — T is a non-nullable reference type in an NRT context (class? allows nullable references). where T : struct — non-nullable value type; implies a parameterless constructor and cannot combine with new() or unmanaged. where T : new() — public parameterless constructor; must be last among ordinary constraints; cannot construct types that have required members. where T : notnull — non-nullable value or reference; violations warn, they do not error. where T : unmanaged — blittable non-nullable value type; implies struct. where T : Enum and where T : Delegate (or MulticastDelegate) are legal base constraints; they were CLR-legal long before C# allowed the syntax. where T : BaseType / IInterface and where T : U (naked type parameter) express inheritance. where T : default appears on overrides when the base method had neither class nor struct. allows ref struct is an anti-constraint: T may be a ref struct (Span<T>-like). It must come last, cannot mix with class, and is not inherited by other type parameters. Full Span rules stay in module 17; here you only need to know the clause exists so generic parsers can accept ReadOnlySpan<char>.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Constraints you actually write",
-          "code": "T Max<T>(T a, T b) where T : IComparable<T> =>\n    a.CompareTo(b) >= 0 ? a : b;\n\nT Create<T>() where T : new() => new T();\n\nstring NameOf<TEnum>(TEnum value) where TEnum : struct, Enum =>\n    value.ToString();\n\nvoid Combine<TDel>(TDel a, TDel b) where TDel : Delegate { /* Delegate.Combine */ }\n\nvoid HashUnconstrained<T>(T value) where T : notnull { _ = value.GetHashCode(); }\n\nvoid Slice<T>(T value) where T : allows ref struct { /* ref-safe uses only */ }",
-          "explanation": "IComparable unlocks CompareTo. new() unlocks new T(). Enum/Delegate are real constraints. notnull is a warning net. allows ref struct opts into ref-safety."
+          "type": "prose",
+          "text": "A constraint is a rule on a type parameter, written after where T : .... It unlocks members on T inside the generic body. where T : class means T is a reference type. where T : struct means a non-nullable value type. where T : new() requires a public parameterless constructor. where T : notnull rejects nullable types (as a warning). where T : unmanaged means a blittable value type. You can also constrain to a base class, interface, Enum, Delegate, or another type parameter U."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "where clause",
+              "longForm": "generic where clause",
+              "plainDefinition": "Syntax that restricts what types can replace a type parameter T.",
+              "example": "where T : IComparable<T> lets you call a.CompareTo(b)."
+            },
+            {
+              "term": "notnull",
+              "longForm": "notnull constraint",
+              "plainDefinition": "A constraint meaning T cannot be a nullable reference or nullable value type. Violations produce a warning, not an error.",
+              "example": "where T : notnull is how Dictionary keys stay honest with nullable reference types."
+            },
+            {
+              "term": "allows ref struct",
+              "longForm": "allows ref struct anti-constraint",
+              "plainDefinition": "An anti-constraint that opts in to ref struct type parameters like Span<T>. Must come last and cannot combine with class.",
+              "example": "void Slice<T>(T value) where T : allows ref struct accepts ReadOnlySpan<char>."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Order and conflicts",
-      "prose": "At most one of struct, class, class?, notnull, unmanaged — and that one is first. Base class cannot combine with those. new() cannot combine with struct or unmanaged. allows ref struct follows everything, including new(). Combining where T : class with == is a trap: == on T is reference identity even if T is string with an overloaded ==. Use IEquatable<T> when you mean value equality."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Unconstrained T can only do what object can do — ToString, GetHashCode, Equals. Constraints are how you write Max<T> that compares values, Create<T>() that constructs instances, or Hash<T> that requires notnull. Interviews expect you to name the catalog, know the exclusion rules (struct cannot pair with new()), and understand that notnull warns instead of errors. The allows ref struct clause exists so generic parsers can accept Span-like types without breaking ref safety."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Constraint ordering rules",
+          "body": "At most one of struct, class, class?, notnull, unmanaged — and that one comes first. new() must be last among ordinary constraints. allows ref struct comes after everything. struct and unmanaged already imply a constructor story and cannot combine with new()."
+        }
+      ]
     },
     {
-      "heading": "NRT interaction",
-      "prose": "In a nullable context, where T : class rejects string?. T? on an unconstrained T means “nullable if T is a reference, Nullable-like if T is a value.” That is why cache APIs prefer TryGet or MaybeNull over T? Get<T>(). The notnull constraint is how Dictionary keys stay honest with NRT."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing the right constraint",
+          "items": [
+            {
+              "title": "Need to call a method on T?",
+              "body": "Constrain to an interface: where T : IComparable<T> unlocks CompareTo."
+            },
+            {
+              "title": "Need to construct T?",
+              "body": "Add where T : new() — but not with struct or unmanaged, and not for types with required members."
+            },
+            {
+              "title": "Need a value type only?",
+              "body": "Use where T : struct for any non-nullable value type, or unmanaged for blittable types."
+            },
+            {
+              "title": "Need nullable safety?",
+              "body": "where T : notnull warns if someone passes string? or int?. Pair with nullable attributes on return types."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Constraint categories",
+            "source": "flowchart TD\n  T[Type parameter T] --> K[Kind constraints]\n  T --> B[Base constraints]\n  T --> S[Special constraints]\n  K --> K1[class / struct / notnull / unmanaged]\n  B --> B1[Base class / interface / Enum / Delegate]\n  S --> S1[new / allows ref struct / naked U]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Constraints you actually write",
+            "code": "T Max<T>(T a, T b) where T : IComparable<T> =>\n    a.CompareTo(b) >= 0 ? a : b;\n\nT Create<T>() where T : new() => new T();\n\nstring NameOf<TEnum>(TEnum value) where TEnum : struct, Enum =>\n    value.ToString();\n\nvoid Combine<TDel>(TDel a, TDel b) where TDel : Delegate { /* Delegate.Combine */ }\n\nvoid HashUnconstrained<T>(T value) where T : notnull { _ = value.GetHashCode(); }",
+            "explanation": "IComparable unlocks CompareTo. new() unlocks new T(). Enum and Delegate are real base constraints. notnull is a nullable-reference-types safety net."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exclusions that fail to compile",
+            "code": "// T Bad<T>() where T : struct, new() => new T();  // error: struct implies ctor\n// T AlsoBad<T>() where T : unmanaged, new() => new T(); // same problem\n\nclass RequiredDto\n{\n    public required string Name { get; set; }\n}\n// T CantCreate<T>() where T : new() => new T(); // error if T = RequiredDto",
+            "explanation": "struct and unmanaged already guarantee a parameterless constructor, so new() is redundant and illegal. Types with required members cannot satisfy new() because the compiler cannot guarantee a valid instance."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Equality trap on class-constrained T",
+            "code": "bool Same<T>(T a, T b) where T : class => a == b;\n\nstring x = \"hello\";\nstring y = new string(\"hello\".ToCharArray());\nConsole.WriteLine(x == y);        // True — string overloads ==\nConsole.WriteLine(Same(x, y));    // False — T uses reference identity\n\n// Fix: constrain to IEquatable<T> and call a.Equals(b)",
+            "explanation": "== on a class-constrained T uses reference identity, even when T is string with an overloaded ==. Use IEquatable<T> when you mean value equality."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Constraints: C# versus TypeScript",
+          "headers": ["Aspect", "C#", "TypeScript"],
+          "rows": [
+            ["Syntax", "where T : IFoo", "T extends Foo"],
+            ["Value type only", "where T : struct / unmanaged", "No direct equivalent"],
+            ["Constructor requirement", "where T : new()", "No constructor constraint"],
+            ["Ref struct support", "allows ref struct anti-constraint", "Not applicable"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using == on a class-constrained T and expecting string-style value equality. Writing where T : struct, new() — struct already implies a parameterless constructor. Expecting new() to work with types that have required properties. Using T? on an unconstrained T as a cache-miss signal — prefer TryGet or a Result wrapper."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Constraints unlock operations on T; unbounded T is Object-like.",
+    "Constraints unlock operations on T; unbounded T is object-like.",
     "struct / unmanaged / new() have exclusion rules; new() last; allows ref struct last of all.",
     "notnull warns; required members block new(); Enum and Delegate constraints are first-class."
   ],
@@ -46,7 +168,7 @@
     {
       "language": "typescript",
       "concept": "generic constraints extends",
-      "note": "function f<T extends Foo>(x: T) is the TS analogue of where T : Foo. TS has no struct/unmanaged/ref struct story.",
+      "note": "function f<T extends Foo>(x: T) is the TypeScript analogue of where T : Foo. TypeScript has no struct, unmanaged, or ref struct story.",
       "futureTopicSlug": "typescript/generics/constraints"
     }
   ],

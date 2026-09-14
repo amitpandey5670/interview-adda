@@ -1,30 +1,159 @@
 {
   "id": "csharp-08-collection-expressions",
   "slug": "collection-expressions",
-  "title": "Collection expressions",
+  "title": "Collection expressions ([...] syntax)",
   "moduleId": "csharp-08-collections-and-iterators",
   "order": 5,
-  "hook": "C# 12 replaced new List<int> { 1, 2, 3 } noise with [1, 2, 3] and spread .. . They always materialize. They are not a third kind of LINQ.",
+  "hook": "C# 12 introduced bracket syntax — [1, 2, 3] — to replace the noisy new List<int> { 1, 2, 3 } pattern. The brackets always create a real collection in memory; they are not a lazy query.",
   "sections": [
     {
-      "heading": "Syntax and targets",
-      "prose": "A collection expression is a bracketed list of elements. The compiler converts it to an array, List<T>, Span<T>, ImmutableArray<T>, or any type with a collection initializer or a CollectionBuilderAttribute. You can pass [1, 2, 3] as an argument. You cannot use one as a default parameter or a const. The empty form [] can become Array.Empty<T>() when the target will not be mutated. Spread ..enumerable inlines elements. Microsoft warns: conversion to IEnumerable<T> still allocates an in-memory collection of every element — unlike a yield iterator or a LINQ Select.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Batch ids and a spread",
-          "code": "List<string> fromSqs = [.. page.Messages.Select(m => m.MessageId)];\nstring[] poison = [\"manual-retry-1\", \"manual-retry-2\"];\nList<string> deleteIds = [.. fromSqs, .. poison];\n\nHashSet<string> allow = [with(StringComparer.OrdinalIgnoreCase), \"Admin\", \"admin\"];",
-          "explanation": "Spreads copy elements into a new list. with(...) constructor arguments on collection expressions are a later C# addition; C# 12 introduced the brackets and spread. Prefer Ordinal comparers for ids."
+          "type": "prose",
+          "text": "A collection expression is a bracketed list of elements: [1, 2, 3] or [\"read\", \"write\"]. The compiler converts it to an array, List<T>, Span<T>, ImmutableArray<T>, or any type with a suitable collection builder. The spread operator .. inlines elements from another collection: [..first, ..second]. The empty form [] can become Array.Empty<T>() when the target will not be mutated. Collection expressions arrived in C# 12 and are the modern way to write literal collections."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "collection expression",
+              "longForm": "collection expression",
+              "plainDefinition": "Bracket syntax [e1, e2, ...] that the compiler converts into a concrete collection type based on context.",
+              "example": "List<int> nums = [1, 2, 3]; creates a List with three items."
+            },
+            {
+              "term": "spread",
+              "longForm": "spread operator (..)",
+              "plainDefinition": "The .. prefix before an enumerable inlines all its elements into the new collection.",
+              "example": "[..listA, ..listB] copies every element from both lists into one new list."
+            },
+            {
+              "term": "eager",
+              "longForm": "eager evaluation",
+              "plainDefinition": "All elements are read and stored immediately — not deferred until someone loops.",
+              "example": "IEnumerable<int> x = [..hugeList]; still allocates a full in-memory collection."
+            },
+            {
+              "term": "ImmutableArray",
+              "longForm": "ImmutableArray<T>",
+              "plainDefinition": "A read-only array wrapper from System.Collections.Immutable that cannot be changed after creation.",
+              "example": "ImmutableArray<string> scopes = [\"read\", \"write\"];"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Overload resolution and Span",
-      "prose": "A collection expression converts to many types, so overloaded APIs may need a cast. Conversion to Span / ReadOnlySpan / other ref structs is preferred over heap collections; conversion to a concrete type is preferred over an interface. That is why some BCL methods grew Span overloads. Storing the result as Span still follows ref-struct rules (module 17)."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Collection expressions cut boilerplate for the most common collection creation pattern. A tiny allow-list of auth scopes, a batch of message IDs, or a set of poison-queue keys all read cleaner with brackets. But they always materialize — converting to IEnumerable<T> still allocates every element. Do not replace a streaming CSV yield with [..allRows]. For literals and small spreads, they are the right default in modern C#."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Always eager, never lazy",
+          "body": "Collection expressions are not LINQ. [..query] copies every element into a new collection right away. Use yield or LINQ Select for deferred sequences."
+        }
+      ]
     },
     {
-      "heading": "What not to do",
-      "prose": "Do not replace a streaming CSV yield with a collection expression of all rows. Do not assume IEnumerable<T> x = [.. huge]; is lazy. Do not use collection expressions to build infinite sequences — they cannot. For a tiny allow-list of auth scopes, [\"exam.write\", \"exam.read\"] is the right default in C# 14 / .NET 10 code."
+      "heading": "How collection expressions work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From brackets to a collection",
+          "items": [
+            {
+              "title": "Write the bracket syntax",
+              "body": "[1, 2, 3] or [\"a\", \"b\"] — elements separated by commas inside square brackets."
+            },
+            {
+              "title": "Compiler picks the target type",
+              "body": "The left-hand side or parameter type decides: int[], List<int>, Span<int>, ImmutableArray<int>, etc."
+            },
+            {
+              "title": "Spread inlines elements",
+              "body": "..existingCollection copies every element from the source into the new collection."
+            },
+            {
+              "title": "Result is materialized",
+              "body": "Every element is stored in memory immediately. No deferred execution."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Collection expression targets",
+            "source": "flowchart TD\n  CE[\"[1, 2, ..rest]\"] --> T{Target type?}\n  T -->|int[]| A[Heap array]\n  T -->|List int| L[Growable list]\n  T -->|Span int| S[Stack slice]\n  T -->|ImmutableArray| I[Frozen array]\n  T -->|IEnumerable int| E[Still allocates in memory]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Batch IDs and spread",
+            "code": "List<string> fromSqs = [.. page.Messages.Select(m => m.MessageId)];\nstring[] poison = [\"manual-retry-1\", \"manual-retry-2\"];\nList<string> deleteIds = [..fromSqs, ..poison];",
+            "explanation": "Spreads copy elements into a new list. The first line materializes all message IDs. The third line merges both collections into one."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "HashSet with comparer",
+            "code": "HashSet<string> allow = [\n    ..new[] { \"Admin\", \"admin\" }\n];\n\n// Or with explicit comparer via constructor args:\nHashSet<string> roles = new(StringComparer.OrdinalIgnoreCase)\n{\n    \"exam.write\", \"exam.read\"\n};",
+            "explanation": "Collection expressions work with HashSet, arrays, and other collection types. For comparers, you may still need the constructor — check overload resolution."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Empty collection and Span target",
+            "code": "int[] empty = [];                    // Array.Empty<int>() when not mutated\nSpan<string> days = [\"Sun\", \"Mon\"];   // stack-friendly slice\n\n// Cannot use as default parameter or const:\n// void Foo(int[] x = [1, 2]) { }     // compile error",
+            "explanation": "Empty [] can optimize to Array.Empty. Span targets follow ref-struct rules (module 17). Collection expressions cannot be default parameter values or constants."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Spread syntax comparison",
+          "headers": ["Aspect", "C# [..a, ..b]", "JS [...a, ...b]"],
+          "rows": [
+            ["Introduced", "C# 12", "ES2015"],
+            ["Target type", "Chosen by context (array, List, Span)", "Always a new Array"],
+            ["Lazy?", "No — always materializes", "No — always a new Array"],
+            ["Empty form", "[] → Array.Empty<T>()", "[] → empty Array"],
+            ["Const/default", "Not allowed as const or default param", "Allowed in default params"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Thinking [..query] is as lazy as query — it copies every element immediately. Using collection expressions as default parameter values — that is a compile error. Ambiguous overloads when both List and Span are applicable without an explicit cast."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [

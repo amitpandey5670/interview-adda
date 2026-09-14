@@ -1,27 +1,157 @@
 {
   "id": "csharp-03-null-and-nullable-values",
   "slug": "null-and-nullable-values",
-  "title": "null and nullable values",
+  "title": "null and nullable values (missing data for structs)",
   "moduleId": "csharp-03-type-system",
   "order": 5,
-  "hook": "`null` is a reference value. `int` cannot be `null` unless you wrap it as `int?` (`Nullable<int>`). Nullable reference types are a later compiler overlay (module 07), not this story.",
+  "hook": "Reference types like `string` can be `null` when there is no object. Value types like `int` cannot — unless you wrap them in `int?`, which means \"maybe an int, maybe nothing.\"",
   "sections": [
     {
-      "heading": "int? versus reference null",
-      "prose": "Reference types can hold `null` — no object. Value types cannot, until you use `T?` which is `Nullable<T>`: a struct with `HasValue` and `Value`. `int? ttl = cache.GetTtl();` models a missing Redis TTL. Lifted operators let you write `ttl + 1` (result is `int?`). Use `ttl ?? 30`, `ttl.GetValueOrDefault()`, or `if (ttl is int seconds)`. Do not confuse this with NRT: `string?` in a nullable-enabled project is still a reference `string` plus an annotation; `int?` is a different runtime type. Module 07 covers `#nullable`, annotations, and `!`. Here: missing values for structs need `Nullable<T>`; missing objects are `null`.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Nullable value vs reference",
-          "code": "int? ttlSeconds = null;          // Nullable<int>\nstring? token = null;            // reference, may be null\n\n// Wrong: int ttl = null;\nint ttl = ttlSeconds ?? 60;\n\nif (ttlSeconds is { } s)\n{\n    Console.WriteLine(s);\n}",
-          "explanation": "int? is a value-type wrapper. string? is still a reference. Operators ?? and ?. apply to both in the ways you saw in module 02."
+          "type": "prose",
+          "text": "`null` means \"no object\" for reference types. An `int` sitting in a variable always holds a number — it cannot be empty. To represent a missing integer (for example, a Redis cache entry with no Time To Live (TTL)), C# provides **nullable value types**: `int?` is shorthand for `Nullable<int>`, a small struct with `HasValue` (true/false) and `Value` (the `int` when present). This is different from **nullable reference types** (`string?`), which is a compiler annotation covered in module 07 — at run time `string?` is still just `string`."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "null",
+              "longForm": "null",
+              "plainDefinition": "A special value for reference types meaning \"points to no object.\" It is not zero, not false, and not JavaScript `undefined`.",
+              "example": "`string? token = null;` — no string object exists."
+            },
+            {
+              "term": "Nullable<T>",
+              "longForm": "Nullable<T> (nullable value type)",
+              "plainDefinition": "A struct wrapper that adds a \"has a value\" flag to any value type. Written as `T?` in C#.",
+              "example": "`int? ttl = null;` — no TTL was found in cache."
+            },
+            {
+              "term": "null-coalescing",
+              "longForm": "null-coalescing operator (??)",
+              "plainDefinition": "Returns the left side if it has a value; otherwise returns the right side. Works for both reference null and nullable value types.",
+              "example": "`int ttl = ttlSeconds ?? 60;` — use 60 when TTL is missing."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Using `0` to mean \"missing\" collides with a real zero. A Redis key with TTL `0` might mean \"expire immediately,\" while a missing key is a different story. `int?` lets you model three states: has value, no value, and you never confuse them with `0`. For strings, `null` means no object — but module 07 will teach you how the compiler warns when you forget to check."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Two different \"nullable\" stories",
+          "body": "`int?` is a real different run-time type (`Nullable<int>` struct). `string?` in a nullable-enabled project is the same `string` type with a compiler warning overlay — that is module 07, not this page."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Working with nullable values",
+          "items": [
+            {
+              "title": "Declare a nullable value type",
+              "body": "`int? ttlSeconds = null;` creates a `Nullable<int>` with `HasValue == false`."
+            },
+            {
+              "title": "Check before reading .Value",
+              "body": "Calling `.Value` when `HasValue` is false throws `InvalidOperationException`. Prefer `if (ttl is int seconds)` or `ttl ?? 60`."
+            },
+            {
+              "title": "Use lifted operators",
+              "body": "`ttl + 1` returns `int?` — if `ttl` is null, the result is null. No exception."
+            },
+            {
+              "title": "Distinguish from reference null",
+              "body": "`string? token = null` is a reference with no object. `int? count = null` is a struct reporting \"no value.\" Different mechanisms, same `??` and `?.` syntax in many cases."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "int? vs string null",
+            "source": "flowchart TB\n  subgraph nullableInt [\"int? (Nullable struct)\"]\n    HV[\"HasValue: false\"] --> NV[\"No int stored\"]\n    HV2[\"HasValue: true\"] --> V[\"Value: 60\"]\n  end\n  subgraph refNull [\"string? (reference)\"]\n    R[\"reference variable\"] -->|null| NO[\"no string object on heap\"]\n    R -->|not null| OBJ[\"string object\"]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Nullable value vs reference null",
+            "code": "int? ttlSeconds = null;          // Nullable<int> — no value\nstring? token = null;            // reference — no object\n\n// Wrong: value types cannot be null directly\n// int ttl = null;\n\nint ttl = ttlSeconds ?? 60;      // coalesce to default",
+            "explanation": "Line 1: `int?` is a struct wrapper, not a reference. Line 2: `string?` is still a reference type (annotation only until module 07). Line 6: `??` picks 60 when `ttlSeconds` has no value."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Safe extraction with patterns",
+            "code": "int? ttlSeconds = cache.GetTtl(key);\n\nif (ttlSeconds is { } seconds)\n{\n    Console.WriteLine($\"TTL is {seconds}\");\n}\n\n// Or:\nint safe = ttlSeconds.GetValueOrDefault(30);\n\n// Dangerous without check:\n// int bad = ttlSeconds.Value;  // throws if null",
+            "explanation": "Line 3: pattern `is { } seconds` checks `HasValue` and extracts the `int`. Line 8: `GetValueOrDefault(30)` returns 30 when missing. Line 11: `.Value` without a check throws — a common interview trap."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Lifted operators on int?",
+            "code": "int? a = 10;\nint? b = null;\n\nint? sum = a + b;       // null — any null operand → null result\nint? doubled = a * 2;   // 20\n\nbool hasA = a.HasValue; // true\nbool isNull = b is null; // true for nullable too",
+            "explanation": "Line 4: nullable arithmetic is \"lifted\" — if any operand is missing, the result is missing (null), not an exception. Line 8–9: both `HasValue` and `is null` work for checking nullable value types."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Optional values",
+          "headers": ["Concept", "C#", "JavaScript", "TypeScript"],
+          "rows": [
+            ["Missing object", "`null` on reference type", "`null` or `undefined`", "`T | null` (erased)"],
+            ["Missing number", "`int?` (real struct at run time)", "No equivalent — use `null` on object", "`number | null` (erased)"],
+            ["Fallback syntax", "`??` and `?.`", "`??` (modern JS)", "`??` and optional chaining"],
+            ["Separate undefined", "No — locals cannot be unread", "`undefined` exists", "`undefined` in unions"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling `.Value` on `int?` without checking `HasValue` — throws `InvalidOperationException`. Storing cache misses as `0` instead of `int?` and colliding with a real zero TTL. Confusing `string?` (reference annotation, module 07) with `int?` (a different run-time struct type)."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "`T?` on a value type is `Nullable<T>` — a different struct.",
-    "`T?` on a reference type (NRT) is the same CLR type with annotations — module 07.",
+    "`T?` on a value type is `Nullable<T>` — a different struct at run time.",
+    "`T?` on a reference type (nullable reference types) is the same CLR type with annotations — module 07.",
     "`null` is not `0` and not `undefined`."
   ],
   "commonPitfalls": [
@@ -39,13 +169,13 @@
     {
       "language": "javascript",
       "concept": "null vs undefined",
-      "note": "JS has both `null` and `undefined`. C# locals cannot be unread; optional values are `null` or `T?`. No separate undefined.",
+      "note": "JavaScript has both `null` and `undefined`. C# locals cannot be unread; optional values are `null` (references) or `T?` (value types). There is no separate `undefined`.",
       "futureTopicSlug": "javascript/types/null-undefined"
     },
     {
       "language": "typescript",
       "concept": "T | null",
-      "note": "`number | null` is a union erased at run time. `int?` is a real Nullable wrapper. `string | null` is closer to annotated `string?`.",
+      "note": "`number | null` is a union erased at run time. `int?` is a real `Nullable<int>` wrapper struct. `string | null` is closer to annotated `string?`.",
       "futureTopicSlug": "typescript/types/unions-null"
     }
   ],

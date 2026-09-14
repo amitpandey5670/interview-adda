@@ -1,26 +1,183 @@
 {
   "id": "csharp-13-async-exceptions",
   "slug": "async-exceptions",
-  "title": "Exceptions in async methods",
+  "title": "Exceptions in async methods (faulted tasks vs async void)",
   "moduleId": "csharp-13-async-await",
   "order": 3,
-  "hook": "A throw after await does not unwind the original caller’s stack in the way a sync method does. It faults the Task. async void has no Task, so the exception has nowhere safe to go.",
+  "hook": "A throw after await does not unwind the original caller's stack the way a synchronous method does. It faults the Task. async void has no Task, so the exception has nowhere safe to go.",
   "sections": [
     {
-      "heading": "Faulted tasks are the observation point",
-      "prose": "When an async Task method throws, the exception is stored on the returned Task. The first await of that Task rethrows (preserving the original exception, not wrapping in AggregateException the way Task.Wait does). Task.WhenAll faults with an AggregateException containing every inner exception if you inspect the task object; awaiting WhenAll throws the first one unless you observe task.Exception. Catch OperationCanceledException separately from business failures so a shutting-down consumer does not look like a poison CSV row. Do not swallow exceptions in a fire-and-forget ContinueWith unless you log; unobserved task exceptions no longer crash the process by default, but they still mean lost acks and silent data loss.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Observe faults; never async void in a consumer",
-          "code": "public sealed class RabbitConsumer(IModel channel)\n{\n    public async Task HandleAsync(BasicDeliverEventArgs delivery, CancellationToken cancellationToken)\n    {\n        try\n        {\n            await ProcessPayloadAsync(delivery.Body, cancellationToken);\n            channel.BasicAck(delivery.DeliveryTag, multiple: false);\n        }\n        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)\n        {\n            channel.BasicNack(delivery.DeliveryTag, multiple: false, requeue: true);\n        }\n        catch (Exception)\n        {\n            channel.BasicNack(delivery.DeliveryTag, multiple: false, requeue: false);\n            throw;\n        }\n    }\n}",
-          "explanation": "The host can await HandleAsync and log. An async void Received handler would ack or nack after an exception the host never saw."
+          "type": "prose",
+          "text": "When an async Task method throws, the exception is stored on the returned Task — not propagated synchronously to the caller. The first await of that Task rethrows the original exception (not wrapped in AggregateException the way Task.Wait does). async void methods have no Task to observe, so exceptions are posted to the SynchronizationContext or thread pool and can crash the process. OperationCanceledException is a separate type from business failures — catch it separately during shutdown."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Faulted Task",
+              "plainDefinition": "A Task whose operation threw an exception. The exception is stored until someone awaits or inspects .Exception.",
+              "example": "var t = FailingAsync(); // t.Status == Faulted",
+              "longForm": "Faulted Task"
+            },
+            {
+              "term": "async void",
+              "plainDefinition": "An async method returning void. Exceptions cannot be caught by the caller. Only acceptable for UI event handlers.",
+              "example": "private async void OnClick(object s, EventArgs e) { ... }",
+              "longForm": "async void"
+            },
+            {
+              "term": "OperationCanceledException",
+              "plainDefinition": "Thrown when a CancellationToken is signaled. Treat as cooperative shutdown, not a business failure.",
+              "example": "catch (OperationCanceledException) when (token.IsCancellationRequested)",
+              "longForm": "OperationCanceledException"
+            },
+            {
+              "term": "AggregateException",
+              "plainDefinition": "Wraps multiple exceptions. Task.Wait and Task.Result throw this; await does not.",
+              "example": "task.Wait(); // throws AggregateException, not the inner exception",
+              "longForm": "AggregateException"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "async void is for events only",
-      "prose": "UI event handlers are void. That is the historical reason async void exists. The exception is posted to SynchronizationContext.Post if one exists, or to the thread pool. In a Windows service or Kestrel process there is often no UI context, so you get a process-level crash or a logged unobserved exception depending on the host. In RabbitMQ client callbacks that are void, schedule `= HandleAsync(...)` only if you attach a continuation that logs faults, or better, use the client’s async consumer APIs. Interview answer: async void only for events; libraries and workers return Task so exceptions stay on the graph of awaited work."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In a message consumer, an unobserved exception means a lost ack and silent data loss. Returning Task from handlers lets the host await, log, and nack the message. async void on a RabbitMQ Received event handler is how processes die on a JSON parse error the host never saw. Distinguishing cancellation from business failures prevents treating a graceful shutdown as a poison message."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Observation rule",
+          "body": "Every async Task must be awaited or have a continuation that logs faults. Fire-and-forget without error handling is a production incident waiting to happen."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Exception flow in async methods",
+          "items": [
+            {
+              "title": "Throw inside async Task method",
+              "body": "The exception is captured and stored on the returned Task. The caller's synchronous code continues."
+            },
+            {
+              "title": "Caller awaits the Task",
+              "body": "await rethrows the original exception with its stack trace preserved."
+            },
+            {
+              "title": "Caller uses .Wait() or .Result",
+              "body": "The exception is wrapped in AggregateException — a different catch path."
+            },
+            {
+              "title": "async void throws",
+              "body": "No Task exists. Exception is posted to SynchronizationContext or thread pool — often unobserved."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Exception observation paths",
+            "source": "flowchart TD\n  T[Exception in async method] --> R{Return type?}\n  R -->|Task / Task T| F[Stored on Task]\n  F --> A[await rethrows inner exception]\n  F --> W[Wait Result wraps AggregateException]\n  R -->|async void| V[Posted to context or pool]\n  V --> U[Unobserved — may crash process]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Observe faults in a message consumer",
+            "code": "public sealed class RabbitConsumer(IModel channel)\n{\n    public async Task HandleAsync(\n        BasicDeliverEventArgs delivery, CancellationToken cancellationToken)\n    {\n        try\n        {\n            await ProcessPayloadAsync(delivery.Body, cancellationToken);\n            channel.BasicAck(delivery.DeliveryTag, multiple: false);\n        }\n        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)\n        {\n            channel.BasicNack(delivery.DeliveryTag, multiple: false, requeue: true);\n        }\n        catch (Exception)\n        {\n            channel.BasicNack(delivery.DeliveryTag, multiple: false, requeue: false);\n            throw; // host can observe via awaited Task\n        }\n    }\n}",
+            "explanation": "The host can await HandleAsync and log. An async void Received handler would ack or nack after an exception the host never saw."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "await vs Wait — different exception wrapping",
+            "code": "async Task FailingAsync() => throw new InvalidOperationException(\"boom\");\n\n// await — rethrows InvalidOperationException directly\ntry { await FailingAsync(); }\ncatch (InvalidOperationException ex) { /* caught */ }\n\n// Wait — wraps in AggregateException\ntry { FailingAsync().Wait(); }\ncatch (AggregateException agg) { var inner = agg.InnerException; }",
+            "explanation": "This is why .Result and .Wait() are dangerous beyond blocking — they change the exception type you catch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Task.WhenAll with multiple failures",
+            "code": "var tasks = new[] { FailingA(), FailingB(), FailingC() };\n\ntry\n{\n    await Task.WhenAll(tasks);\n}\ncatch (Exception ex)\n{\n    // await WhenAll throws the FIRST fault only\n    Console.WriteLine(ex.Message);\n}\n\n// To see ALL faults, inspect each task:\nforeach (var t in tasks.Where(t => t.IsFaulted))\n    Console.WriteLine(t.Exception!.InnerException!.Message);",
+            "explanation": "await WhenAll throws the first exception. Inspecting individual tasks reveals all faults."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Async error handling models",
+          "headers": [
+            "Aspect",
+            "C# async Task",
+            "JavaScript async/Promise"
+          ],
+          "rows": [
+            [
+              "Exception storage",
+              "Stored on Task until awaited",
+              "Stored as rejection on Promise"
+            ],
+            [
+              "Observation",
+              "await or .Exception property",
+              "await or .catch()"
+            ],
+            [
+              "No-handle equivalent",
+              "async void (worse — no Promise)",
+              "Unhandled rejection (process may log)"
+            ],
+            [
+              "Multiple failures",
+              "Task.WhenAll — first on await",
+              "Promise.all — first rejection"
+            ],
+            [
+              "Cancellation",
+              "OperationCanceledException",
+              "AbortError (with AbortSignal)"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "async void on a message Received event, then wondering why the process dies on a JSON error. Catching Exception around an await that also swallows OperationCanceledException during shutdown. Assuming try/catch around Task.Run without await observes the inner exception. Using .Result instead of await and getting AggregateException instead of the real type."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [

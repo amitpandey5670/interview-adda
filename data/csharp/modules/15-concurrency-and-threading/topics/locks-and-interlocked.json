@@ -1,39 +1,163 @@
 {
   "id": "csharp-15-locks-and-interlocked",
   "slug": "locks-and-interlocked",
-  "title": "lock, Interlocked, and primitives",
+  "title": "lock, Interlocked, and synchronization primitives",
   "moduleId": "csharp-15-concurrency-and-threading",
   "order": 2,
-  "hook": "lock is mutual exclusion plus a memory barrier. Interlocked is a single atomic instruction. volatile is neither. On .NET 10 you should lock a dedicated System.Threading.Lock.",
+  "hook": "When multiple threads touch the same mutable state, you need synchronization. lock (Monitor) protects critical sections; Interlocked atomically updates integers; SemaphoreSlim limits concurrent access without blocking the entire object.",
   "sections": [
     {
-      "heading": "What lock compiles to",
-      "prose": "For a System.Threading.Lock target (C# 13 / .NET 9+), lock calls EnterScope and disposes the scope in finally. For any other reference, it is Monitor.Enter/Exit in a finally. Recursion on the same thread is allowed. Microsoft’s best practices: dedicated private instance, never typeof(T), never this, never a string interned by other code. Keep the body tiny and CPU-only. Mutex is a kernel, cross-process name; it is for a single-instance desktop tool, not for request-level Redis. SemaphoreSlim is a counting gate that has WaitAsync, so you can throttle 8 concurrent origin fills without blocking a pool thread while waiting to enter — still release in finally, still do not treat it as a substitute for unbounded I/O inside the gate without timeouts.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "C# 13 Lock for memory state; Interlocked for a counter",
-          "code": "public sealed class SubmitGate\n{\n    private readonly Lock _lock = new();\n    private int _inFlight;\n    private Dictionary<string, int> _scores = [];\n\n    public int Register(string attemptId, int delta)\n    {\n        Interlocked.Increment(ref _inFlight);\n        try\n        {\n            lock (_lock)\n            {\n                _scores[attemptId] = _scores.GetValueOrDefault(attemptId) + delta;\n                return _scores[attemptId];\n            }\n        }\n        finally\n        {\n            Interlocked.Decrement(ref _inFlight);\n        }\n    }\n}",
-          "explanation": "The dictionary needs mutual exclusion. The counter only needs Interlocked. Neither path calls Redis inside the lock."
+          "type": "prose",
+          "text": "lock(obj) compiles to Monitor.Enter/Exit around a block — only one thread holds the lock at a time. Interlocked.Increment and CompareExchange perform atomic reads and writes without a full lock for simple counters. SemaphoreSlim allows N concurrent entrants — useful for throttling parallel HTTP calls. volatile is rarely needed in modern C# when you use proper synchronization or concurrent collections."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "lock",
+              "longForm": "lock statement (Monitor)",
+              "plainDefinition": "Language keyword that acquires a mutual-exclusion lock on an object.",
+              "example": "lock (_gate) { _count++; }"
+            },
+            {
+              "term": "Interlocked",
+              "longForm": "Interlocked class",
+              "plainDefinition": "Static methods for atomic operations on integers and references.",
+              "example": "Interlocked.Increment(ref _hits);"
+            },
+            {
+              "term": "SemaphoreSlim",
+              "longForm": "SemaphoreSlim class",
+              "plainDefinition": "Lightweight semaphore limiting how many threads enter a region concurrently.",
+              "example": "await _throttle.WaitAsync(); try { ... } finally { _throttle.Release(); }"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "volatile’s narrow, discouraged role",
-      "prose": "volatile tells the C# compiler and runtime not to cache a field in a register across reads in some cases. Microsoft’s current language reference warns that it is misunderstood: no atomic ++, no mutual exclusion, no guaranteed immediate visibility on every processor for every pattern. You cannot mark long or double volatile. Prefer Interlocked.Read/Exchange or a lock. The old Worker _shouldStop sample still appears in docs; in new code a CancellationToken or Interlocked.Exchange on an int flag is clearer. ReaderWriterLockSlim is for rare read-heavy in-memory maps; ConcurrentDictionary is usually simpler."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A shared in-memory counter for cache hits needs either Interlocked or lock. Never hold lock while awaiting Redis — you block other threads and can deadlock under load. Lock striping and concurrent collections reduce contention. Interviewers test whether you know the golden rule: protect in-memory state briefly; never lock across I/O."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Golden rule",
+          "body": "Never hold a lock across await, HTTP, Redis, SQS, or database calls. Release the lock before I/O."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing a primitive",
+          "items": [
+            {
+              "title": "Simple counter or flag",
+              "body": "Interlocked operations — no lock object needed."
+            },
+            {
+              "title": "Multi-field invariant",
+              "body": "lock around the smallest critical section that keeps data consistent."
+            },
+            {
+              "title": "Throttle concurrency",
+              "body": "SemaphoreSlim with WaitAsync before parallel outbound calls."
+            },
+            {
+              "title": "Prefer concurrent collections",
+              "body": "ConcurrentDictionary often beats lock + Dictionary for shared maps."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Lock critical section",
+            "source": "sequenceDiagram\n  participant T1 as Thread 1\n  participant L as Lock\n  participant T2 as Thread 2\n  T1->>L: Enter\n  T2->>L: Enter blocked\n  T1->>T1: mutate shared state\n  T1->>L: Exit\n  T2->>L: Enter\n  T2->>T2: mutate shared state"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "lock for multi-step invariant",
+            "code": "private readonly object _gate = new();\nprivate int _balance;\n\npublic void Transfer(int amount)\n{\n    lock (_gate)\n    {\n        if (_balance < amount) throw new InvalidOperationException();\n        _balance -= amount;\n    }\n}",
+            "explanation": "Check and deduct must appear atomic to other threads — lock wraps both steps."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Interlocked for metrics",
+            "code": "private long _cacheHits;\n\npublic void RecordHit() => Interlocked.Increment(ref _cacheHits);\n\npublic long Snapshot() => Interlocked.Read(ref _cacheHits);",
+            "explanation": "Increment is atomic without allocating a lock. Use long for high-volume counters."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SemaphoreSlim throttle",
+            "code": "private readonly SemaphoreSlim _httpLimit = new(8);\n\npublic async Task<string> FetchAsync(string url, CancellationToken ct)\n{\n    await _httpLimit.WaitAsync(ct);\n    try\n    {\n        return await _http.GetStringAsync(url, ct);\n    }\n    finally\n    {\n        _httpLimit.Release();\n    }\n}",
+            "explanation": "Limits eight concurrent HTTP calls without locking the entire service."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Synchronization",
+          "headers": ["Aspect", "C#", "JavaScript"],
+          "rows": [
+            ["Shared mutable state", "lock, Interlocked, concurrent collections", "Single-threaded event loop avoids most races"],
+            ["Worker threads", "True parallel memory — needs locks", "SharedArrayBuffer + Atomics for rare cases"],
+            ["Async + lock", "Cannot await inside lock", "No lock keyword; mutex libs exist for workers"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Locking on this or typeof(MyType) — private readonly object is safer. await inside lock — compile error in modern C# but watch manual patterns. Locking a public string instance someone else might lock too."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "lock = exclusive section + barrier. Interlocked = atomic RMW. volatile = weak ordering hint.",
-    "Lock a private System.Threading.Lock (or object on older TFMs).",
-    "SemaphoreSlim.WaitAsync throttles; Mutex is cross-process."
+    "lock protects in-memory critical sections; keep them short.",
+    "Interlocked for simple atomic counters and references.",
+    "Never hold a lock across I/O or await."
   ],
   "commonPitfalls": [
-    "lock (this) or lock (typeof(MyType)).",
-    "await inside lock.",
-    "Using volatile int and ++ for a shared attempt counter."
+    "Lock across Redis or HTTP await.",
+    "Using lock when ConcurrentDictionary suffices.",
+    "Locking on publicly visible objects."
   ],
-  "introducedIn": "System.Threading.Lock with lock statement in C# 13 / .NET 9",
   "relatedTopicIds": [
     "csharp-15-races-deadlocks",
     "csharp-15-high-concurrency-scenario",
@@ -42,19 +166,15 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "SharedArrayBuffer and Atomics",
-      "note": "JS on one thread does not need lock for objects. Across workers, Atomics are the Interlocked analog. There is no language lock statement.",
-      "futureTopicSlug": "javascript/concurrency/atomics"
+      "concept": "Single-threaded assumption",
+      "note": "Node avoids many race conditions via one event loop. C# services are multi-threaded — shared state needs explicit synchronization.",
+      "futureTopicSlug": "javascript/concurrency/event-loop"
     }
   ],
   "officialSources": [
     {
-      "title": "The lock statement",
+      "title": "lock statement",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/lock"
-    },
-    {
-      "title": "volatile keyword",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/volatile"
     },
     {
       "title": "Interlocked class",

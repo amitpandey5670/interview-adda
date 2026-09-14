@@ -1,40 +1,174 @@
 {
   "id": "csharp-04-operator-overloading",
   "slug": "operator-overloading",
-  "title": "Operator overloading",
+  "title": "Operator overloading (custom operators for your types)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 11,
-  "hook": "Operators are static methods with extra syntax. Overload them when the type is a value (money, time, Redis key composition), not when you want cute APIs for workers. C# 14 adds user-defined compound assignment.",
+  "hook": "Operators like `+` and `==` are just static methods with special syntax. You can define them for your own types — but only when the type is a natural fit, like money or coordinates.",
   "introducedIn": "C# 14",
   "sections": [
     {
-      "heading": "Rules of the room",
-      "prose": "User-defined operators are public static methods named operator + and friends. Equality operators should travel with Equals and GetHashCode (module 05) — overloading == without value equality is how Redis DTO bugs happen. Conversion operators (implicit/explicit) are easy to make surprising; prefer named factory methods for auth tokens. Comparison operators should match IComparable. Do not overload true/false or bitwise ops unless you are writing a flags-like value type."
-    },
-    {
-      "heading": "C# 14 compound assignment",
-      "prose": "Historically += was rewritten as x = x + y, which copies a struct twice and can surprise mutable value types. C# 14 lets you define compound assignment operators so += can mutate in place when that is the type’s contract. Use it on types where in-place update is the point (a running total struct). Skip it on immutable records — with-expressions are the copy story.",
-      "snippets": [
+      "heading": "What is operator overloading?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Operator + and a C# 14 compound assignment sketch",
-          "code": "readonly struct Money(decimal amount, string currency)\n{\n    public decimal Amount { get; } = amount;\n    public string Currency { get; } = currency;\n\n    public static Money operator +(Money left, Money right)\n    {\n        if (left.Currency != right.Currency)\n            throw new InvalidOperationException(\"currency mismatch\");\n        return new Money(left.Amount + right.Amount, left.Currency);\n    }\n}\n\nstruct RunningTotal\n{\n    public decimal Amount;\n    public void operator +=(decimal delta) => Amount += delta;\n}",
-          "explanation": "Money stays immutable and returns a new value from +. RunningTotal uses C# 14 user-defined compound assignment to add in place. Check your language version on .NET 10."
+          "type": "prose",
+          "text": "**Operator overloading** lets you define what `+`, `-`, `==`, and other operators mean for your types. Under the hood, they are `public static` methods named `operator +`, `operator ==`, etc. C# 14 added **user-defined compound assignment** (`+=`, `-=`) so mutable value types can update in place instead of going through `x = x + y`."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "operator overloading",
+              "longForm": "operator overloading",
+              "plainDefinition": "Defining custom behavior for operators on your own types via static methods.",
+              "example": "`public static Money operator +(Money a, Money b)`"
+            },
+            {
+              "term": "compound assignment",
+              "longForm": "user-defined compound assignment (C# 14)",
+              "plainDefinition": "A custom `operator +=` that mutates in place instead of creating a copy through `x = x + y`.",
+              "example": "`public void operator +=(decimal delta) => Amount += delta;`"
+            },
+            {
+              "term": "conversion operator",
+              "longForm": "user-defined conversion operator",
+              "plainDefinition": "An implicit or explicit cast between your type and another. Easy to make surprising.",
+              "example": "`public static implicit operator string(Token t) => t.Value;`"
+            },
+            {
+              "term": "equality operator",
+              "longForm": "equality operator",
+              "plainDefinition": "Overloading `==` and `!=`. Must be paired with `Equals` and `GetHashCode` (module 05).",
+              "example": "`public static bool operator ==(Money a, Money b) => a.Amount == b.Amount;`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What not to overload",
-      "prose": "Do not give a worker class operator+ because it “adds a message.” Do not use implicit conversions from string to Token — that hides allocation and parsing failures. Extension members in C# 14 can declare operators on types you do not own; that lives in module 10 with the rest of extension syntax. Finalizers remain unrelated and still belong in module 14."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Well-designed operators make value types feel natural — adding two `Money` amounts or comparing two `DateRange` values. Poorly designed operators hide allocation, parsing failures, or incorrect equality. Overload operators on value-like types with clear semantics, not on service classes or workers."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Pair == with Equals and GetHashCode",
+          "body": "Overloading `==` without consistent `Equals` and `GetHashCode` breaks dictionaries and sets. Full equality design is module 05."
+        }
+      ]
+    },
+    {
+      "heading": "Rules and patterns",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Operator overloading checklist",
+          "items": [
+            {
+              "title": "Operators are public static methods",
+              "body": "Named `operator +`, `operator ==`, etc. At least one parameter must be your type."
+            },
+            {
+              "title": "Overload on value-like types",
+              "body": "Money, coordinates, time spans, cache key composition — yes. Worker classes — no."
+            },
+            {
+              "title": "Pair equality operators with Equals/GetHashCode",
+              "body": "If you overload `==`, override `Equals` and `GetHashCode` consistently."
+            },
+            {
+              "title": "C# 14 compound assignment for in-place update",
+              "body": "Use `operator +=` on mutable value types where in-place update is the contract. Skip it on immutable records."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Operator overload decision",
+            "source": "flowchart TD\n  Q[Should I overload?] --> V{Value-like type with clear math?}\n  V -->|yes| OK[Define operator methods]\n  V -->|no| NO[Use named methods instead]\n  OK --> EQ{Overloading ==?}\n  EQ -->|yes| GH[Also override Equals + GetHashCode]\n  EQ -->|no| DONE[Done]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Immutable Money with operator +",
+            "code": "readonly struct Money(decimal amount, string currency)\n{\n    public decimal Amount { get; } = amount;\n    public string Currency { get; } = currency;\n\n    public static Money operator +(Money left, Money right)\n    {\n        if (left.Currency != right.Currency)\n            throw new InvalidOperationException(\"currency mismatch\");\n        return new Money(left.Amount + right.Amount, left.Currency);\n    }\n}\n\nvar total = new Money(10, \"USD\") + new Money(5, \"USD\");",
+            "explanation": "Line 6: `operator +` is a static method with special syntax. Line 12: returns a new immutable value. Line 15: callers write natural `+` syntax."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# 14 compound assignment on a mutable struct",
+            "code": "struct RunningTotal\n{\n    public decimal Amount;\n\n    public void operator +=(decimal delta) => Amount += delta;\n    public void operator -=(decimal delta) => Amount -= delta;\n}\n\nvar total = new RunningTotal();\ntotal += 10.5m;\ntotal += 3.0m;\n// total.Amount is 13.5 — updated in place, no copy",
+            "explanation": "Line 5: C# 14 user-defined `+=` mutates in place. Without it, `total += 10` would rewrite as `total = total + 10`, copying the struct twice."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "What NOT to overload",
+            "code": "// BAD: implicit string conversion hides parsing failures\n// public static implicit operator AuthToken(string raw)\n//     => new AuthToken(Parse(raw));\n\n// GOOD: explicit factory with clear error handling\npublic readonly struct AuthToken\n{\n    public string Value { get; }\n    private AuthToken(string value) => Value = value;\n\n    public static bool TryCreate(string raw, out AuthToken token)\n    {\n        if (string.IsNullOrWhiteSpace(raw)) { token = default; return false; }\n        token = new AuthToken(raw);\n        return true;\n    }\n}",
+            "explanation": "Lines 2–3: implicit conversion from `string` would throw or allocate unexpectedly. Lines 10–16: `TryCreate` makes failure explicit — the pattern interviewers prefer."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Operators in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Custom operators", "`public static operator +` — real metadata", "No first-class operator overloading"],
+            ["Primitive coercion", "User-defined conversion operators", "JS `valueOf` / `Symbol.toPrimitive` hacks"],
+            ["Compound assignment", "C# 14 custom `operator +=`", "Always `x = x + y` semantics for objects"],
+            ["Equality", "Overload `==` with `Equals`/`GetHashCode`", "JS `==` coercion; TS has no operator overloading"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Overloading == without GetHashCode",
+          "body": "A class with custom `==` but default `GetHashCode` will break `Dictionary` and `HashSet` lookups. Module 05 covers the full equality contract."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Implicit conversions that throw or allocate",
+          "body": "An implicit `string` to `Token` conversion hides parsing failures and allocations. Use named factory methods like `TryCreate` instead."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Operators are static methods; keep them on value-like types.",
-    "C# 14 compound assignment can avoid the x = x + y copy.",
-    "Pair == with Equals/GetHashCode; details in module 05."
+    "C# 14 compound assignment can avoid the `x = x + y` copy on mutable structs.",
+    "Pair `==` with `Equals`/`GetHashCode`; details in module 05."
   ],
   "commonPitfalls": [
-    "Overloading == on a class and forgetting GetHashCode.",
+    "Overloading `==` on a class and forgetting `GetHashCode`.",
     "Implicit conversions that throw or allocate in surprising places."
   ],
   "relatedTopicIds": [
@@ -46,13 +180,13 @@
     {
       "language": "javascript",
       "concept": "valueOf / Symbol.toPrimitive",
-      "note": "JS does not let you overload + for a class in a first-class way beyond valueOf hacks. C# operators are real metadata methods.",
+      "note": "JavaScript does not let you overload `+` for a class in a first-class way beyond `valueOf` hacks. C# operators are real metadata methods.",
       "futureTopicSlug": "javascript/objects/primitives"
     },
     {
       "language": "typescript",
       "concept": "no operator overloading",
-      "note": "TS cannot add operators to types. You write add(a, b) functions. C# can make + a named static method.",
+      "note": "TypeScript cannot add operators to types. You write `add(a, b)` functions. C# can make `+` a named static method.",
       "futureTopicSlug": "typescript/types/nominal"
     }
   ],

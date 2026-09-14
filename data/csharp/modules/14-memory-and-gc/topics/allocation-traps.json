@@ -1,37 +1,163 @@
 {
   "id": "csharp-14-allocation-traps",
   "slug": "allocation-traps",
-  "title": "Allocation traps",
+  "title": "Allocation traps (hidden gen-0 storms)",
   "moduleId": "csharp-14-memory-and-gc",
   "order": 5,
-  "hook": "Gen-0 storms are rarely ‘the GC is slow.’ They are usually closures, LINQ materialization, string work, and boxing on a path that already runs 199 to 999 times a second.",
+  "hook": "Not every allocation is obvious. String concatenation in a loop, LINQ that materializes lists, boxing a struct, and closure capture can flood generation 0 and pressure the garbage collector under Redis-heavy load.",
   "sections": [
     {
-      "heading": "The usual suspects on a hot path",
-      "prose": "A lambda that captures this or a local allocates a display class. Passing that lambda into a Redis retry or a LINQ Where inside a loop allocates per call. Box an enum or struct when you store it as object. string + in a loop allocates intermediate strings; use StringBuilder or string interpolation into a pooled writer. LINQ is lazy until a consuming foreach, ToList, or Count; then it allocates enumerators and delegates. params arrays and collection expressions still allocate unless the compiler can elide. async methods allocate a state machine when they actually yield. None of these are forbidden; they are what you look at when dotnet-counters shows high allocation rate on the attempt-submit endpoint.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Closure and string churn on a cache key",
-          "code": "public async Task<string?> LoadAttemptAsync(string examId, string userId, CancellationToken cancellationToken)\n{\n    var key = $\"attempt:{examId}:{userId}\";\n    return await _redis.GetDatabase().StringGetAsync(key);\n}\n\npublic List<string> NaiveFilter(IEnumerable<string> rows, string prefix)\n{\n    return rows.Where(r => r.StartsWith(prefix)).Select(r => r.ToUpperInvariant()).ToList();\n}",
-          "explanation": "The interpolated key allocates one string (acceptable). NaiveFilter allocates iterator, two delegates, a List, and a new string per match — painful inside a per-request loop over CSV lines."
+          "type": "prose",
+          "text": "Allocation traps are patterns that create more short-lived heap objects than you expect. Each new object costs a gen-0 slot. Closures capture locals into compiler-generated classes. Boxing wraps value types in heap objects. string + string in a loop allocates intermediate strings. LINQ operators like ToList() and ToArray() materialize entire sequences. Async state machines allocate a heap object per async method invocation."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Boxing",
+              "longForm": "Value type boxing",
+              "plainDefinition": "Wrapping a value type in a heap object so it can be treated as object.",
+              "example": "object o = 42; // boxes the int"
+            },
+            {
+              "term": "Closure",
+              "longForm": "Compiler-generated closure",
+              "plainDefinition": "A hidden class that holds captured variables for a lambda.",
+              "example": "() => count++ captures count into a heap display class."
+            },
+            {
+              "term": "Materialization",
+              "longForm": "LINQ materialization",
+              "plainDefinition": "Forcing a deferred sequence into a concrete collection.",
+              "example": ".ToList() allocates a List and fills it."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What to do instead of folklore",
-      "prose": "Measure with EventCounters, alloc profiles, or BenchmarkDotNet. ArrayPool for buffers. FrozenDictionary for startup data. SearchValues for parsing. Keep lambdas static (no capture) on hot LINQ. Prefer foreach over LINQ on the 999-RPS path if the profiler points there. Do not micro-optimize every ToString on a cold admin page. Do not cache SKBitmap instances without a dispose policy. The interview signal is: you know which allocations are implicit (boxing, closure, await, ToList) and you change them only with evidence."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Redis cache service doing string concat per key lookup and LINQ ToList on every hit can allocate megabytes per second even when business logic is simple. Gen-0 collections are cheap individually, but allocation rate drives CPU spent in GC and causes gen-2 promotion for survivors. Fixing traps — StringBuilder, Span, deferred LINQ, struct alternatives — is often cheaper than buying more cores."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Measure first",
+          "body": "Use dotnet-counters (System.Runtime) to watch allocation rate and GC heap size before micro-optimizing. Fix the hottest path shown in a trace."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Spotting allocation hot paths",
+          "items": [
+            {
+              "title": "Profile allocation rate",
+              "body": "Watch alloc/sec under realistic Redis or HTTP load."
+            },
+            {
+              "title": "Inspect hot methods",
+              "body": "dotnet-trace or a profiler shows which calls allocate."
+            },
+            {
+              "title": "Replace trap patterns",
+              "body": "StringBuilder, TryFormat, IEnumerable without ToList, avoid boxing APIs."
+            },
+            {
+              "title": "Verify gen-0 pressure drops",
+              "body": "Re-run counters; confirm fewer collections per request."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Common allocation traps",
+            "source": "flowchart TD\n  A[Hot request path] --> B{Pattern}\n  B -->|string + in loop| C[Many short strings]\n  B -->|LINQ ToList| D[New List every call]\n  B -->|lambda capture| E[Closure class on heap]\n  B -->|object API + struct| F[Boxing]\n  C & D & E & F --> G[Gen 0 pressure]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "String concat trap vs StringBuilder",
+            "code": "// Trap: O(n^2) allocations\nstring key = \"\";\nforeach (var part in parts)\n    key += part + \":\";\n\n// Better\nvar sb = new StringBuilder();\nforeach (var part in parts)\n    sb.Append(part).Append(':');\nstring key2 = sb.ToString();",
+            "explanation": "Each += creates a new immutable string. StringBuilder mutates an internal buffer with fewer allocations."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "LINQ materialization trap",
+            "code": "IEnumerable<Order> QueryOrders(IEnumerable<Order> source) =>\n    source.Where(o => o.IsActive).OrderBy(o => o.Id);\n\n// Trap in caller:\nvar list = QueryOrders(orders).ToList(); // allocates every call\n\n// Better: defer until needed or use a single materialization point",
+            "explanation": "ToList() allocates a new List. Deferred execution is fine until you materialize on every request."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Closure and boxing",
+            "code": "int count = 0;\nvar actions = new List<Action>();\nfor (int i = 0; i < 100; i++)\n    actions.Add(() => count++); // closure captures count\n\nIComparable boxed = 42; // boxes int to heap object",
+            "explanation": "Each lambda may share one display class but still allocates. Boxing wraps the int in a heap object."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Hidden allocations",
+          "headers": ["Pattern", "C# trap", "JavaScript analogue"],
+          "rows": [
+            ["String building", "str += in loop", "str += in loop (also allocates)"],
+            ["Lazy vs eager", "LINQ deferred until ToList", "Array.map chains create intermediate arrays"],
+            ["Capture", "Closure display class", "Closure keeps outer vars alive in V8"],
+            ["Async", "State machine object per async method", "Promise and async function allocations"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling ToList() or ToArray() inside tight loops. Using object or IComparable with structs. Logging with string interpolation on every cache hit at Debug level in production."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Capturing lambdas, boxing, string concat, and ToList are invisible newobj calls.",
-    "async state machines allocate when they yield, not when the method is declared.",
-    "Fix allocation rate with a profiler, not with GC.Collect."
+    "Closures, boxing, string concat, and LINQ materialization are common gen-0 storms.",
+    "Measure allocation rate before optimizing.",
+    "Prefer StringBuilder, deferred IEnumerable, and generic APIs over object."
   ],
   "commonPitfalls": [
-    "Building Redis keys with repeated + in a loop.",
-    "Using LINQ Count() when you already have a List.Count.",
-    "Creating a new JsonSerializerOptions per request (it caches internally and is expensive to construct)."
+    "ToList() on every Redis cache read.",
+    "Boxing value types through non-generic interfaces.",
+    "Assuming async adds zero heap allocations."
   ],
   "relatedTopicIds": [
     "csharp-14-stack-heap-layout",
@@ -44,15 +170,15 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Hidden allocations in closures and string concat",
-      "note": "JS also allocates a closure per callback and new strings on +. V8’s nursery makes this cheap until old-space promotion, same operational story as gen 0 to gen 2.",
-      "futureTopicSlug": "javascript/runtime/allocations"
+      "concept": "String and array churn",
+      "note": "JS also allocates on string concat and array methods. C# gives you Span and stackalloc to avoid some heap traffic — module 17.",
+      "futureTopicSlug": "javascript/performance/allocations"
     }
   ],
   "officialSources": [
     {
-      "title": ".NET garbage collection",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/"
+      "title": "Garbage collection and performance",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/performance"
     }
   ],
   "scenarioTag": "redis-cache"

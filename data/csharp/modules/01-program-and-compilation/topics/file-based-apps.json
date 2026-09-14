@@ -1,27 +1,155 @@
 {
   "id": "csharp-01-file-based-apps",
   "slug": "file-based-apps",
-  "title": "File-based apps",
+  "title": "Running a single C# file without a project",
   "moduleId": "csharp-01-program-and-compilation",
   "order": 6,
-  "hook": "Starting with C# 14 and the .NET 10 SDK you can `dotnet run hello.cs` with no `.csproj`. Directives that start with `#:` are the project file, inlined.",
+  "hook": "Starting with C# 14 and the .NET 10 SDK, you can run one .cs file with dotnet run hello.cs — no .csproj needed. Special #:-prefixed directives at the top of the file act as an inline project file.",
   "introducedIn": "C# 14",
   "sections": [
     {
-      "heading": "Single-file programs on .NET 10",
-      "prose": "File-based apps compile and run one `.cs` file. `dotnet run app.cs`, `dotnet app.cs`, or a Unix shebang `#!/usr/bin/env dotnet` all work. Use them for spikes: dump a Redis key, parse a CSV sample, mint a JWT locally. They are not a replacement for a multi-project worker. `dotnet project convert app.cs` emits a real csproj when the file grows. Native AOT publish is on by default for these apps; turn it off with a property directive if you need reflection. Do not nest the file under an existing `.csproj` tree — implicit MSBuild files will fight you.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "File-based app with C# 14 hash-colon directives",
-          "code": "#!/usr/bin/env dotnet\n#:package Spectre.Console@*\n#:property PublishAot=false\n\nConsole.WriteLine(\"probe ok\");",
-          "explanation": "`#:` directives (package, property, sdk, project, include) configure the virtual project. They are not classic `#if` preprocessor symbols."
+          "type": "prose",
+          "text": "A file-based app is a single .cs file that the .NET SDK compiles and runs without a separate project file. You launch it with dotnet run app.cs, dotnet app.cs, or even a Unix shebang (#!/usr/bin/env dotnet). Directives starting with #: at the top of the file configure packages, properties, and SDK — they replace what you would normally put in a .csproj. When the script grows, dotnet project convert app.cs generates a real project."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "file-based app",
+              "longForm": "file-based app",
+              "plainDefinition": "A single C# source file that the SDK treats as a complete program without a .csproj on disk.",
+              "example": "dotnet run probe.cs compiles and executes probe.cs directly."
+            },
+            {
+              "term": "#: directive",
+              "longForm": "hash-colon directive",
+              "plainDefinition": "A C# 14 line starting with #: that configures the virtual project (packages, properties, SDK).",
+              "example": "#:package Spectre.Console@* adds a NuGet dependency inline."
+            },
+            {
+              "term": "virtual project",
+              "longForm": "virtual project",
+              "plainDefinition": "The temporary build configuration the SDK creates in memory for a file-based app.",
+              "example": "No .csproj file exists on disk, but the build still resolves packages and compiles IL."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What belongs in a worker vs a file",
-      "prose": "An SQS consumer with tests, multiple types, and CI belongs in an SDK project. A one-off “decode this auth token payload” script can stay a file-based app. The language is the same C# 14; only the host project is virtual."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "File-based apps are perfect for quick spikes: probe a Redis key, parse a Comma-Separated Values (CSV) sample, decode a JSON Web Token (JWT) locally. They are not a replacement for a multi-file worker with tests and CI. Native Ahead-of-Time (AOT) publish is on by default for these apps — great for small tools, but turn it off if you need heavy reflection. Do not place a file-based app inside an existing .csproj tree; MSBuild will pick up the project instead."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to convert to a project",
+          "body": "Run dotnet project convert when you need multiple source files, shared build properties, test projects, or a stable CI pipeline. The language stays C# 14 — only the project structure changes."
+        }
+      ]
+    },
+    {
+      "heading": "How file-based apps work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From single file to running process",
+          "items": [
+            {
+              "title": "Write one .cs file with optional #: directives",
+              "body": "Directives declare packages (#:package), properties (#:property), or SDK (#:sdk)."
+            },
+            {
+              "title": "Run with the SDK",
+              "body": "dotnet run hello.cs creates a virtual project, restores packages, compiles, and executes."
+            },
+            {
+              "title": "Top-level statements act as entry point",
+              "body": "Same rules as a normal console app: one file with top-level statements."
+            },
+            {
+              "title": "Convert when it grows",
+              "body": "dotnet project convert hello.cs emits a real .csproj and supporting files."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "File-based app flow",
+            "source": "flowchart LR\n  A[Single .cs file] --> B[#: directives]\n  B --> C[SDK virtual project]\n  C --> D[NuGet restore]\n  D --> E[Roslyn compile to IL]\n  E --> F[CLR runs entry point]\n  A -->|dotnet project convert| G[Real .csproj project]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal file-based app",
+            "code": "#!/usr/bin/env dotnet\n#:package Spectre.Console@*\n#:property PublishAot=false\n\nSpectre.Console.AnsiConsole.MarkupLine(\"[green]probe ok[/]\");",
+            "explanation": "The shebang lets Unix shells run the file directly. #:package pulls Spectre.Console from NuGet. #:property PublishAot=false keeps reflection available."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Common #: directives",
+            "code": "#:sdk Microsoft.NET.Sdk\n#:package Newtonsoft.Json@13.0.3\n#:property TargetFramework=net10.0\n#:property Nullable=enable\n\nConsole.WriteLine(\"configured via directives, not a .csproj\");",
+            "explanation": "#: directives are SDK configuration — not the classic #if preprocessor. They configure the virtual project the SDK builds in memory."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Run and convert",
+            "code": "# Run directly\ndotnet run utility.cs\n\n# Or on Unix with shebang\nchmod +x utility.cs\n./utility.cs\n\n# Convert to a full project when it outgrows one file\ndotnet project convert utility.cs",
+            "explanation": "Compare to node file.mjs which runs JavaScript source. dotnet run file.cs still compiles through a virtual project first."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Single-file scripts",
+          "headers": ["Aspect", "C# file-based app", "Node.js script"],
+          "rows": [
+            ["Launch command", "dotnet run file.cs", "node file.mjs"],
+            ["Project file needed?", "No (.csproj virtual)", "No (unless using tsconfig)"],
+            ["Dependencies", "#:package directives", "import + npm install"],
+            ["Compile step", "Yes — Roslyn to IL", "No compile (or tsc first for TS)"],
+            ["Shebang support", "#!/usr/bin/env dotnet", "#!/usr/bin/env node"],
+            ["Scale-up path", "dotnet project convert", "Add package.json, tsconfig, etc."]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Dating file-based apps to C# 11 because top-level statements arrived earlier — those features are independent. Putting utility.cs inside a csproj directory and wondering why restore picks the project instead of the file. Relying on default PublishAot and then missing a reflection-based serializer."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -43,7 +171,7 @@
     {
       "language": "javascript",
       "concept": "Single-file scripts",
-      "note": "`node file.mjs` runs source. `dotnet run file.cs` still compiles (virtual project) then runs. Shebang exists in both ecosystems.",
+      "note": "node file.mjs runs JavaScript source directly. dotnet run file.cs still compiles through a virtual project then runs. Shebang exists in both ecosystems.",
       "futureTopicSlug": "javascript/runtime/scripts"
     }
   ],

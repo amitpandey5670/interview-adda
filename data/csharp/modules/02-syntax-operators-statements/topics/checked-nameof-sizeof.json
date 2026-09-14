@@ -1,34 +1,163 @@
 {
   "id": "csharp-02-checked-nameof-sizeof",
   "slug": "checked-nameof-sizeof",
-  "title": "checked, nameof, sizeof",
+  "title": "Special operators: overflow checks, nameof, and sizeof",
   "moduleId": "csharp-02-syntax-operators-statements",
   "order": 6,
-  "hook": "`checked` makes integer overflow throw. `nameof` is a compiler-evaluated string of a symbol. `sizeof` is for unmanaged value types, not objects on the heap.",
+  "hook": "Three operators that look small but save you in interviews and production: checked makes integer overflow throw, nameof gives you a rename-safe string of a symbol, and sizeof reports the byte size of an unmanaged value type.",
   "introducedIn": "C# 14",
   "sections": [
     {
-      "heading": "Overflow, symbol names, sizes",
-      "prose": "By default, `int` arithmetic wraps in an unchecked context (`int.MaxValue + 1` becomes `MinValue`). `checked { }` or a `checked(...)` expression throws `OverflowException` — use it when a count of concurrent attempts must not silently wrap. Project-wide checked arithmetic is an msbuild property; most BCL code assumes unchecked. `nameof(RetryCount)` is `\"RetryCount\"` even if you rename via IDE refactor. As of C# 14, `nameof(List<>)` is `\"List\"` — you no longer invent a dummy `List<int>` just to name the open generic. `nameof` on a parameter is the usual argument-exception message. `sizeof(int)` is `4`; `sizeof` on a custom struct works in `unsafe` or when the type is unmanaged. It is not JavaScript `typeof` and it is not the GC size of an object — that discussion is module 14.",
-      "snippets": [
+      "heading": "What are checked, nameof, and sizeof?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "checked overflow vs nameof unbound generic",
-          "code": "int n = int.MaxValue;\ntry\n{\n    n = checked(n + 1); // throws OverflowException\n}\ncatch (OverflowException)\n{\n    n = int.MaxValue;\n}\n\nstring cacheKeyPrefix = nameof(List<>); // C# 14: \"List\"\nthrow new ArgumentOutOfRangeException(nameof(n), n, \"attempt window\");",
-          "explanation": "Wrong: concatenating \"n\" by hand in exception messages. Right: nameof. Wrong: sizeof(string) — string is a reference type."
+          "type": "prose",
+          "text": "The **checked** context makes integer arithmetic throw OverflowException instead of silently wrapping around. **nameof** is a compile-time operator that returns the string name of a variable, type, or member — it survives rename refactoring. **sizeof** returns the size in bytes of an unmanaged value type at compile time. None of these are like JavaScript typeof — nameof is evaluated at compile time, and sizeof only works on value types, not objects on the heap."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "checked",
+              "longForm": "checked context",
+              "plainDefinition": "A region or expression where integer overflow throws OverflowException instead of wrapping silently.",
+              "example": "int n = checked(int.MaxValue + 1); // throws instead of wrapping to MinValue."
+            },
+            {
+              "term": "nameof",
+              "longForm": "nameof operator",
+              "plainDefinition": "A compile-time operator that returns the unqualified string name of a symbol. Rename-safe when you use an IDE refactor.",
+              "example": "nameof(RetryCount) returns \"RetryCount\" even after you rename the field."
+            },
+            {
+              "term": "sizeof",
+              "longForm": "sizeof operator",
+              "plainDefinition": "Returns the size in bytes of an unmanaged value type. Not the garbage-collected heap size of an object.",
+              "example": "sizeof(int) is 4. sizeof(string) is a compile error — string is a reference type."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why these operators matter in production",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Use checked when a count of concurrent attempts must not silently wrap from int.MaxValue back to int.MinValue. Use nameof in exception messages and log keys so renaming a field does not leave stale string literals behind. As of C# 14, nameof(List<>) returns \"List\" — you no longer need a dummy List<int> just to name an open generic type. sizeof is for interop and low-level buffer sizing with unmanaged structs, not for measuring object memory (that is module 14)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Default is unchecked",
+          "body": "By default, int arithmetic wraps in an unchecked context. Project-wide checked arithmetic is an MSBuild property (CheckForOverflowUnderflow). Most Base Class Library (BCL) code assumes unchecked wraparound."
+        }
+      ]
+    },
+    {
+      "heading": "How each operator works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "checked, nameof, and sizeof at compile time",
+          "items": [
+            {
+              "title": "checked evaluates at run time",
+              "body": "The compiler emits overflow checks. If the result exceeds the type range, OverflowException is thrown."
+            },
+            {
+              "title": "nameof resolves at compile time",
+              "body": "The compiler replaces nameof(X) with the string \"X\". No reflection, no run-time cost."
+            },
+            {
+              "title": "sizeof resolves at compile time",
+              "body": "Returns a constant integer for unmanaged value types. Requires unsafe context for custom structs in some cases."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "checked versus unchecked integer math",
+            "source": "flowchart LR\n  A[int.MaxValue + 1] --> B{checked context?}\n  B -->|unchecked default| C[Wraps to int.MinValue]\n  B -->|checked| D[Throws OverflowException]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough: overflow, names, and sizes",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "checked overflow versus default wrap",
+            "code": "int n = int.MaxValue;\n\n// Default: wraps silently\nint wrapped = n + 1; // becomes int.MinValue\n\n// checked: throws\nint safe;\ntry\n{\n    safe = checked(n + 1); // OverflowException\n}\ncatch (OverflowException)\n{\n    safe = int.MaxValue; // handle gracefully\n}\n\nchecked\n{\n    int total = count + increment; // entire block is checked\n}",
+            "explanation": "Use checked when silent wraparound would corrupt a counter or window calculation."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "nameof for rename-safe strings",
+            "code": "string cacheKeyPrefix = nameof(List<>); // C# 14: \"List\"\n\nthrow new ArgumentOutOfRangeException(\n    nameof(attemptCount),\n    attemptCount,\n    \"attempt window exceeded\");\n\n// Wrong: hard-coded string — breaks on rename\n// throw new ArgumentOutOfRangeException(\"attemptCount\", ...);",
+            "explanation": "nameof survives IDE rename refactoring. C# 14 allows unbound generics: nameof(List<>) is \"List\" without inventing List<int>."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "sizeof for unmanaged value types",
+            "code": "int intSize = sizeof(int);       // 4\nint longSize = sizeof(long);     // 8\nint boolSize = sizeof(bool);     // 1\n\n// sizeof(string) — compile error: string is a reference type\n// sizeof(MyClass) — compile error: class is a reference type\n\n// Custom unmanaged struct\nstruct Point { public int X, Y; }\nint pointSize = sizeof(Point);   // 8",
+            "explanation": "sizeof is a compile-time constant for unmanaged value types. It is not the garbage-collected heap size of an object."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# vs JavaScript/TypeScript",
+          "headers": ["Feature", "C#", "JavaScript/TypeScript"],
+          "rows": [
+            ["Integer overflow", "Wraps by default; checked throws", "IEEE-754 numbers do not wrap like int32"],
+            ["Symbol name string", "nameof(X) at compile time", "No equivalent; use string literals"],
+            ["Type name string", "typeof(T).Name at run time", "typeof x returns runtime type string"],
+            ["Value type size", "sizeof(T) at compile time", "No sizeof; use ArrayBuffer for binary"],
+            ["Open generic name", "nameof(List<>) since C# 14", "No direct equivalent"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes to avoid",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Top pitfalls",
+          "body": "Using typeof(List<>).Name in older code when nameof(List<>) is now legal and clearer. Assuming sizeof equals the memory a SkiaSharp bitmap occupies — it does not. Wrapping a whole service in checked and surprising yourself on GetHashCode-style math. Using sizeof on a class or string — compile error."
         }
       ]
     }
   ],
   "interviewTakeaways": [
     "Default arithmetic is unchecked wraparound unless you opt into checked.",
-    "`nameof` is compile-time and rename-safe; C# 14 allows unbound generics like `List<>`.",
-    "`sizeof` applies to unmanaged value types, not class instances."
+    "nameof is compile-time and rename-safe; C# 14 allows unbound generics like List<>.",
+    "sizeof applies to unmanaged value types, not class instances.",
+    "checked throws OverflowException; unchecked wraps silently."
   ],
   "commonPitfalls": [
-    "Using `typeof(List<>).Name` in older code when `nameof(List<>)` is now legal and clearer.",
-    "Assuming `sizeof` equals memory a SkiaSharp bitmap occupies — it does not.",
-    "Wrapping a whole service in `checked` and surprising yourself on `GetHashCode` style math."
+    "Using typeof(List<>).Name in older code when nameof(List<>) is now legal and clearer.",
+    "Assuming sizeof equals memory a SkiaSharp bitmap occupies — it does not.",
+    "Wrapping a whole service in checked and surprising yourself on GetHashCode-style math.",
+    "Confusing nameof (compile-time string) with typeof (runtime Type object)."
   ],
   "relatedTopicIds": [
     "csharp-03-built-in-types",
@@ -39,7 +168,7 @@
     {
       "language": "javascript",
       "concept": "Number wrap and typeof",
-      "note": "JS numbers are IEEE-754; they do not wrap like int32. `typeof` is runtime. C# `nameof` is compile-time; `sizeof` is a constant for unmanaged types.",
+      "note": "JavaScript numbers are IEEE-754; they do not wrap like int32. typeof is runtime. C# nameof is compile-time; sizeof is a constant for unmanaged types.",
       "futureTopicSlug": "javascript/types/typeof"
     }
   ],

@@ -1,36 +1,170 @@
 {
   "id": "csharp-06-try-catch-finally",
   "slug": "try-catch-finally",
-  "title": "try, catch, finally, and filters",
+  "title": "try, catch, finally, and filters (handling specific failures)",
   "moduleId": "csharp-06-exceptions-and-using",
   "order": 2,
-  "hook": "try marks risky work. catch handles a type you understand. finally always runs for that try. when filters let you catch a subset without eating the rest.",
+  "hook": "try marks risky work. catch handles a failure type you understand. finally always runs for that try — even when you rethrow. A when filter lets you catch a subset without swallowing everything else.",
   "sections": [
     {
-      "heading": "Control flow",
-      "prose": "When an exception is thrown, the runtime finds the first catch whose type is compatible, after evaluating when if present. More derived types must be listed first or the compiler errors. finally runs whether the try succeeded, caught, or rethrew — it is the primitive using is built on (last topic). A return inside try still runs finally before the method actually returns. catch without a type (bare catch) exists for non-CLS exceptions; you almost never need it in application code."
-    },
-    {
-      "heading": "when filters",
-      "prose": "catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests) handles throttling and lets other HTTP failures bubble. The filter should be fast and side-effect free; throwing inside a filter is a nasty edge. Filters keep SQS workers from wrapping every exception in the same retry policy. Cancellation: catch (OperationCanceledException) when (ct.IsCancellationRequested) is the usual pattern so you do not hide unexpected cancellations.",
-      "snippets": [
+      "heading": "What are try, catch, and finally?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Ordered catch plus a when filter",
-          "code": "try\n{\n    await ProcessMessageAsync(body, ct);\n}\ncatch (OperationCanceledException) when (ct.IsCancellationRequested)\n{\n    throw;\n}\ncatch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)\n{\n    await DelayRetryAsync(ct);\n}\ncatch (HttpRequestException ex)\n{\n    Log(ex);\n    throw;\n}\nfinally\n{\n    lease.Release();\n}",
-          "explanation": "Cancellation rethrows. 429 retries. Other HTTP failures log and throw;. Lease release always runs."
+          "type": "prose",
+          "text": "A **try** block wraps code that might throw. One or more **catch** blocks handle specific exception types — the runtime picks the first compatible handler. A **finally** block always runs for that try, whether the try succeeded, was caught, or rethrew. More-derived exception types must appear before less-derived ones, or the compiler errors because the later catch would be unreachable. The **when** keyword adds a filter so you can catch only exceptions that match an extra condition."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "try",
+              "longForm": "try block",
+              "plainDefinition": "A block of code where exceptions may occur. Control leaves immediately when throw runs.",
+              "example": "try { await ProcessMessageAsync(body); }"
+            },
+            {
+              "term": "catch",
+              "longForm": "catch clause",
+              "plainDefinition": "A handler for a specific exception type. Only runs if the thrown type is compatible.",
+              "example": "catch (IOException ex) { Log(ex); throw; }"
+            },
+            {
+              "term": "finally",
+              "longForm": "finally block",
+              "plainDefinition": "Cleanup code that always executes for its try — success, catch, or rethrow. The basis for using statements.",
+              "example": "finally { lease.Release(); }"
+            },
+            {
+              "term": "when",
+              "longForm": "exception filter",
+              "plainDefinition": "An optional condition on a catch clause. The catch runs only if the type matches AND the filter returns true.",
+              "example": "catch (HttpRequestException ex) when (ex.StatusCode == TooManyRequests)"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What not to catch",
-      "prose": "catch (Exception) at a low helper is how bugs go silent. Catch at a boundary where you can restore state (module 06 hierarchy topic). Logging inside a filter is clever and wrong. Do not use finally to swallow — if finally throws, it can hide the original exception."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Correct try/catch structure keeps workers honest. An Amazon Simple Queue Service (SQS) consumer should retry throttling (HTTP 429) but let programming bugs bubble. finally guarantees leases, locks, and temporary state release even when an exception flies through. Without when filters, you either catch too much or duplicate catch blocks."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "finally runs before return",
+          "body": "A return inside try still executes finally before the method actually returns. Do not put logic in finally that throws — a finally throw can hide the original exception."
+        }
+      ]
+    },
+    {
+      "heading": "How control flows through try/catch/finally",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Execution order",
+          "items": [
+            {
+              "title": "try runs normally",
+              "body": "If no throw occurs, catch blocks are skipped and finally runs."
+            },
+            {
+              "title": "throw triggers catch search",
+              "body": "The runtime finds the first catch whose type matches. If a when filter is present, it must also evaluate to true."
+            },
+            {
+              "title": "catch handles or rethrows",
+              "body": "The catch body runs. throw; (without an identifier) rethrows and preserves the stack trace."
+            },
+            {
+              "title": "finally always runs",
+              "body": "Whether the try succeeded, a catch handled the error, or a rethrow is in flight, finally executes before leaving the try scope."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "try / catch / finally flow",
+            "source": "flowchart TD\n  START[Enter try] --> RUN[Execute try body]\n  RUN -->|success| FIN[Run finally]\n  RUN -->|throw| MATCH{Matching catch?}\n  MATCH -->|yes + when ok| CATCH[Run catch body]\n  MATCH -->|no| FIN2[Run finally on unwind path]\n  CATCH --> FIN\n  FIN --> DONE[Continue or return]\n  FIN2 --> BUBBLE[Exception continues up stack]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Ordered catch plus a when filter",
+            "code": "try\n{\n    await ProcessMessageAsync(body, ct);\n}\ncatch (OperationCanceledException) when (ct.IsCancellationRequested)\n{\n    throw; // expected shutdown — preserve stack\n}\ncatch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)\n{\n    await DelayRetryAsync(ct);\n}\ncatch (HttpRequestException ex)\n{\n    Log(ex);\n    throw;\n}\nfinally\n{\n    lease.Release();\n}",
+            "explanation": "Line 5: cancellation with the token is expected — rethrow with throw;. Line 8: 429 Too Many Requests gets a retry. Line 12: other HTTP failures log and rethrow. Line 17: lease release always runs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Most-derived catch must come first",
+            "code": "try\n{\n    ParseRow(line);\n}\ncatch (ArgumentNullException ex)\n{\n    Log(ex);\n}\ncatch (ArgumentException ex)\n{\n    Log(ex);\n}\n// catch (Exception ex) before ArgumentException would not compile",
+            "explanation": "Line 6: ArgumentNullException is more derived than ArgumentException, so it must appear first. Reversing the order is a compile error because the broader catch would swallow the specific one."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "finally cleanup on success and failure",
+            "code": "var tempPath = Path.GetTempFileName();\ntry\n{\n    await WriteBatchAsync(tempPath, rows);\n    await UploadAsync(tempPath);\n}\nfinally\n{\n    if (File.Exists(tempPath))\n        File.Delete(tempPath);\n}",
+            "explanation": "Line 8: finally deletes the temp file whether upload succeeded or threw. This is the manual pattern that using automates for IDisposable types."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "try/catch in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Typed catch", "catch (IOException ex) — exact type", "catch (e) — any thrown value; TS types e as unknown"],
+            ["when filter", "catch (Ex ex) when (condition)", "No built-in equivalent — inspect inside catch"],
+            ["finally", "Always runs for that try", "Same keyword, same guarantee"],
+            ["Catch order", "Most-derived first — compiler enforced", "Single catch — type checks are manual if/else"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Empty catch blocks",
+          "body": "catch (Exception) { } hides bugs and loses data in workers. If you catch, log, restore state, or rethrow. Never succeed a queue message after swallowing an unknown failure."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Side effects inside when filters",
+          "body": "when should be fast and side-effect free. Logging or mutating state inside a filter makes debugging nightmares. Throwing inside a filter is especially nasty."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Most-derived catch first; finally always runs for that try.",
-    "when filters select without catching sibling failures.",
-    "catch (Exception) belongs at process or message boundaries, if at all, and should rethrow when lost."
+    "when filters select a subset without catching sibling failures.",
+    "catch (Exception) belongs at process or message boundaries, if at all, and should rethrow when you cannot recover."
   ],
   "commonPitfalls": [
     "Empty catch blocks.",
@@ -46,13 +180,13 @@
     {
       "language": "javascript",
       "concept": "try/catch/finally",
-      "note": "JS has the same three keywords but no typed catch (except optional catch binding). There is no when filter.",
+      "note": "JavaScript has the same three keywords but no typed catch (except optional catch binding). There is no when filter — you inspect properties inside the catch body.",
       "futureTopicSlug": "javascript/errors/try-catch"
     },
     {
       "language": "typescript",
       "concept": "typed catch is a lie",
-      "note": "TS cannot catch only TypeError at the type level. C# can catch only IOException.",
+      "note": "TypeScript cannot catch only TypeError at the type level — anything might be thrown. C# can catch only IOException and let others bubble.",
       "futureTopicSlug": "typescript/errors/try-catch"
     }
   ],

@@ -1,32 +1,162 @@
 {
   "id": "csharp-10-lambdas-and-closures",
   "slug": "lambdas-and-closures",
-  "title": "Lambdas, closures, and static lambdas",
+  "title": "Lambda expressions and closures (anonymous functions and capture)",
   "moduleId": "csharp-10-delegates-events-lambdas",
   "order": 2,
-  "hook": "On the 199-to-999 concurrent attempt-submit path, an innocent lambda that captures this pins the whole request graph until the Task completes.",
+  "hook": "A lambda is a short anonymous function you write inline. If it reads a local variable or instance field, the compiler builds a closure that keeps that data alive — which can pin a whole request object longer than you expect.",
   "sections": [
     {
-      "heading": "Expression lambdas, statement lambdas, conversion",
-      "prose": "A lambda is an anonymous function: (parameters) => expression or a block. The compiler converts it to a delegate type (Action, Func, or a named delegate) or, when the target is Expression<TDelegate>, to an expression tree. Statement lambdas cannot become expression trees. Natural types let you assign var Increment = (int x) => x + 1. C# 12 added default parameter values on explicitly typed lambdas. C# 14 lets you write modifiers (ref, in, out, scoped, ref readonly) on implicitly typed parameters; params still requires a typed list.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "C# 14 modifiers on a simple lambda",
-          "code": "delegate bool TryParseId(string text, out int attemptId);\n\nTryParseId parse = (text, out id) => int.TryParse(text, out id);\n\nif (parse(\"41827\", out var attemptId))\n{\n    Console.WriteLine(attemptId);\n}",
-          "explanation": "Before C# 14 this required (string text, out int id). The delegate type still supplies the types; the lambda no longer repeats them."
+          "type": "prose",
+          "text": "A **lambda expression** is an anonymous function written as `(parameters) => expression` or `(parameters) => { statements; }`. The compiler converts it to a **delegate** (Action, Func, or a custom type) or, when the target is Expression<TDelegate>, to an **expression tree** for providers like Entity Framework. A **closure** is the compiler-generated class that holds captured variables when a lambda reads outer locals, parameters, or instance state."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "lambda",
+              "longForm": "lambda expression",
+              "plainDefinition": "An inline anonymous function that converts to a delegate or expression tree.",
+              "example": "list.Where(x => x > 0)"
+            },
+            {
+              "term": "closure",
+              "longForm": "closure class",
+              "plainDefinition": "Compiler-generated storage for variables a lambda captures from its enclosing scope.",
+              "example": "var threshold = 10; nums.Where(n => n > threshold); // threshold is captured"
+            },
+            {
+              "term": "static lambda",
+              "longForm": "static lambda expression",
+              "plainDefinition": "A lambda marked static that cannot capture locals, parameters, or instance members. Added in C# 9.",
+              "example": "list.Select(static x => x * 2)"
+            },
+            {
+              "term": "expression tree",
+              "longForm": "Expression<TDelegate>",
+              "plainDefinition": "A data structure representing code as a tree, not executable IL. Used by IQueryable providers to translate to SQL.",
+              "example": "Expression<Func<User, bool>> filter = u => u.IsActive;"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Closures, this, and static lambdas",
-      "prose": "A lambda that reads a local, a parameter, or instance state is rewritten as a display class. Capturing this (even by touching a field) keeps the enclosing object alive for as long as the delegate is reachable. static on a lambda or anonymous function forbids capture; the compiler errors if you touch instance members or outer locals. Use static on hot-path filters and on anything stored in a static event. Shared mutable captures across parallel Task.WhenAll submissions are data races, not clever reuse.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "static lambda versus capturing the request",
-          "code": "public Task CacheAttemptAsync(string attemptId, byte[] payload, IMemoryCache cache)\n{\n    // Captures this + cache + payload — the request object lives until the callback runs.\n    cache.GetOrCreate(attemptId, _ => payload);\n\n    return cache.GetOrCreateAsync(\n        attemptId,\n        static entry =>\n        {\n            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);\n            return Task.FromResult(ReadOnlyMemory<byte>.Empty);\n        });\n}",
-          "explanation": "The factory marked static cannot close over payload. That is the point: you pass data through the cache API instead of accidentally pinning the worker."
+          "type": "prose",
+          "text": "Lambdas power LINQ, Task callbacks, and event handlers. Capturing `this` — even by touching an instance field — keeps the enclosing object alive for as long as the delegate is reachable. On a high-concurrency path that caches attempt submissions, an innocent capturing lambda can pin the whole request graph until the Task completes. Use **static** lambdas on hot paths to prove no capture. C# 14 lets lambda parameters take ref/in/out/scoped modifiers without repeating types."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Statement lambdas cannot become expression trees",
+          "body": "Only expression-bodied lambdas (a single expression, no block body) can convert to Expression<TDelegate>. A block with multiple statements always becomes a delegate."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Lambda compilation paths",
+          "items": [
+            {
+              "title": "Write the lambda",
+              "body": "Use expression form for simple cases: x => x + 1. Use block form for multiple statements."
+            },
+            {
+              "title": "Compiler picks the target",
+              "body": "If the expected type is a delegate, the compiler emits a method plus optional closure class. If the target is Expression<T>, it builds an expression tree instead."
+            },
+            {
+              "title": "Capture analysis",
+              "body": "Reading outer locals or instance members triggers a display class. static forbids capture entirely."
+            },
+            {
+              "title": "Invoke or translate",
+              "body": "Delegates run as IL. Expression trees are inspected by providers (EF Core, etc.) and translated to SQL or other backends."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Lambda to delegate or expression tree",
+            "source": "flowchart TD\n  L[Lambda expression] --> T{Target type?}\n  T -->|Func / Action / custom delegate| D[Emit method + optional closure class]\n  T -->|Expression TDelegate| E[Build expression tree]\n  D --> I[Invoke at runtime]\n  E --> P[Provider translates e.g. to SQL]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Expression lambda, statement lambda, and natural type",
+            "code": "var increment = (int x) => x + 1;           // natural type: Func<int, int>\n\nAction<string> log = msg =>               // expression lambda\n    Console.WriteLine(msg);\n\nAction retry = () =>                       // statement lambda\n{\n    Console.WriteLine(\"retrying\");\n    AttemptSubmit();\n};",
+            "explanation": "Line 1: C# infers Func<int,int> from the signature. Line 3: single-expression form. Line 6: block body for multiple statements."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# 14 modifiers on a simple lambda",
+            "code": "delegate bool TryParseId(string text, out int attemptId);\n\nTryParseId parse = (text, out id) => int.TryParse(text, out id);\n\nif (parse(\"41827\", out var attemptId))\n{\n    Console.WriteLine(attemptId);\n}",
+            "explanation": "Line 3: before C# 14 this required (string text, out int id). The delegate type supplies the types; the lambda no longer repeats them."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "static lambda versus capturing the request",
+            "code": "public Task CacheAttemptAsync(string attemptId, byte[] payload, IMemoryCache cache)\n{\n    cache.GetOrCreate(attemptId, _ => payload); // captures payload\n\n    return cache.GetOrCreateAsync(\n        attemptId,\n        static entry =>\n        {\n            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);\n            return Task.FromResult(ReadOnlyMemory<byte>.Empty);\n        });\n}",
+            "explanation": "Line 3: captures payload and pins the caller's data. Line 7: static factory cannot close over payload — pass data through the cache API instead."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Lambdas and closures in C# vs JS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["this capture", "Captures this only if you reference instance members", "Arrow functions capture lexical this from enclosing scope"],
+            ["No-capture form", "static lambda (C# 9) — compiler error on capture", "No direct equivalent; you discipline yourself"],
+            ["Expression trees", "Expression<T> for IQueryable translation", "No built-in query translation from function AST"],
+            ["Parallel safety", "Shared mutable captures across Task.WhenAll are data races", "Same pitfall with shared let variables in async callbacks"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Subscribing a capturing lambda to a static event",
+          "body": "A static event on a long-lived host plus a capturing lambda that references this keeps the subscriber alive forever unless you -= in Dispose."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Expecting a statement lambda in IQueryable",
+          "body": "EF Core and other IQueryable providers need expression trees. A block-bodied lambda becomes a delegate and will fail or run client-side unexpectedly."
         }
       ]
     }
@@ -53,7 +183,7 @@
     {
       "language": "javascript",
       "concept": "Closures and lexical this vs arrow functions",
-      "note": "JS arrows capture lexical this. C# lambdas capture this only if you reference instance members; static forbids it. JS has no static lambda equivalent.",
+      "note": "JavaScript arrows capture lexical this. C# lambdas capture this only if you reference instance members; static forbids it. JavaScript has no static lambda equivalent.",
       "futureTopicSlug": "javascript/functions/closures-this"
     }
   ],

@@ -1,32 +1,156 @@
 {
   "id": "csharp-10-extension-members",
   "slug": "extension-members",
-  "title": "Extension methods and C# 14 extension members",
+  "title": "Extension methods and C# 14 members (adding behavior without editing types)",
   "moduleId": "csharp-10-delegates-events-lambdas",
   "order": 5,
-  "hook": "Redis cache-key helpers used to be this-string methods. In C# 14 they can be extension properties and even static members that look like they live on the type.",
+  "hook": "Extension methods let you call static helper methods as if they were instance methods on a type you do not own. C# 14 adds extension properties and static-looking members on types — still compiled as static calls under the hood.",
   "sections": [
     {
-      "heading": "Classic this-parameter methods still exist",
-      "prose": "An extension method is a static method in a non-nested, non-generic static class whose first parameter is marked this. Callers write instance syntax; the compiler emits a static call. LINQ’s Where and Select are the canonical example: they appear on IEnumerable<T> after using System.Linq. Extensions never pierce encapsulation. If the type already has a matching instance member, that member wins. Namespace-level using imports every extension in that namespace, not one class.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Classic this-method for a cache key",
-          "code": "public static class RedisKeyExtensions\n{\n    public static string AsAttemptKey(this string attemptId, string tenant)\n        => $\"attempt:{tenant}:{attemptId}\";\n}\n\nvar key = attemptId.AsAttemptKey(\"acme\");",
-          "explanation": "Readable at the call site. Still a static method; RedisKeyExtensions.AsAttemptKey(attemptId, \"acme\") is identical IL."
+          "type": "prose",
+          "text": "An **extension method** is a static method in a non-nested, non-generic static class whose first parameter is marked **this**. Callers write instance syntax; the compiler emits a static call. Language-Integrated Query (LINQ) `Where` and `Select` are the canonical example. **C# 14** adds **extension member blocks** that can declare instance-like properties and static members on a type — including operators — without modifying the original type's source."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "extension method",
+              "longForm": "extension method",
+              "plainDefinition": "A static method with a this first parameter, invoked with instance syntax.",
+              "example": "attemptId.AsAttemptKey(\"acme\") compiles to RedisKeyExtensions.AsAttemptKey(attemptId, \"acme\")."
+            },
+            {
+              "term": "extension block",
+              "longForm": "C# 14 extension member block",
+              "plainDefinition": "A block inside a static class declaring extension(Receiver) { members } for instance-like or static members.",
+              "example": "extension(string id) { public string CacheKey => $\"attempt:{id}\"; }"
+            },
+            {
+              "term": "bind order",
+              "longForm": "member bind order",
+              "plainDefinition": "Real instance members on the type always win over extensions with the same signature.",
+              "example": "If string already has a method Foo, your extension Foo is ignored."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "C# 14 extension blocks: methods, properties, static members",
-      "prose": "C# 14, shipping with .NET 10, adds extension member blocks. Inside a static class you write extension(ReceiverType name) { ... } for instance-like members, including properties. A second form, extension(ReceiverType) with no receiver name, declares static-looking members on the type: static methods, static properties, and operators. Microsoft’s What’s new in C# 14 sample extends IEnumerable<T> with IsEmpty, Combine, Identity, and operator +. Bind order does not change: instance members of the type still beat extensions. ref on the receiver is how struct extensions mutate in place. Prefer real type members when you own the source; use extensions when you do not, or when the behavior is layer-specific.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "C# 14 extension property and static type member",
-          "code": "public static class RedisKeys\n{\n    extension(string attemptId)\n    {\n        public string AttemptCacheKey => $\"attempt:{attemptId}\";\n        public bool LooksLikeAttemptId => attemptId.StartsWith(\"att_\", StringComparison.Ordinal);\n    }\n\n    extension(string)\n    {\n        public static string SessionPrefix => \"sess:\";\n    }\n}\n\nvar id = \"att_9f\";\nConsole.WriteLine(id.AttemptCacheKey);\nConsole.WriteLine(string.SessionPrefix);",
-          "explanation": "AttemptCacheKey is invoked like an instance property. SessionPrefix is invoked like a static property of string. Neither exists on System.String itself."
+          "type": "prose",
+          "text": "Extensions let you add domain-specific helpers to framework types without forking them. A Redis cache-key helper reads naturally as `id.AttemptCacheKey` instead of a static utility class. They never pierce encapsulation — private members stay inaccessible. Prefer real type members when you own the source; use extensions for cross-cutting layer behavior. C# 14 extension properties are interview-relevant: they compile to static methods but look like instance API."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Import the namespace",
+          "body": "Extensions appear only after a using directive imports the namespace that holds the static class. They are not discovered by class name alone."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Extension resolution",
+          "items": [
+            {
+              "title": "Caller writes instance syntax",
+              "body": "value.Helper(args) looks like an instance call."
+            },
+            {
+              "title": "Compiler checks instance members first",
+              "body": "If the type defines a matching member, that wins. Extensions are fallback only."
+            },
+            {
+              "title": "Search imported static classes",
+              "body": "Among extension methods and C# 14 blocks in scope, pick the best match."
+            },
+            {
+              "title": "Emit static call",
+              "body": "Intermediate Language (IL) is identical to ClassName.Helper(value, args). No runtime patching of the type."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Extension bind order",
+            "source": "flowchart TD\n  C[value.Helper args] --> I{Instance member exists?}\n  I -->|yes| M[Call real instance method]\n  I -->|no| E{Extension in scope?}\n  E -->|yes| S[Static call ExtensionClass.Helper value args]\n  E -->|no| X[Compile error]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Classic this-method for a cache key",
+            "code": "public static class RedisKeyExtensions\n{\n    public static string AsAttemptKey(this string attemptId, string tenant)\n        => $\"attempt:{tenant}:{attemptId}\";\n}\n\nvar key = attemptId.AsAttemptKey(\"acme\");\n// identical IL: RedisKeyExtensions.AsAttemptKey(attemptId, \"acme\");",
+            "explanation": "Line 3: this marks the receiver. Line 7: readable call site; still a static method at runtime."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# 14 extension property and static type member",
+            "code": "public static class RedisKeys\n{\n    extension(string attemptId)\n    {\n        public string AttemptCacheKey => $\"attempt:{attemptId}\";\n        public bool LooksLikeAttemptId => attemptId.StartsWith(\"att_\", StringComparison.Ordinal);\n    }\n\n    extension(string)\n    {\n        public static string SessionPrefix => \"sess:\";\n    }\n}\n\nvar id = \"att_9f\";\nConsole.WriteLine(id.AttemptCacheKey);\nConsole.WriteLine(string.SessionPrefix);",
+            "explanation": "Lines 4–5: instance-like properties on string. Lines 9–10: static-looking member on the string type. Neither exists on System.String itself."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ref receiver for struct mutation",
+            "code": "public static class PointExtensions\n{\n    public static void Translate(this ref Point p, int dx, int dy)\n    {\n        p.X += dx;\n        p.Y += dy;\n    }\n}\n\nvar pt = new Point(0, 0);\npt.Translate(3, 4); // mutates pt because receiver is ref",
+            "explanation": "Line 3: ref on this lets struct extensions mutate in place. Without ref, a struct receiver is copied and changes are lost."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Extensions vs JS prototype patching vs TS augmentation",
+          "headers": ["Feature", "C# extensions", "JavaScript / TypeScript"],
+          "rows": [
+            ["Runtime effect", "Static calls only; type is not patched", "Assigning Array.prototype.foo changes every array globally"],
+            ["Type checking", "Compile-time resolution with bind order", "TS module augmentation adds types; JS has no compile guard"],
+            ["Properties", "C# 14 extension properties (compile-time sugar)", "TS can declare methods on interfaces; implementation is still manual"],
+            ["Visibility", "Cannot access private members of extended type", "Prototype code can sometimes reach closures if you control the module"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Expecting an extension to override a type method",
+          "body": "Instance members always win. An extension with the same name is silently ignored when a real member exists."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mutating a struct through a by-value extension",
+          "body": "Without ref on the receiver, struct extensions receive a copy. Changes do not flow back to the caller's local."
         }
       ]
     }
@@ -38,7 +162,7 @@
     "ref receivers mutate structs; by-value receivers copy."
   ],
   "commonPitfalls": [
-    "Expecting an extension to override a type’s own method.",
+    "Expecting an extension to override a type's own method.",
     "Forgetting using of the namespace so the member vanishes from IntelliSense.",
     "Mutating a struct through a by-value extension and wondering why the local is unchanged."
   ],
@@ -53,7 +177,7 @@
     {
       "language": "javascript",
       "concept": "Prototype augmentation versus modules",
-      "note": "JS can assign Array.prototype.foo and change every array. C# extensions are compile-time sugar; they do not patch the type for other languages or reflection as instance members.",
+      "note": "JavaScript can assign Array.prototype.foo and change every array. C# extensions are compile-time sugar; they do not patch the type for other languages or reflection as instance members.",
       "futureTopicSlug": "javascript/objects/prototypes"
     },
     {

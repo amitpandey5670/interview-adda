@@ -1,39 +1,185 @@
 {
   "id": "csharp-04-access-modifiers",
   "slug": "access-modifiers",
-  "title": "Access modifiers",
+  "title": "Access modifiers (visibility and encapsulation)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 6,
-  "hook": "Accessibility is metadata the CLR enforces. TypeScript private evaporates. C# private is a runtime no. Name every modifier, including file, in interviews.",
+  "hook": "Access modifiers control who can see your types and members. The Common Language Runtime (CLR) enforces them at run time — unlike TypeScript `private`, which disappears after compilation.",
   "sections": [
     {
-      "heading": "The set you must recite",
-      "prose": "public: any assembly. private: containing type only (default for members). internal: same assembly (default for top-level types). protected: containing type and derived types. protected internal: same assembly or derived types in other assemblies (union). private protected: derived types that are also in the same assembly (intersection). file: the declaring source file only, for top-level types — source generators use it so HiddenWidget in two generated files do not collide."
-    },
-    {
-      "heading": "What InternalsVisibleTo and file change",
-      "prose": "Test assemblies often use InternalsVisibleTo to reach internal types without making them public. That is still an assembly-level hole, not a language backdoor. file-local types cannot appear as public return types on non-file types. Nested types inherit a default of private, which surprises people coming from Java’s nested classes. Encapsulation of an auth parser’s signing key material is a private field, not a comment.",
-      "snippets": [
+      "heading": "What are access modifiers?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "protected internal versus private protected versus file",
-          "code": "internal sealed class TokenParser\n{\n    private readonly byte[] _hmacKey;\n\n    public TokenParser(byte[] hmacKey) => _hmacKey = hmacKey;\n\n    protected internal virtual string Describe() => \"token-parser\";\n}\n\nfile static class ParserHelpers\n{\n    public static bool LooksLikeJwt(ReadOnlySpan<char> raw) =>\n        raw.Count('.') == 2;\n}",
-          "explanation": "TokenParser is internal to the assembly. Describe is visible to the assembly and to further derived types elsewhere. ParserHelpers is invisible outside this file."
+          "type": "prose",
+          "text": "Every type and member has an **accessibility level** that determines which code can reference it. C# has seven modifiers you should be able to name in an interview: `public`, `private`, `protected`, `internal`, `protected internal`, `private protected`, and `file`. Members default to `private`; top-level types default to `internal`."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "public",
+              "longForm": "public",
+              "plainDefinition": "Visible to any code in any assembly.",
+              "example": "`public class ApiClient` — any project can reference it."
+            },
+            {
+              "term": "private",
+              "longForm": "private",
+              "plainDefinition": "Visible only inside the containing type. Default for members.",
+              "example": "`private readonly byte[] _key;` — only methods in the same class can access it."
+            },
+            {
+              "term": "internal",
+              "longForm": "internal",
+              "plainDefinition": "Visible within the same assembly (project output). Default for top-level types.",
+              "example": "`internal class TokenParser` — hidden from other projects."
+            },
+            {
+              "term": "file",
+              "longForm": "file-local type",
+              "plainDefinition": "A top-level type visible only in the declaring source file. Used by source generators.",
+              "example": "`file static class ParserHelpers` — invisible outside this .cs file."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Design rule",
-      "prose": "Public surface is a compatibility contract. Internal is for the application’s own composition. private is the default you should keep. protected is a promise to derived types — if you do not intend inheritance, sealed plus private is clearer (module 05)."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Encapsulation is a CLR contract, not a comment. Your public surface is a compatibility promise — once something is public, removing or changing it breaks callers. `internal` is for your application's own composition. `private` is where signing keys and parsing logic should live. In interviews, know the difference between `protected internal` (union: same assembly OR derived) and `private protected` (intersection: derived AND same assembly)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "protected internal vs private protected",
+          "body": "`protected internal` = visible to the assembly OR to derived types anywhere (OR). `private protected` = visible only to derived types in the same assembly (AND). This is a favorite interview trap."
+        }
+      ]
+    },
+    {
+      "heading": "The full modifier set",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Modifier cheat sheet",
+          "items": [
+            {
+              "title": "public",
+              "body": "Any assembly, any code."
+            },
+            {
+              "title": "private",
+              "body": "Containing type only. Default for members."
+            },
+            {
+              "title": "internal",
+              "body": "Same assembly only. Default for top-level types."
+            },
+            {
+              "title": "protected",
+              "body": "Containing type plus any derived type, in any assembly."
+            },
+            {
+              "title": "protected internal",
+              "body": "Same assembly OR derived types elsewhere."
+            },
+            {
+              "title": "private protected",
+              "body": "Derived types that are also in the same assembly."
+            },
+            {
+              "title": "file",
+              "body": "Declaring source file only. Top-level types only."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Access modifier visibility",
+            "source": "flowchart TD\n  P[public] --> ALL[Any assembly]\n  I[internal] --> ASM[Same assembly]\n  PR[private] --> TYPE[Containing type]\n  PT[protected] --> DER[Derived types]\n  PI[protected internal] --> ASM\n  PI --> DER\n  PP[private protected] --> ASM\n  PP --> DER\n  F[file] --> FILE[Same source file]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "protected internal vs file-local helper",
+            "code": "internal sealed class TokenParser\n{\n    private readonly byte[] _hmacKey;\n\n    public TokenParser(byte[] hmacKey) => _hmacKey = hmacKey;\n\n    protected internal virtual string Describe() => \"token-parser\";\n}\n\nfile static class ParserHelpers\n{\n    public static bool LooksLikeJwt(ReadOnlySpan<char> raw) =>\n        raw.Count('.') == 2;\n}",
+            "explanation": "Line 1: `internal` hides `TokenParser` from other assemblies. Line 4: `private` field for the signing key. Line 8: `protected internal` visible to the assembly and derived types elsewhere. Line 11: `file` makes `ParserHelpers` invisible outside this source file."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "private protected in action",
+            "code": "public class BaseService\n{\n    private protected int RetryLimit { get; set; } = 3;\n}\n\n// Same assembly — compiles\nclass DerivedWorker : BaseService\n{\n    public int GetLimit() => RetryLimit;\n}\n\n// Different assembly — DerivedRemote : BaseService cannot access RetryLimit",
+            "explanation": "Line 3: `private protected` allows access only from derived types in the same assembly. A derived class in another project gets a compile error."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "InternalsVisibleTo for test assemblies",
+            "code": "// In AssemblyInfo or project file:\n// [assembly: InternalsVisibleTo(\"MyApp.Tests\")]\n\ninternal class SecretHasher\n{\n    internal static string Hash(string input) => input.GetHashCode().ToString();\n}\n\n// MyApp.Tests can call SecretHasher.Hash without making it public",
+            "explanation": "Line 1: `InternalsVisibleTo` opens `internal` types to a named test assembly. This is an assembly-level hole, not a language backdoor — the test project still needs the attribute."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Privacy in C# vs JS/TS",
+          "headers": ["Approach", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Member privacy", "CLR enforces `private` at runtime via metadata", "TS `private` is erased; JS `#field` is runtime but not metadata"],
+            ["Module/file scope", "`internal` (assembly) or `file` (source file)", "JS modules hide unexported names — closest to `internal`/`file`"],
+            ["Inheritance access", "`protected`, `protected internal`, `private protected`", "TS `protected` is compile-time only"],
+            ["Test access", "`InternalsVisibleTo` attribute", "No equivalent — export or use dependency injection"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Confusing protected internal with private protected",
+          "body": "`protected internal` is more permissive (OR). `private protected` is more restrictive (AND). Draw a Venn diagram in your head during interviews."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Shipping public DTOs meant to be internal",
+          "body": "Once a type is public, every field and method on it is part of your compatibility contract. Start `internal` and promote to `public` deliberately."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Members default private; types default internal.",
-    "protected internal is OR; private protected is AND.",
-    "file is file-local types, mainly for generators."
+    "Members default to `private`; types default to `internal`.",
+    "`protected internal` is OR; `private protected` is AND.",
+    "`file` is for file-local types, mainly used by source generators."
   ],
   "commonPitfalls": [
-    "Confusing protected internal with private protected.",
+    "Confusing `protected internal` with `private protected`.",
     "Shipping public DTOs that were meant to be internal implementation records."
   ],
   "relatedTopicIds": [
@@ -45,13 +191,13 @@
     {
       "language": "typescript",
       "concept": "public / private / protected / #fields",
-      "note": "TS private is erased; ECMAScript #fields are a runtime hurdle but not CLR accessibility. C# modifiers survive in metadata and are checked by the runtime.",
+      "note": "TypeScript `private` is erased at compile time. ECMAScript `#fields` are a runtime hurdle but not CLR accessibility. C# modifiers survive in metadata and are checked by the runtime.",
       "futureTopicSlug": "typescript/classes/privacy"
     },
     {
       "language": "javascript",
       "concept": "module scope versus private",
-      "note": "JS modules hide unbound names by not exporting them. That is file/module scope, closest to C# internal/file, not to CLR private on a member.",
+      "note": "JavaScript modules hide unbound names by not exporting them. That is file/module scope, closest to C# `internal`/`file`, not to CLR `private` on a member.",
       "futureTopicSlug": "javascript/modules/exports"
     }
   ],

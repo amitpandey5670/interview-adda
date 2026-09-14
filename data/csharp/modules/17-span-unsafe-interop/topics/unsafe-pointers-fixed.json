@@ -1,49 +1,163 @@
 {
   "id": "csharp-17-unsafe-pointers-fixed",
   "slug": "unsafe-pointers-fixed",
-  "title": "unsafe, pointers, and fixed",
+  "title": "unsafe code, pointers, and fixed (interop box)",
   "moduleId": "csharp-17-span-unsafe-interop",
   "order": 3,
-  "hook": "`unsafe` does not mean evil. It means the CLR will not verify your pointer arithmetic. Most workers should never enter that context.",
+  "hook": "unsafe lets you use pointers like C++ for tight interop with native libraries. fixed pins a managed object so the garbage collector cannot move it while native code holds the address. Keep unsafe in a small, reviewed box — most app code never needs it.",
   "sections": [
     {
-      "heading": "What unsafe actually unlocks",
-      "prose": "In an `unsafe` context you may declare pointers (`int*`, `byte*`), take addresses, and use `stackalloc` as a pointer instead of a `Span`. Function pointers (`delegate*`) call with `calli` instead of allocating a `Delegate`. The project must set `AllowUnsafeBlocks`. None of this is required to slice a CSV or to pass a `Span` into a library. Prefer `Span<T>`, `MemoryMarshal.GetReference`, and `Unsafe` (the `System.Runtime.CompilerServices.Unsafe` type) helpers that stay in verifiable C# when they can. C# 13 lets iterators contain unsafe regions, but `yield return` must stay in safe code. That is a niche library feature, not a reason to sprinkle `unsafe` in an SQS consumer.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Prefer Span; isolate pointers",
-          "code": "static unsafe int SumPinned(ReadOnlySpan<int> data)\n{\n    fixed (int* p = data)\n    {\n        var total = 0;\n        for (var i = 0; i < data.Length; i++)\n        {\n            total += p[i];\n        }\n        return total;\n    }\n}\n\nstatic int SumSafe(ReadOnlySpan<int> data)\n{\n    var total = 0;\n    foreach (var n in data) total += n;\n    return total;\n}",
-          "explanation": "The foreach version is the default. The pointer version exists to discuss fixed, not to ship in a worker without a profiler saying the JIT lost."
+          "type": "prose",
+          "text": "Enable unsafe in the project file for pointer syntax. Pointers point to raw memory — no bounds checks, no garbage collection tracking. fixed pins arrays or strings during a block so compaction does not move them. SkiaSharp and imaging libraries may use native pointers internally; you usually call safe wrappers instead of writing unsafe yourself."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "unsafe",
+              "longForm": "unsafe code context",
+              "plainDefinition": "C# context where pointer types and arithmetic are allowed.",
+              "example": "unsafe { byte* p = ptr; }"
+            },
+            {
+              "term": "fixed",
+              "longForm": "fixed statement",
+              "plainDefinition": "Pins a managed object so the GC cannot relocate it during the block.",
+              "example": "fixed (byte* p = &array[0]) { /* native call */ }"
+            },
+            {
+              "term": "Pinning",
+              "longForm": "GC pinning",
+              "plainDefinition": "Preventing the collector from moving an object during compaction.",
+              "example": "GCHandle.Alloc(arr, GCHandleType.Pinned) — module 14 roots topic."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "fixed pins against the GC",
-      "prose": "The GC moves objects. A raw pointer to an array element is invalid the moment a compacting collection runs. `fixed (byte* p = buffer)` pins that object for the statement body. Pinning too long fragments the heap — module 14 territory. `fixed` on a `Span` is legal, but Microsoft’s unsafe best practices forbid passing that pointer across P/Invoke as if it were a null-terminated C string. Spans are not null-terminated; pass an explicit length. Strings are null-terminated; if the native API only takes `wchar_t*`, convert to `string` first or pass length. Do not store the pointer after the `fixed` block.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Length with the pointer",
-          "code": "unsafe static extern void NativeHash(byte* data, int length, byte* digest);\n\nstatic unsafe void Hash(ReadOnlySpan<byte> payload, Span<byte> digest)\n{\n    fixed (byte* p = payload)\n    fixed (byte* d = digest)\n    {\n        NativeHash(p, payload.Length, d);\n    }\n}",
-          "explanation": "Two pins, explicit length, no assumption of a trailing zero. That is the entire safe story for a synchronous native hash."
+          "type": "prose",
+          "text": "Excessive pinning fragments the heap — module 14 mark-compact cannot move pinned objects. Prefer Span and Memory when BCL APIs suffice. unsafe belongs in interop shims, not business logic. Code review should flag new unsafe blocks like C++ in a C# shop."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Prefer safe abstractions",
+          "body": "Try Span, MemoryMarshal, and LibraryImport before hand-written pointers."
         }
       ]
     },
     {
-      "heading": "Interview posture",
-      "prose": "Say you can read pointer code. Say you enable `AllowUnsafeBlocks` only in the interop project, not in the domain project. Say you would rather wrap SkiaSharp (or any native renderer) in `using` than pin bitmaps by hand. If the interviewer pushes micro-optimization, ask for a trace — `unsafe` without evidence is a reliability regression, not seniority."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Safe unsafe pattern",
+          "items": [
+            {
+              "title": "Enable AllowUnsafeBlocks",
+              "body": "Only in projects that need interop."
+            },
+            {
+              "title": "Isolate in static class",
+              "body": "One NativeMethods or Interop file, heavily reviewed."
+            },
+            {
+              "title": "Pin minimally",
+              "body": "Short fixed blocks; free handles in finally."
+            },
+            {
+              "title": "Document lifetime",
+              "body": "Native code must not use pointer after unpin."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "fixed pinning scope",
+            "source": "flowchart TD\n  A[Enter fixed block] --> B[Object pinned\\nGC cannot move]\n  B --> C[Pass pointer to native]\n  C --> D[Exit fixed block]\n  D --> E[Object unpinned\\nGC can compact again]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Enable unsafe",
+            "code": "<PropertyGroup>\n  <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n</PropertyGroup>",
+            "explanation": "Required for pointer syntax. Keep scoped to interop projects when possible."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "fixed with byte array",
+            "code": "unsafe void FillNative(byte[] data, int length)\n{\n    fixed (byte* ptr = data)\n    {\n        NativeFill(ptr, length);\n    }\n}",
+            "explanation": "fixed pins data for the block duration. After the block, GC can move the array again."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Span alternative without unsafe",
+            "code": "void FillSafe(Span<byte> data)\n{\n    // Many modern APIs accept Span instead of byte*\n    data.Fill(0xFF);\n}",
+            "explanation": "Prefer Span APIs when native library offers them — SkiaSharp and modern BCL increasingly do."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Low-level memory",
+          "headers": ["Feature", "C# unsafe/fixed", "JavaScript"],
+          "rows": [
+            ["Pointers", "Explicit in unsafe blocks", "Not available in pure JS"],
+            ["Pinning", "fixed, GCHandle", "ArrayBuffer detached when transferred"],
+            ["Native addons", "P/Invoke, unsafe", "N-API with C++ pointers"],
+            ["Safety default", "Safe C# unless unsafe enabled", "No pointer arithmetic in JS"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Long-lived pinned handles — heap fragmentation. Returning pointer from method after fixed ends — use-after-free. Spreading unsafe through business layers instead of one interop shim."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "unsafe is unverifiable pointer code; AllowUnsafeBlocks is a project-level opt-in.",
-    "fixed pins so the GC cannot move the object; do not leak the pointer out of the block.",
-    "Never treat a pinned Span as a null-terminated C string; pass length."
+    "unsafe enables pointers; fixed pins objects during native calls.",
+    "Pinning prevents compaction — keep fixed blocks short.",
+    "Prefer Span and LibraryImport over hand-written unsafe when possible."
   ],
   "commonPitfalls": [
-    "Keeping a pointer after fixed ends — use-after-free when the GC moves the array.",
-    "Enabling AllowUnsafeBlocks on the whole solution because one P/Invoke needed it.",
-    "Pointer arithmetic past Length — the runtime will not save you."
+    "Pointer used after fixed block ends.",
+    "AllowUnsafeBlocks on entire solution unnecessarily.",
+    "Pinning large arrays for entire request lifetime."
   ],
   "relatedTopicIds": [
     "csharp-17-pinvoke-awareness",
@@ -53,25 +167,17 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "no interior pointers",
-      "note": "JS does not expose interior pointers into a GC object. Node addons use N-API and ArrayBuffer backing stores instead of C# fixed.",
-      "futureTopicSlug": "javascript/native/n-api"
+      "concept": "Native addons",
+      "note": "Node N-API uses C++ pointers. C# unsafe is the in-language way to do similar pinning before calling native code.",
+      "futureTopicSlug": "javascript/native/node-api"
     }
   ],
   "officialSources": [
     {
-      "title": "Unsafe code, pointer types, and function pointers",
+      "title": "Unsafe code, pointers, and function pointers",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/unsafe-code"
-    },
-    {
-      "title": "Unsafe code best practices",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/unsafe-code/best-practices"
-    },
-    {
-      "title": "fixed statement",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/statements/fixed"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "skiasharp-dispose"
+  "scenarioTag": "skiasharp-dispose",
+  "animationHint": "stack-heap"
 }

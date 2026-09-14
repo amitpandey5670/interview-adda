@@ -1,39 +1,174 @@
 {
   "id": "csharp-04-classes-and-instances",
   "slug": "classes-and-instances",
-  "title": "Classes and instances",
+  "title": "Classes and instances (reference-type blueprints)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 1,
-  "hook": "A class is a reference-type blueprint. new allocates an object on the managed heap; the variable stores a reference, not the bytes of the object. That is the model behind every service you inject in a microservice host.",
+  "hook": "A class is a blueprint you write once. When you call `new`, the Common Language Runtime (CLR) creates one object on the managed heap and your variable holds a reference to it — not a copy of the object itself.",
   "sections": [
     {
-      "heading": "Blueprint versus object",
-      "prose": "Microsoft’s class documentation treats a class as the type definition and an object as a heap allocation configured from that definition. The default accessibility of a top-level class is internal; public is an explicit choice when another assembly must construct or mention the type. There are no free-floating functions at the language level: even top-level statements compile into a synthesized class with an entry point. Nested types live inside another type and are a way to keep helpers off the assembly’s public surface.",
-      "snippets": [
+      "heading": "What is a class?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Two variables, one Customer instance",
-          "code": "public sealed class QueueLease(string messageId)\n{\n    public string MessageId { get; } = messageId;\n    public DateTimeOffset LockedUntil { get; set; } = DateTimeOffset.UtcNow.AddSeconds(30);\n}\n\nvar a = new QueueLease(\"msg-42\");\nvar b = a;\nb.LockedUntil = DateTimeOffset.UtcNow.AddMinutes(1);\n// a.LockedUntil == b.LockedUntil — same object",
-          "explanation": "Assignment copies the reference. Both names observe the same mutation, which is why a lease object passed through a pipeline is shared identity, not a snapshot."
+          "type": "prose",
+          "text": "A **class** is a reference type: a named blueprint that describes what data and behavior an object can have. The blueprint itself is not the object — you create an object with `new MyClass()`. The variable stores a **reference** (think: a pointer to the object's location), so two variables can point at the same object and see each other's changes."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "class",
+              "longForm": "class",
+              "plainDefinition": "A reference-type blueprint that defines fields, properties, methods, and other members. Objects are created from a class with `new`.",
+              "example": "`public class Customer { }` is the blueprint; `new Customer()` is one customer object."
+            },
+            {
+              "term": "instance",
+              "longForm": "instance",
+              "plainDefinition": "A single object created from a class. Each instance has its own field values but shares the same method definitions.",
+              "example": "`var a = new QueueLease(\"msg-1\");` — `a` is an instance of `QueueLease`."
+            },
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The .NET runtime that allocates objects, enforces types, and runs your compiled code.",
+              "example": "When you call `new`, the CLR allocates memory on the managed heap."
+            },
+            {
+              "term": "reference",
+              "longForm": "reference",
+              "plainDefinition": "A value that points to an object on the heap rather than holding the object's data directly.",
+              "example": "Assigning `b = a` copies the reference, not the object."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "When a class is the right type",
-      "prose": "Use a class when the type has identity, mutable collaboration, or inheritance. An SQS consumer host, a Redis connection multiplexer wrapper, or an auth token validator is a class: callers need to share one instance and its lifetime. Prefer sealed unless you have a designed virtual surface (module 05). Static classes (later in this module) are for operations with no instance state. Records (module 05) are still classes when you write record without struct — they add value equality on top of reference-type allocation."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Most services you build — an SQS message handler, a Redis connection wrapper, an auth token validator — are classes. They have **identity**: callers share one instance and its lifetime. If you need a snapshot that won't change when someone else mutates the original, you must copy data explicitly (or use a value type like a struct, covered later in this module)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Default visibility",
+          "body": "A top-level class defaults to `internal` (visible only inside the same assembly). Members inside a class default to `private`. You choose `public` when other assemblies need to see the type."
+        }
+      ]
     },
     {
-      "heading": "What this page does not cover",
-      "prose": "Finalizers look like ~TypeName() members. You almost never write them; native cleanup belongs on IDisposable with using (module 06), and the GC story is module 14. Methods that appear to hang off String or IEnumerable without living in those types are extension members — C# 14 expanded that syntax, and it is taught in module 10 so this module stays on types you declare."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From blueprint to live object",
+          "items": [
+            {
+              "title": "Declare the class",
+              "body": "Write the type definition with fields, properties, methods, and constructors. This compiles into metadata — no object exists yet."
+            },
+            {
+              "title": "Call `new`",
+              "body": "The CLR allocates memory on the managed heap and runs the constructor to set initial field values."
+            },
+            {
+              "title": "Store the reference",
+              "body": "Your variable holds a reference to the heap object. Assignment between variables copies that reference, not the object's data."
+            },
+            {
+              "title": "Mutate through any reference",
+              "body": "Changing a property through one variable is visible through every other variable that references the same object."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Class variable holds a reference",
+            "source": "flowchart LR\n  subgraph heap [Managed heap]\n    O[\"QueueLease object\\nMessageId = msg-42\"]\n  end\n  A[\"var a\"] -->|reference| O\n  B[\"var b = a\"] -->|same reference| O\n  B -->|mutates LockedUntil| O"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Two variables, one object",
+            "code": "public sealed class QueueLease(string messageId)\n{\n    public string MessageId { get; } = messageId;\n    public DateTimeOffset LockedUntil { get; set; }\n        = DateTimeOffset.UtcNow.AddSeconds(30);\n}\n\nvar a = new QueueLease(\"msg-42\");\nvar b = a; // copies the reference, not the object\nb.LockedUntil = DateTimeOffset.UtcNow.AddMinutes(1);\n// a.LockedUntil is also updated — same object",
+            "explanation": "Line 1: primary constructor captures `messageId`. Line 8: `new` creates one heap object. Line 9: `b = a` copies the reference. Line 10: mutation through `b` is visible through `a` because both names point at the same object."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Nested type keeps helpers private",
+            "code": "public sealed class OrderProcessor\n{\n    public void Process(string orderId) => Validator.EnsureNotEmpty(orderId);\n\n    private static class Validator\n    {\n        public static void EnsureNotEmpty(string value)\n        {\n            if (string.IsNullOrEmpty(value))\n                throw new ArgumentException(\"orderId required\");\n        }\n    }\n}",
+            "explanation": "Line 5: a nested class lives inside another type. It is a way to group helper logic without exposing `Validator` on the assembly's public surface."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "When to pick a class over a struct",
+            "code": "// Class: identity, shared lifetime, inheritance\npublic sealed class SqsConsumerHost\n{\n    public SqsConsumerHost(string queueUrl) => QueueUrl = queueUrl;\n    public string QueueUrl { get; }\n    public void Start() { /* long-lived I/O */ }\n}\n\n// Struct (later topic): small copied data\nreadonly struct Point(int x, int y)\n{\n    public int X { get; } = x;\n    public int Y { get; } = y;\n}",
+            "explanation": "Line 2: `SqsConsumerHost` is a class because it represents a long-lived service with identity. Line 9: `Point` is a struct because it is small data you want to copy by value."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Classes in C# vs JS/TS",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Assignment", "Copies the reference to the heap object", "Same for objects: `const b = a` aliases the object"],
+            ["Primitives", "Value types (`int`, `struct`) copy data", "Primitives (`number`, `string`) copy; no user-defined value types"],
+            ["Privacy", "CLR enforces `private` at runtime", "TS `private` is compile-time only; JS `#field` is runtime but not metadata"],
+            ["Inheritance", "Single base class; `sealed` blocks further inheritance", "Prototypes or `extends`; no `sealed` keyword"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assignment does not clone",
+          "body": "`var copy = original` does not create a new object when `original` is a class. Both variables reference the same heap object. If you need an independent copy, you must write a clone method or create a new instance with the same values."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Public mutable fields as dictionary keys",
+          "body": "A public mutable class used as a dictionary key will break lookups when someone changes a field that affects equality. Keep fields private and design equality deliberately (module 05)."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Class variables hold references; assignment does not clone the object.",
-    "Default type visibility is internal; members default to private.",
-    "Choose class for identity and lifetime; choose struct for small copied data (later topic)."
+    "A class variable holds a reference; assignment copies the reference, not the object.",
+    "Default type visibility is internal; default member visibility is private.",
+    "Choose a class for identity, shared lifetime, and inheritance; choose a struct for small copied data."
   ],
   "commonPitfalls": [
-    "Assuming var copy = original clones a class instance.",
+    "Assuming `var copy = original` clones a class instance.",
     "Leaving a public mutable class as an implicit DTO and then using it as a dictionary key."
   ],
   "relatedTopicIds": [
@@ -47,13 +182,13 @@
     {
       "language": "javascript",
       "concept": "object identity and assignment",
-      "note": "JS objects are also reference-like: const b = a copies the reference. There is no struct equivalent; primitives are copied. C# makes the split a type declaration.",
+      "note": "JavaScript objects are also reference-like: `const b = a` copies the reference. There is no struct equivalent; primitives are copied. C# makes the split explicit in the type declaration.",
       "futureTopicSlug": "javascript/objects/identity"
     },
     {
       "language": "typescript",
       "concept": "class as a runtime constructor",
-      "note": "TS class emits a constructor function. C# class emits CLR metadata and a heap object with a method table. private in C# is enforced at run time.",
+      "note": "A TypeScript class emits a constructor function. A C# class emits CLR metadata and a heap object with a method table. `private` in C# is enforced at run time, not erased.",
       "futureTopicSlug": "typescript/classes/runtime"
     }
   ],

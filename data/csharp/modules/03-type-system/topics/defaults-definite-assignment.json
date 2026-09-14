@@ -1,20 +1,149 @@
 {
   "id": "csharp-03-defaults-definite-assignment",
   "slug": "defaults-definite-assignment",
-  "title": "Defaults and definite assignment",
+  "title": "Default values and definite assignment (locals vs fields)",
   "moduleId": "csharp-03-type-system",
   "order": 4,
-  "hook": "Fields start at `default`. Locals do not — the compiler demands definite assignment. That difference catches bugs JS `undefined` would silently leak.",
+  "hook": "Class fields start at zero or null automatically. Local variables do not — the compiler refuses to let you read a local until every code path assigns it a value.",
   "sections": [
     {
-      "heading": "default(T) versus unassigned locals",
-      "prose": "Every type has a default: `0` for numeric, `false` for `bool`, `null` for reference types and `Nullable<T>`, all-zero fields for structs. Fields, array elements, and `new T()` for a class get those defaults. Local variables must be assigned on every path before read — “definite assignment.” `int n; Console.WriteLine(n);` is a compile error, not `undefined`. `default` or `default(int)` is the explicit spelling. In a CSV importer, a missing field should be an explicit `default` or a nullable, not an unassigned local you hope is zero.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Wrong unassigned local vs right default",
-          "code": "int retry;\n// Console.WriteLine(retry); // CS0165 definite assignment\n\nint retryOk = default; // 0\nstring? cacheKey = default; // null\n\nbool seenHeader = false; // prefer explicit for meaning",
-          "explanation": "Fields on a class are zeroed by the runtime. Locals are not. Do not copy JS habits of declaring then filling inside branches without an else."
+          "type": "prose",
+          "text": "Every type in C# has a **default value**: `0` for numeric types, `false` for `bool`, `null` for reference types, and all-zero fields for structs. **Fields** on a class or struct, plus array elements and `new T()` for a class, get these defaults automatically. **Local variables** inside a method follow a stricter rule called **definite assignment** — you must assign them on every possible code path before you read them. `int n; Console.WriteLine(n);` is a compile error, not a silent `undefined` like JavaScript."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "default value",
+              "longForm": "default value",
+              "plainDefinition": "The value a type gets when no other value is provided. Numeric types default to 0, `bool` to false, references to null.",
+              "example": "`default(int)` returns `0`; `default(string)` returns `null`."
+            },
+            {
+              "term": "definite assignment",
+              "longForm": "definite assignment",
+              "plainDefinition": "A compiler rule that every local variable must be assigned on all paths before its first read.",
+              "example": "`int retry; Console.WriteLine(retry);` fails with error CS0165."
+            },
+            {
+              "term": "default keyword",
+              "longForm": "default keyword",
+              "plainDefinition": "An expression that produces the default value of a type. `default` alone infers from context; `default(int)` names the type explicitly.",
+              "example": "`int retryOk = default;` is the same as `int retryOk = 0;`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Definite assignment prevents a whole class of bugs JavaScript hides. In JavaScript, reading an unassigned `let` gives `undefined`, which silently flows into calculations. In C#, the build stops you. In a CSV importer, a missing column should be an explicit `default`, a nullable `int?`, or a parsed value — never an unassigned local you hope is zero. Fields behave differently: a class field `int _retry` is `0` before your constructor runs."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Fields vs locals",
+          "body": "Fields and array slots: automatically zeroed. Locals: you must assign before read. `out` parameters: the callee must assign before returning. Struct locals: every field must be assigned (or use `= default`)."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Definite assignment flow",
+          "items": [
+            {
+              "title": "Declare a local",
+              "body": "`int retry;` — no value yet. The compiler marks it as \"maybe unassigned.\""
+            },
+            {
+              "title": "Compiler tracks every path",
+              "body": "If any path reaches `Console.WriteLine(retry)` without an assignment, the build fails with CS0165."
+            },
+            {
+              "title": "Assign on all paths",
+              "body": "An `if/else` that assigns in the `if` but not the `else` still fails. Every branch must assign."
+            },
+            {
+              "title": "Use default explicitly",
+              "body": "`int retryOk = default;` assigns 0 immediately. `string? key = default;` assigns null. Prefer explicit `false` or `0` when the meaning matters."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Locals vs fields at startup",
+            "source": "flowchart TB\n  F[\"Class field int _count\"] -->|\"auto zeroed\"| Z[\"_count = 0\"]\n  L[\"Local int retry\"] -->|\"not zeroed\"| Q{\"Assigned on all paths?\"}\n  Q -->|yes| OK[\"Safe to read\"]\n  Q -->|no| ERR[\"CS0165 compile error\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Unassigned local vs explicit default",
+            "code": "int retry;\n// Console.WriteLine(retry); // CS0165 definite assignment\n\nint retryOk = default;     // 0\nstring? cacheKey = default; // null\n\nbool seenHeader = false;   // explicit — clearer intent",
+            "explanation": "Line 1–2: reading `retry` before assignment is a compile error. Line 4: `default` for `int` is `0`. Line 5: `default` for a reference type is `null`. Line 7: writing `false` directly is often clearer than `default` for `bool`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "All branches must assign",
+            "code": "int attempts;\nif (hasMessage)\n{\n    attempts = ParseAttempts(body);\n}\nelse\n{\n    attempts = 0;  // required — without this, CS0165\n}\n\nConsole.WriteLine(attempts); // OK",
+            "explanation": "The compiler analyzes every branch. Line 7 assigns in the `else`; without it, the `else` path would leave `attempts` unassigned and the read on line 10 would fail."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Fields default; struct locals need care",
+            "code": "class Worker\n{\n    int _retry;          // 0 by default\n    string? _name;       // null by default\n}\n\n// Struct local — all fields must be set:\nPoint p;\np.X = 1;\n// p.Y is still 0, but p itself was partially assigned — OK for structs\n// Reading p before any field set would fail",
+            "explanation": "Lines 2–3: instance fields are zeroed when the object is created. Lines 8–10: struct locals allow partial field assignment, but you cannot read the struct as a whole until it is definitely assigned (all fields or `= default`)."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Uninitialized variables",
+          "headers": ["Situation", "C#", "JavaScript", "TypeScript (strict)"],
+          "rows": [
+            ["Unassigned local read", "Compile error (CS0165)", "Returns `undefined`", "Error if `strictPropertyInitialization` on class fields"],
+            ["Class field before constructor", "Zeroed / null", "`undefined` until set", "May error under strict mode"],
+            ["Explicit \"no value\"", "`default` or nullable `T?`", "`null` or `undefined`", "`T | null` or `undefined`"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Reading a field and assuming a local works the same way — locals are stricter. Using `default` for `string` in a nullable-reference-type project and ignoring the warning (covered in module 07). Declaring a local, filling it only inside an `if` without an `else`, and expecting the compiler to accept the read afterward."
         }
       ]
     }
@@ -22,7 +151,7 @@
   "interviewTakeaways": [
     "Definite assignment is a compile-time rule for locals (and `out` parameters).",
     "`default` for a reference type is `null`; for `int` it is `0`.",
-    "Structs’ fields default independently; a struct local still must be fully assigned before use unless you `= default`."
+    "Struct locals must be fully assigned before use unless you write `= default`."
   ],
   "commonPitfalls": [
     "Reading a field and assuming a local works the same.",
@@ -39,7 +168,7 @@
     {
       "language": "javascript",
       "concept": "undefined vs uninitialized",
-      "note": "JS locals are `undefined` until set. C# refuses to read them. TS `strictPropertyInitialization` is the closest analog for class fields.",
+      "note": "JavaScript locals are `undefined` until set. C# refuses to compile code that reads an unassigned local. TypeScript `strictPropertyInitialization` is the closest analog for class fields.",
       "futureTopicSlug": "javascript/types/undefined"
     }
   ],

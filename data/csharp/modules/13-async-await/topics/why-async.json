@@ -1,26 +1,183 @@
 {
   "id": "csharp-13-why-async",
   "slug": "why-async",
-  "title": "Why async: I/O versus blocking",
+  "title": "Why async: I/O versus blocking (freeing threads during waits)",
   "moduleId": "csharp-13-async-await",
   "order": 1,
-  "hook": "A blocked thread waiting on SQS is paid-for capacity doing nothing. await is how C# lets that thread serve the next message while the network is still thinking.",
+  "hook": "A blocked thread waiting on a network call is paid-for capacity doing nothing. The async and await keywords let that thread serve other work while the network is still thinking.",
   "sections": [
     {
-      "heading": "I/O wait is not CPU work",
-      "prose": "Microsoft’s TAP model is explicit: breakfast cooking is asynchronous without being parallel. One cook starts the toaster and moves to the eggs. The toast still cooks while the cook is elsewhere. That is I/O. Parallelism would be two cooks, which is extra threads and extra cores. In a .NET 10 worker, HttpClient.GetAsync and SQS ReceiveMessage spend milliseconds to seconds off-CPU. If you call a synchronous Receive or .Wait(), you occupy a thread-pool thread for the whole wait. Under 199 concurrent submitters that already hurts. At 999 it is how you starve the pool before the CPU is busy. async methods that only await I/O do not magically use more cores; they return threads to the pool so the same cores can start more waits.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Blocking receive versus awaited receive",
-          "code": "public sealed class SqsPoller(IAmazonSQS sqs)\n{\n    public Message ReceiveBlocking(string queueUrl)\n    {\n        var response = sqs.ReceiveMessageAsync(queueUrl).GetAwaiter().GetResult();\n        return response.Messages[0];\n    }\n\n    public async Task<Message?> ReceiveAsync(string queueUrl, CancellationToken cancellationToken)\n    {\n        var response = await sqs.ReceiveMessageAsync(queueUrl, cancellationToken);\n        return response.Messages.Count > 0 ? response.Messages[0] : null;\n    }\n}",
-          "explanation": "GetResult holds the worker thread until SQS answers. await registers a continuation and releases the thread for other polls."
+          "type": "prose",
+          "text": "Asynchronous programming in C# is about waiting efficiently. When your code calls an HTTP endpoint, reads from a queue, or waits on a database, most of the time is spent off the CPU — the network or disk is still working. A blocking call holds a thread-pool thread for the entire wait. async and await let the thread return to the pool so other messages or requests can start. This is not parallelism — it is concurrency. One cook starting toast and moving to eggs is async. Two cooks is parallel."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "I/O-bound work",
+              "plainDefinition": "Operations that spend most of their time waiting on external systems — network, disk, database.",
+              "example": "await httpClient.GetAsync(url) — the CPU is idle while the response travels.",
+              "longForm": "I/O-bound work"
+            },
+            {
+              "term": "CPU-bound work",
+              "plainDefinition": "Operations that keep the processor busy — hashing, image processing, sorting large lists.",
+              "example": "Computing a hash of a 10 MB file — async does not make this faster.",
+              "longForm": "CPU-bound work"
+            },
+            {
+              "term": "Blocking call",
+              "plainDefinition": "A synchronous call that holds the calling thread until it completes.",
+              "example": ".GetAwaiter().GetResult() on an async HTTP call blocks the thread.",
+              "longForm": "Blocking call"
+            },
+            {
+              "term": "Thread pool",
+              "plainDefinition": "A shared set of worker threads the .NET runtime manages. Blocking calls waste pool threads.",
+              "example": "ASP.NET Core and background workers both use the thread pool.",
+              "longForm": "Thread pool"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Start independent I/O, then compose",
-      "prose": "Awaiting A then B is still A’s duration plus B’s duration. If Redis GET and the auth-token introspection are independent, start both, then await Task.WhenAll. That is concurrent I/O on one thread at a time, not two CPU-bound loops. Do not wrap blocking ADO.NET or a sync Redis client in Task.Run just to ‘make it async’; you still pay a thread for the wait and you hide the blocking from the next reader. Prefer truly async APIs. CPU-bound work such as SkiaSharp raster on a large CSV-derived image is the opposite case: it should not sit on the request thread, but that decision is scheduling, covered with the thread pool in module 15."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In a .NET worker processing queue messages, blocking Receive holds a thread-pool thread for seconds. Under high concurrency, you starve the pool before the CPU is busy — requests queue up with idle processors. await registers a continuation and releases the thread. Throughput is about concurrent in-flight I/O, not spinning more threads. CPU-bound work such as image rasterization is a different problem — it belongs in Task.Run or a dedicated pipeline, not in the async keyword itself."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When interviewers ask why not just use more threads",
+          "body": "Say: \"Threads are expensive — each has a stack and scheduling overhead. async frees threads during I/O waits so the same cores can start more waits. For CPU work, you need actual parallelism, which is a separate decision.\""
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Blocking vs async I/O",
+          "items": [
+            {
+              "title": "Start an I/O operation",
+              "body": "Call an async API like ReceiveMessageAsync or GetAsync."
+            },
+            {
+              "title": "Blocking path",
+              "body": "GetResult() or .Wait() holds the thread until the response arrives. No other work on that thread."
+            },
+            {
+              "title": "Async path",
+              "body": "await registers a continuation callback and returns the thread to the pool immediately."
+            },
+            {
+              "title": "Completion",
+              "body": "When I/O finishes, a pool thread picks up the continuation and resumes your method."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Blocking vs async thread usage",
+            "source": "sequenceDiagram\n  participant T as Thread pool thread\n  participant N as Network\n  Note over T,N: Blocking path\n  T->>N: Receive (sync)\n  Note over T: Thread blocked entire wait\n  N-->>T: Response\n  Note over T,N: Async path\n  T->>N: ReceiveAsync\n  Note over T: Thread released to pool\n  N-->>T: Continuation resumes method"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Blocking receive versus awaited receive",
+            "code": "public sealed class SqsPoller(IAmazonSQS sqs)\n{\n    // BAD: blocks a pool thread for the entire SQS wait\n    public Message ReceiveBlocking(string queueUrl)\n    {\n        var response = sqs.ReceiveMessageAsync(queueUrl)\n            .GetAwaiter().GetResult();\n        return response.Messages[0];\n    }\n\n    // GOOD: releases the thread while waiting\n    public async Task<Message?> ReceiveAsync(\n        string queueUrl, CancellationToken cancellationToken)\n    {\n        var response = await sqs.ReceiveMessageAsync(queueUrl, cancellationToken);\n        return response.Messages.Count > 0 ? response.Messages[0] : null;\n    }\n}",
+            "explanation": "GetResult holds the worker thread until SQS answers. await registers a continuation and releases the thread for other polls."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Start independent I/O, then compose",
+            "code": "public async Task<SessionData> LoadSessionAsync(\n    string sessionId, CancellationToken cancellationToken)\n{\n    // Start both — do not await yet\n    var redisTask = _redis.StringGetAsync(sessionId);\n    var httpTask = _http.GetStringAsync($\"/auth/{sessionId}\", cancellationToken);\n\n    // Wait for both concurrently on one thread\n    await Task.WhenAll(redisTask, httpTask);\n\n    return new SessionData(redisTask.Result.ToString(), httpTask.Result);\n}",
+            "explanation": "Awaiting A then B is still A plus B wall-clock time. Starting both then WhenAll overlaps the waits. This is concurrent I/O, not parallel CPU."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Task.Run does not make blocking I/O async",
+            "code": "// WRONG: still pays a thread for the entire blocking wait\nvar message = await Task.Run(() =>\n    sqs.ReceiveMessage(queueUrl)); // synchronous SDK call\n\n// RIGHT: use the truly async API\nvar message = await sqs.ReceiveMessageAsync(queueUrl, cancellationToken);",
+            "explanation": "Task.Run queues CPU work to the pool. Wrapping a blocking call hides the blocking from the reader but still wastes a thread for the wait."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Non-blocking I/O models",
+          "headers": [
+            "Aspect",
+            "C# async/await",
+            "Node.js event loop"
+          ],
+          "rows": [
+            [
+              "Thread model",
+              "Pool threads released during I/O",
+              "Single JS thread freed during I/O"
+            ],
+            [
+              "CPU-heavy async",
+              "Still blocks one pool thread",
+              "Still blocks the event loop"
+            ],
+            [
+              "Concurrency mechanism",
+              "Thread pool + continuations",
+              "Event loop + microtasks"
+            ],
+            [
+              "Blocking danger",
+              ".Result / .Wait() on pool thread",
+              "Sync fs.readFileSync blocks loop"
+            ],
+            [
+              "Parallel CPU",
+              "Task.Run, Parallel, PLINQ",
+              "Worker threads"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling .Result or .Wait() on async I/O in a library used by ASP.NET Core. Assuming async methods run in parallel on multiple cores. Using Task.Run to wrap a blocking receive and calling that async. Confusing async (compose waits) with parallelism (use multiple cores)."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -29,7 +186,7 @@
     "WhenAll is for independent I/O; sequential await is for true data dependencies."
   ],
   "commonPitfalls": [
-    "Calling .Result or .Wait() on async I/O ‘just this once’ in a library used by ASP.NET Core.",
+    "Calling .Result or .Wait() on async I/O 'just this once' in a library used by ASP.NET Core.",
     "Assuming async methods run in parallel on multiple cores.",
     "Using Task.Run to wrap a blocking SQS receive and calling that async."
   ],
@@ -44,7 +201,7 @@
     {
       "language": "javascript",
       "concept": "Non-blocking I/O on a single thread",
-      "note": "Node’s event loop also frees the JS thread during I/O. C# await does the same for a pool thread. Neither turns CPU-heavy work into free concurrency.",
+      "note": "Node's event loop also frees the JS thread during I/O. C# await does the same for a pool thread. Neither turns CPU-heavy work into free concurrency.",
       "futureTopicSlug": "javascript/async/event-loop"
     }
   ],

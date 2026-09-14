@@ -1,35 +1,169 @@
 {
   "id": "csharp-04-static-members",
   "slug": "static-members",
-  "title": "Static members",
+  "title": "Static members (type-level state and behavior)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 7,
-  "hook": "static belongs to the type, not to an instance. One copy of a static field is shared by every worker thread that can see the type — which is either a feature (cached regex) or a bug (mutable dictionary without locks).",
+  "hook": "`static` belongs to the type itself, not to any single object. One copy of a static field is shared by every thread that can see the type — which is either a feature or a bug.",
   "sections": [
     {
-      "heading": "Static classes and members",
-      "prose": "A static class cannot be instantiated, is sealed, and contains only static members. Math and Console are the textbook BCL examples. Instance members cannot touch instance state from a static method without receiving an instance. Local functions and const are not the same as static, but const is implicitly static in effect: it has no instance."
-    },
-    {
-      "heading": "Shared state in workers",
-      "prose": "Static readonly after a static constructor is a common way to hold compiled Regex or a frozen mapping of LTI issuers. Static mutable collections in an SQS consumer are a data race unless you use concurrent types or never write after init. Static constructors run before the first use of the type; an exception there becomes TypeInitializationException for the rest of the process lifetime of that type (module 06).",
-      "snippets": [
+      "heading": "What are static members?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Static cache of issuer prefixes",
-          "code": "public static class IssuerMap\n{\n    private static readonly Dictionary<string, string> Prefix =\n        new(StringComparer.OrdinalIgnoreCase)\n        {\n            [\"https://lms.example\"] = \"lti-lms\",\n            [\"https://auth.example\"] = \"oidc\"\n        };\n\n    public static bool TryGetCode(string issuer, out string code) =>\n        Prefix.TryGetValue(issuer, out code!);\n}",
-          "explanation": "The dictionary is written only during type initialization. After that, readers share it. If you mutated Prefix at runtime you would need a concurrency story (module 15)."
+          "type": "prose",
+          "text": "A **static member** belongs to the type, not to an instance. There is one copy of a static field shared across the entire application for that type load. A **static class** cannot be instantiated, is implicitly `sealed`, and can only contain static members. `Math` and `Console` are the textbook examples from the Base Class Library (BCL)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "static",
+              "longForm": "static member",
+              "plainDefinition": "A field, method, or property that belongs to the type itself rather than to any instance.",
+              "example": "`Math.Max(3, 7)` — no `new Math()` needed."
+            },
+            {
+              "term": "static class",
+              "longForm": "static class",
+              "plainDefinition": "A class that cannot be instantiated and contains only static members. Implicitly sealed.",
+              "example": "`public static class StringExtensions { ... }`"
+            },
+            {
+              "term": "static constructor",
+              "longForm": "static constructor",
+              "plainDefinition": "Runs once before the first use of the type. Used to initialize static fields. Cannot be called directly.",
+              "example": "`static IssuerMap() { ... }` runs before the first call to any static member."
+            },
+            {
+              "term": "const",
+              "longForm": "constant",
+              "plainDefinition": "A compile-time value. Implicitly static. Cannot be changed at runtime.",
+              "example": "`public const int MaxRetries = 5;`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What static is not",
-      "prose": "Static is not a substitute for dependency injection. A static Redis connector hides lifetime and makes tests lie. C# 14 extension members can add static-looking members to other types; that syntax is module 10. Static local functions exist, but they cannot capture locals — they are just private methods with a tighter name."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Static is ideal for pure functions, frozen lookup tables, and factory methods. It is dangerous for mutable shared state in multi-threaded hosts — an SQS consumer with a static `Dictionary` that gets written at runtime is a data race unless you use concurrent types or never write after initialization."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Static is not dependency injection",
+          "body": "A static Redis connector hides lifetime and makes unit tests lie. Prefer injecting services through constructors. Static is for stateless utilities and one-time initialization."
+        }
+      ]
+    },
+    {
+      "heading": "How static initialization works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Static lifecycle",
+          "items": [
+            {
+              "title": "First reference to the type",
+              "body": "Any call to a static member or `new` on a non-static class triggers type initialization."
+            },
+            {
+              "title": "Static field initializers run",
+              "body": "In declaration order, before the static constructor body."
+            },
+            {
+              "title": "Static constructor runs once",
+              "body": "The CLR guarantees it runs exactly once per type per application domain. An exception poisons the type with `TypeInitializationException`."
+            },
+            {
+              "title": "Static members are available",
+              "body": "All subsequent calls use the initialized static state. No instance is ever created for a static class."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Static initialization flow",
+            "source": "flowchart TD\n  F[First static member access] --> FI[Static field initializers]\n  FI --> SC[Static constructor]\n  SC --> OK[Type ready]\n  SC -->|exception| TIE[TypeInitializationException forever]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Static cache of issuer prefixes",
+            "code": "public static class IssuerMap\n{\n    private static readonly Dictionary<string, string> Prefix =\n        new(StringComparer.OrdinalIgnoreCase)\n        {\n            [\"https://lms.example\"] = \"lti-lms\",\n            [\"https://auth.example\"] = \"oidc\"\n        };\n\n    public static bool TryGetCode(string issuer, out string code) =>\n        Prefix.TryGetValue(issuer, out code!);\n}",
+            "explanation": "Line 3: `static readonly` dictionary initialized once. Line 10: read-only after initialization — safe for concurrent readers. If you mutated `Prefix` at runtime you would need a concurrency story (module 15)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Static constructor for complex init",
+            "code": "public static class RegexCache\n{\n    public static Regex Email { get; }\n    public static Regex Phone { get; }\n\n    static RegexCache()\n    {\n        Email = new Regex(@\"^[^@]+@[^@]+$\", RegexOptions.Compiled);\n        Phone = new Regex(@\"^\\d{10}$\", RegexOptions.Compiled);\n    }\n}",
+            "explanation": "Line 6: static constructor runs once before first access. Line 8: `RegexOptions.Compiled` trades startup cost for faster matching — a common static-cache pattern."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Instance vs static — what compiles",
+            "code": "public class Counter\n{\n    public int Value { get; set; }\n    public static int TotalCreated;\n\n    public Counter() => TotalCreated++;\n\n    public static Counter Create() => new();\n    // public void Reset() => TotalCreated = 0; // instance can touch static\n    // public static int GetValue() => Value;   // ERROR: static cannot touch instance\n}",
+            "explanation": "Line 4: static field shared across all instances. Line 9: static factory method. Line 11: instance methods can access static members. Line 12: static methods cannot access instance members without an instance parameter."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Static in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Static class", "Language keyword — cannot `new` it", "Convention only — nothing prevents `new`"],
+            ["Static fields", "One copy per type load in metadata", "JS static fields live on the constructor function"],
+            ["Static constructor", "Runs once, cannot be called directly", "No equivalent — use module-level `const` or IIFE"],
+            ["const vs readonly", "`const` is compile-time; `static readonly` is runtime once", "JS `const` is runtime immutable binding"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mutable static dictionaries in multi-threaded hosts",
+          "body": "An SQS consumer that writes to a static `Dictionary` without locks will corrupt data. Use `ConcurrentDictionary`, initialize once as `readonly`, or inject a scoped service."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Static as a service locator",
+          "body": "Hiding `HttpClient` or a Redis multiplexer behind static properties makes tests impossible to isolate. Register services in dependency injection instead."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Static fields are process-wide for that type load.",
-    "Static constructors throwing poison the type with TypeInitializationException.",
+    "Static constructors throwing poison the type with `TypeInitializationException`.",
     "Prefer static for pure functions and frozen lookup tables, not for hidden I/O."
   ],
   "commonPitfalls": [
@@ -45,13 +179,13 @@
     {
       "language": "javascript",
       "concept": "static class fields",
-      "note": "JS static fields live on the constructor function. There is no static class that forbids new, only convention.",
+      "note": "JavaScript static fields live on the constructor function. There is no static class that forbids `new` — only convention.",
       "futureTopicSlug": "javascript/classes/static"
     },
     {
       "language": "typescript",
       "concept": "static members on classes",
-      "note": "TS static is a constructor-property. C# static is a special member in metadata and can live on a static class with no instances.",
+      "note": "TypeScript `static` is a constructor property. C# `static` is a special member in metadata and can live on a static class with no instances allowed.",
       "futureTopicSlug": "typescript/classes/static"
     }
   ],

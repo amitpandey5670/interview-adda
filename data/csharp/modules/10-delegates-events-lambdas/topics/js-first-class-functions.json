@@ -1,51 +1,170 @@
 {
   "id": "csharp-10-js-first-class-functions",
   "slug": "js-first-class-functions",
-  "title": "JS first-class functions and EventTarget",
+  "title": "JavaScript first-class functions and EventTarget (JS/TS comparison)",
   "moduleId": "csharp-10-delegates-events-lambdas",
   "order": 6,
-  "hook": "If you think in Node callbacks, map them onto delegates and EventTarget — do not say C# has first-class functions the way JavaScript does.",
+  "hook": "If you think in Node.js callbacks, map them onto C# delegates and events — but do not say C# has first-class functions the way JavaScript does. Methods become values only after you bind them to a delegate type.",
   "sections": [
     {
-      "heading": "Functions as values, with a type system that survives",
-      "prose": "In JavaScript every function is an object. You pass it, return it, and stash it on a map without declaring a type. In C#, a method is not a value until you convert it to a delegate (or to an expression tree). The conversion is typed: parameter list and return type must match, with limited variance. That is why RabbitMQ middleware in C# is IList<Func<Message, CancellationToken, Task>> rather than an untyped array of callbacks. TypeScript’s (msg: Message) => Promise<void> is a close story at compile time and then disappears. The CLR still knows the delegate type at run time.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "javascript",
-          "label": "JS callback list versus C# multicast",
-          "code": "const listeners = [];\nfunction on(fn) { listeners.push(fn); }\nfunction off(fn) {\n  const i = listeners.indexOf(fn);\n  if (i >= 0) listeners.splice(i, 1);\n}\nfunction emit(msg) {\n  for (const fn of listeners.slice()) fn(msg);\n}",
-          "explanation": "This is multicast you built yourself. C#’s delegate type plus event add/remove is that pattern with CLR-checked signatures."
+          "type": "prose",
+          "text": "In **JavaScript**, every function is an object you can pass, return, and store without a conversion step. In **C#**, a method is not a value until you assign it to a **delegate** (Func, Action, or a custom type). **TypeScript** function types like `(msg: Message) => Promise<void>` check at compile time but erase at runtime. C# delegate types remain in metadata and the Common Language Runtime (CLR) validates invocations."
         },
         {
-          "language": "csharp",
-          "label": "The same pipeline as typed Func values",
-          "code": "public sealed class RabbitPipeline\n{\n    private readonly List<Func<RabbitMessage, CancellationToken, Task>> _steps = [];\n\n    public void Use(Func<RabbitMessage, CancellationToken, Task> step) => _steps.Add(step);\n\n    public async Task RunAsync(RabbitMessage message, CancellationToken ct)\n    {\n        foreach (var step in _steps)\n            await step(message, ct);\n    }\n}\n\npublic sealed record RabbitMessage(string RoutingKey, ReadOnlyMemory<byte> Body);",
-          "explanation": "Each step is a first-class value only after it is a Func. Method groups convert when the target type is known."
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "first-class function",
+              "longForm": "first-class function",
+              "plainDefinition": "A function treated as a value you can assign to variables, pass as arguments, and return from other functions.",
+              "example": "JavaScript: const fn = () => {}; pipeline.push(fn);"
+            },
+            {
+              "term": "EventTarget",
+              "longForm": "DOM EventTarget",
+              "plainDefinition": "The browser and Node API for addEventListener and removeEventListener with string event names.",
+              "example": "target.addEventListener('message', onMsg);"
+            },
+            {
+              "term": "method group",
+              "longForm": "method group conversion",
+              "plainDefinition": "When a method name appears where a delegate is expected, the compiler converts it if signatures match.",
+              "example": "list.ForEach(Console.WriteLine); // method group to Action<string>"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "EventTarget compared with event",
-      "prose": "DOM and Node EventTarget: addEventListener(type, fn), removeEventListener(type, fn) with the same function reference, capture/once options, and a string event name. C# events are members, not a stringly-typed map. There is no built-in once; you unsubscribe yourself. There is no capture phase. Both systems leak if a long-lived emitter holds a short-lived listener. Both fail to unsubscribe if you pass a new function with the same source text. When an interviewer asks for a JS analogy, say EventTarget plus function values, then name the differences: typing, multicast exception behavior, and no runtime event-name registry on a typical C# type.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "javascript",
-          "label": "EventTarget must keep the same function reference",
-          "code": "const ac = new AbortController();\ntarget.addEventListener(\"message\", onMsg, { signal: ac.signal });\n// later\nac.abort(); // equivalent intent to -= in Dispose",
-          "explanation": "AbortSignal is the modern JS unsubscribe story. C# uses -= or disposing the publisher. Neither is garbage-collected automatically just because the listener went out of scope if the emitter still references it."
+          "type": "prose",
+          "text": "Coming from JavaScript or TypeScript, the mental model shift is the **type boundary**: C# middleware is `List<Func<Message, CancellationToken, Task>>`, not an untyped callback array. EventTarget uses string event names and requires the same function reference to unsubscribe — like C# **-=**, but C# events are typed members, not a runtime registry. Both ecosystems leak if a long-lived emitter holds a short-lived listener."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview one-liner",
+          "body": "Say: JavaScript functions are first-class objects; C# methods become objects as typed delegates. Closest JS analogue to C# events is EventTarget with identical-reference unsubscribe."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mapping JS patterns to C#",
+          "items": [
+            {
+              "title": "Pass a callback",
+              "body": "JS: pass function directly. C#: pass Func/Action or method group converted to delegate."
+            },
+            {
+              "title": "Build middleware pipeline",
+              "body": "JS: array of functions you loop. C#: List<Func<...>> or multicast delegate with +=."
+            },
+            {
+              "title": "Subscribe to events",
+              "body": "JS: addEventListener(type, fn). C#: publisher.Event += handler on a typed member."
+            },
+            {
+              "title": "Unsubscribe",
+              "body": "Both require the same reference. JS AbortSignal or removeEventListener; C# -= or Dispose."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "JS callback list vs C# multicast delegate",
+            "source": "flowchart LR\n  subgraph js [JavaScript]\n    A[listeners array] --> B[push fn]\n    A --> C[splice fn]\n    A --> D[forEach invoke]\n  end\n  subgraph cs [C#]\n    E[delegate field] --> F[+= handler]\n    E --> G[-= handler]\n    E --> H[Invoke or event raise]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "JavaScript callback list you built yourself",
+            "code": "const listeners = [];\nfunction on(fn) { listeners.push(fn); }\nfunction off(fn) {\n  const i = listeners.indexOf(fn);\n  if (i >= 0) listeners.splice(i, 1);\n}\nfunction emit(msg) {\n  for (const fn of listeners.slice()) fn(msg);\n}",
+            "explanation": "Line 1: manual multicast. Line 8: slice copies before invoke so off during emit is safe. C# delegate += is this pattern with CLR-checked signatures."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "The same pipeline as typed Func values",
+            "code": "public sealed class RabbitPipeline\n{\n    private readonly List<Func<RabbitMessage, CancellationToken, Task>> _steps = [];\n\n    public void Use(Func<RabbitMessage, CancellationToken, Task> step) => _steps.Add(step);\n\n    public async Task RunAsync(RabbitMessage message, CancellationToken ct)\n    {\n        foreach (var step in _steps)\n            await step(message, ct);\n    }\n}\n\npublic sealed record RabbitMessage(string RoutingKey, ReadOnlyMemory<byte> Body);",
+            "explanation": "Line 3: each step is a first-class value only after it is a Func. Line 9: method groups convert when the target delegate type is known."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "EventTarget with AbortSignal for lifetime",
+            "code": "const ac = new AbortController();\ntarget.addEventListener(\"message\", onMsg, { signal: ac.signal });\n// later\nac.abort(); // removes listener — similar intent to C# -= in Dispose",
+            "explanation": "Line 2: same function reference subscribed. Line 4: AbortSignal bulk-unsubscribes. C# has no built-in once flag — unsubscribe in the handler or use a disposable wrapper."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Side-by-side feature map",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Function as value", "Requires delegate conversion", "Native — functions are objects"],
+            ["Type at runtime", "Delegate metadata enforced by CLR", "JS none; TS erased after compile"],
+            ["Event naming", "Typed event members on the class", "String names on EventTarget / EventEmitter"],
+            ["Multicast exception", "Later handlers skipped on throw unless isolated", "Same unless you wrap each call in try/catch"],
+            ["Unsubscribe mistake", "-= new lambda fails silently (still subscribed)", "removeEventListener with new arrow fails the same way"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Saying C# has first-class functions without mentioning delegates",
+          "body": "Methods are not values until converted. Always name Func, Action, or a custom delegate when comparing to JavaScript."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Comparing event to EventEmitter without noting typing",
+          "body": "Node EventEmitter uses string event names. C# events are compile-time members with a fixed delegate signature."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "JS functions are objects; C# methods become objects only as delegates.",
-    "EventTarget is the closest JS analogue to C# events; event names are strings in JS and members in C#.",
+    "JavaScript functions are objects; C# methods become objects only as delegates.",
+    "EventTarget is the closest JavaScript analogue to C# events; event names are strings in JS and members in C#.",
     "Same-reference unsubscribe is required in both languages.",
     "TypeScript function types erase; C# delegate types do not."
   ],
   "commonPitfalls": [
     "Saying C# has first-class functions without mentioning the delegate type.",
-    "Comparing event to Node EventEmitter’s string names without noting the typed member.",
+    "Comparing event to Node EventEmitter's string names without noting the typed member.",
     "Assuming removeEventListener('message', () => {}) works — it does not, for the same reason -= new lambda fails."
   ],
   "relatedTopicIds": [

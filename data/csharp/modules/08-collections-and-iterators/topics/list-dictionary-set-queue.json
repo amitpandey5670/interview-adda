@@ -1,35 +1,171 @@
 {
   "id": "csharp-08-list-dictionary-set-queue",
   "slug": "list-dictionary-set-queue",
-  "title": "List, Dictionary, HashSet, Queue",
+  "title": "List, Dictionary, HashSet, and Queue (generic collections)",
   "moduleId": "csharp-08-collections-and-iterators",
   "order": 2,
-  "hook": "The generic collections in System.Collections.Generic are the job. An SQS batch is a list. A Redis-shaped cache is a dictionary. Choosing wrong is how you scan 50k keys on every request.",
+  "hook": "Most day-to-day C# code stores data in four generic types from System.Collections.Generic. Each one answers a different question: append, look up, check membership, or process in order.",
   "sections": [
     {
-      "heading": "List<T> — growable buffer",
-      "prose": "List<T> is an array plus a count. Add is amortized O(1). Indexer is O(1). Insert at 0 is O(n). It is not thread-safe; two attempt-submit threads calling Add without a lock corrupt the backing store. Capacity can be set in the constructor when you know the SQS MaxNumberOfMessages. Prefer List<T> over ArrayList — ArrayList boxes value types and stores object (module 09). For a bounded in-memory buffer of CSV rows you already decided to materialize, List is correct. For a live file stream, yield instead.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "SQS batch versus Redis map",
-          "code": "List<Message> batch = []; // grow as ReceiveMessage pages\nforeach (Message message in page.Messages)\n    batch.Add(message);\n\nDictionary<string, string> cacheHits = [];\nforeach (Message message in batch)\n{\n    string id = message.MessageId;\n    string? cached = redis.StringGet($\"dedup:{id}\");\n    if (cached is not null)\n        cacheHits[id] = cached;\n}\n\nHashSet<string> seenIds = [.. batch.Select(m => m.MessageId)];\nQueue<Message> retry = [];\nforeach (Message message in batch)\n    if (!cacheHits.ContainsKey(message.MessageId))\n        retry.Enqueue(message);",
-          "explanation": "List holds the batch. Dictionary is the cache-shaped lookup. HashSet answers membership. Queue is FIFO for retries. Four types, four questions."
+          "type": "prose",
+          "text": "The Base Class Library (BCL) ships ready-made collection types in System.Collections.Generic. List<T> is a growable buffer — think of it as an array that resizes itself. Dictionary<TKey, TValue> maps keys to values for fast lookup, like a Redis cache keyed by session ID. HashSet<T> stores unique items and answers \"is this already in the set?\" in near-constant time. Queue<T> is first-in-first-out (FIFO): enqueue at the back, dequeue from the front."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "BCL",
+              "shortForm": "BCL",
+              "longForm": "Base Class Library",
+              "plainDefinition": "The standard set of types shipped with .NET — collections, I/O, networking, and more.",
+              "example": "List<int> and Dictionary<string, string> are BCL types."
+            },
+            {
+              "term": "List",
+              "longForm": "List<T>",
+              "plainDefinition": "A growable array with an Add method and O(1) indexing by position.",
+              "example": "List<Message> batch = []; then batch.Add(message);"
+            },
+            {
+              "term": "Dictionary",
+              "longForm": "Dictionary<TKey, TValue>",
+              "plainDefinition": "A hash table that maps unique keys to values with O(1) average lookup.",
+              "example": "cacheHits[\"session-42\"] = jsonBody;"
+            },
+            {
+              "term": "HashSet",
+              "longForm": "HashSet<T>",
+              "plainDefinition": "A set of unique items with fast Contains checks — a dictionary without values.",
+              "example": "if (seenIds.Contains(messageId)) skip;"
+            },
+            {
+              "term": "Queue",
+              "longForm": "Queue<T>",
+              "plainDefinition": "A first-in-first-out (FIFO) collection: Enqueue adds to the back, Dequeue removes from the front.",
+              "example": "retry.Enqueue(failedMessage);"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Dictionary, HashSet, Queue, Stack",
-      "prose": "Dictionary<TKey, TValue> requires a hash and equality on TKey. string keys should pick a comparer: StringComparer.Ordinal for Redis-style ids, OrdinalIgnoreCase for HTTP headers. Duplicate keys throw on Add; the indexer overwrites. TryGetValue is the NRT-friendly lookup. ConcurrentDictionary is for shared mutable maps under high-concurrency — still not a distributed Redis. HashSet<T> is a dictionary without values. Queue<T> Enqueue/Dequeue is FIFO; Stack<T> is LIFO. LinkedList<T> is almost never the interview answer unless you needed O(1) unlink and already measured. ImmutableDictionary lives in System.Collections.Immutable when you publish a snapshot to many readers."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Choosing the wrong collection is how you end up scanning 50,000 keys on every HTTP request. An SQS batch is a List. A Redis-shaped cache is a Dictionary. Checking whether you already processed a message ID is a HashSet, not List.Contains in a loop. None of these types are thread-safe by default — two threads calling Add on the same List without a lock corrupts the backing array."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Match the type to the question",
+          "body": "Append? List. Lookup by key? Dictionary. Uniqueness? HashSet. Process in arrival order? Queue. In-process Dictionary is not Redis; in-process Queue is not SQS."
+        }
+      ]
     },
     {
-      "heading": "Thread safety and what these are not",
-      "prose": "None of List, Dictionary, HashSet, or Queue are safe for unsynchronized writers. A 199-to-999 concurrent attempt-submit path that shares a static Dictionary will lose entries. Use ConcurrentDictionary, a lock, or do not share. They are also not a distributed cache (Redis) and not a durable queue (SQS). Channel<T> is the in-process async pipe — named in the last topic, taught in module 15."
+      "heading": "How each collection works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Pick the right tool",
+          "items": [
+            {
+              "title": "List<T> — growable buffer",
+              "body": "Add is amortized O(1). Indexer is O(1). Insert at position 0 is O(n) because every item shifts. Set Capacity in the constructor when you know the size upfront."
+            },
+            {
+              "title": "Dictionary<TKey, TValue> — key lookup",
+              "body": "Requires hash and equality on TKey. TryGetValue is the safe lookup pattern. Duplicate keys throw on Add; the indexer overwrites silently."
+            },
+            {
+              "title": "HashSet<T> — uniqueness",
+              "body": "Add returns false if the item was already present. Contains is O(1) average — far faster than List.Contains for large collections."
+            },
+            {
+              "title": "Queue<T> and Stack<T> — ordered access",
+              "body": "Queue is FIFO (Enqueue/Dequeue). Stack is last-in-first-out (LIFO) with Push/Pop. LinkedList<T> is almost never the interview answer."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Collection decision tree",
+            "source": "flowchart TD\n  Q{What do you need?}\n  Q -->|Append items| L[List T]\n  Q -->|Look up by key| D[Dictionary TKey TValue]\n  Q -->|Check membership| H[HashSet T]\n  Q -->|Process in order| F{Order?}\n  F -->|First in first out| QU[Queue T]\n  F -->|Last in first out| ST[Stack T]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SQS batch with cache lookup",
+            "code": "List<Message> batch = [];\nforeach (Message message in page.Messages)\n    batch.Add(message);\n\nDictionary<string, string> cacheHits = [];\nforeach (Message message in batch)\n{\n    string id = message.MessageId;\n    string? cached = redis.StringGet($\"dedup:{id}\");\n    if (cached is not null)\n        cacheHits[id] = cached;\n}",
+            "explanation": "List holds the batch. Dictionary is the cache-shaped lookup keyed by message ID. Four types, four questions — each does one job well."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "HashSet and Queue for dedup and retry",
+            "code": "HashSet<string> seenIds = [.. batch.Select(m => m.MessageId)];\nQueue<Message> retry = [];\nforeach (Message message in batch)\n{\n    if (!cacheHits.ContainsKey(message.MessageId))\n        retry.Enqueue(message);\n}\n\nwhile (retry.Count > 0)\n    Process(retry.Dequeue());",
+            "explanation": "HashSet answers \"have we seen this ID?\" in O(1). Queue holds failed messages in FIFO order for retry processing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Dictionary comparer for string keys",
+            "code": "var headers = new Dictionary<string, string>(\n    StringComparer.OrdinalIgnoreCase);\n\nheaders[\"Content-Type\"] = \"application/json\";\nheaders.TryGetValue(\"content-type\", out string? value);\n// value is \"application/json\" — case ignored",
+            "explanation": "string keys should pick a comparer: Ordinal for IDs, OrdinalIgnoreCase for HTTP headers. Without a comparer, case-sensitive matching surprises you in production."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# collections versus JS built-ins",
+          "headers": ["C# type", "JavaScript equivalent", "Key difference"],
+          "rows": [
+            ["List<T>", "Array", "C# List is generic; JS Array holds any type"],
+            ["Dictionary<K,V>", "Map", "JS object keys are always strings; Dictionary allows struct keys"],
+            ["HashSet<T>", "Set", "Both enforce uniqueness with fast Contains"],
+            ["Queue<T>", "Array as queue", "C# Queue has Enqueue/Dequeue; JS uses push/shift"],
+            ["ConcurrentDictionary", "No built-in", "C# has thread-safe collections in System.Collections.Concurrent"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using List.Contains in a hot loop instead of HashSet — O(n) per check versus O(1). Forgetting a StringComparer and treating JWT issuer URLs as case-sensitive when they were mixed case. Sharing a List across SQS handler tasks without synchronization — two threads calling Add corrupts the backing array."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Match the type to the question: append, lookup, membership, FIFO.",
-    "Generic collections avoid boxing and ArrayList’s object store.",
+    "Generic collections avoid boxing and the legacy ArrayList object store.",
     "In-process Dictionary is not Redis; in-process Queue is not SQS."
   ],
   "commonPitfalls": [
@@ -47,13 +183,13 @@
     {
       "language": "javascript",
       "concept": "Array, Map, Set",
-      "note": "JS Array ≈ List<T>, Map ≈ Dictionary, Set ≈ HashSet. JS objects-as-maps coerce keys to strings; Dictionary does not.",
+      "note": "JS Array is like List<T>, Map is like Dictionary, Set is like HashSet. JS objects-as-maps coerce keys to strings; Dictionary does not.",
       "futureTopicSlug": "javascript/collections/map-set"
     },
     {
       "language": "typescript",
       "concept": "Record<K, V> vs Map",
-      "note": "Record is an object type. Dictionary<TKey,TValue> is a real hash table with struct keys allowed.",
+      "note": "Record is an object type. Dictionary<TKey,TValue> is a real hash table that allows struct keys.",
       "futureTopicSlug": "typescript/types/record-map"
     }
   ],

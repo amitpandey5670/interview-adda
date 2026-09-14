@@ -12,6 +12,14 @@ Programming/Coding Guidelines:
 - During Implementation Planning and coding Review the Component structure and every module and reuse or create new component in such a way that generic naming convention and function name is used which can later on be reused.
 - Use Proper Interface and Design Pattern wherever required for the extendability of the application.
 
+
+
+Success criteria
+- A beginner can read any topic without googling abbreviations first.
+- Every topic has multiple small, explained snippets and at least one visual diagram.
+- Mind map pages show Mermaid diagrams + concept cards, not a flat abbreviation tree.
+
+
 Data/Document JSON Details Guidelines:
 
 -> This a Go to Document pages for a senior software engineer who is preparing for interview and want to grasp and improve his detailed, in-depth understanding of the languages and frameworks he works on.

@@ -1,30 +1,165 @@
 {
   "id": "csharp-05-polymorphism",
   "slug": "polymorphism",
-  "title": "Polymorphism",
+  "title": "Polymorphism (virtual dispatch)",
   "moduleId": "csharp-05-object-oriented-csharp",
   "order": 3,
-  "hook": "virtual opens a dispatch slot. override replaces it. abstract demands a replacement. sealed override closes it. new hides a name and does not touch the slot — the bug that looks like polymorphism in a code review.",
+  "hook": "When you call a method through a base-type variable, the Common Language Runtime (CLR) can route the call to the correct derived implementation. That runtime routing is polymorphism — and it only works when you use virtual and override correctly.",
   "sections": [
     {
-      "heading": "The dispatch slot",
-      "prose": "When you call handler.Parse(raw) through a base type, the CLR uses the method table of the runtime object if Parse is virtual and overridden. That is subtype polymorphism. Overload resolution is compile-time and is not polymorphism. Generic constraints (module 09) are another story. Keep virtual members small and documented; every virtual is a compatibility promise."
-    },
-    {
-      "heading": "new hiding versus override",
-      "prose": "If the base method is not virtual, you cannot override it. Writing public new void Parse looks like a replacement but is a second method. Call sites typed as the base still invoke the base method. That is why interviewers paste a three-class sample and ask what prints. sealed override prevents a further derived type from overriding again. abstract methods are virtual with no body; the type must be abstract.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "override versus new",
-          "code": "class Handler\n{\n    public virtual string Name => \"base\";\n    public string Kind => \"handler\";\n}\n\nsealed class LtiHandler : Handler\n{\n    public override string Name => \"lti\";\n    public new string Kind => \"lti-handler\";\n}\n\nHandler h = new LtiHandler();\nConsole.WriteLine(h.Name); // lti — virtual dispatch\nConsole.WriteLine(h.Kind); // handler — hidden, not dispatched",
-          "explanation": "Name is in the slot. Kind is a different member. The compile-time type decides which Kind you see."
+          "type": "prose",
+          "text": "**Polymorphism** means \"many shapes.\" In C#, it usually means **subtype polymorphism**: calling `handler.Parse(raw)` through a `AuthHandler` variable invokes the `Parse` implementation of the actual runtime type (`LtiHandler` or `OidcHandler`). The CLR uses a **method table** (also called a virtual dispatch table) to find the right implementation at run time."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "virtual",
+              "longForm": "virtual",
+              "plainDefinition": "Marks a method or property as overridable. The CLR reserves a slot in the method table for runtime dispatch.",
+              "example": "`public virtual string Name => \"base\";`"
+            },
+            {
+              "term": "override",
+              "longForm": "override",
+              "plainDefinition": "Replaces a virtual or abstract member in a derived type. Participates in runtime dispatch.",
+              "example": "`public override string Name => \"lti\";`"
+            },
+            {
+              "term": "abstract",
+              "longForm": "abstract",
+              "plainDefinition": "A virtual member with no body. The derived type must provide an override.",
+              "example": "`public abstract AuthToken Parse(string raw);`"
+            },
+            {
+              "term": "new",
+              "longForm": "member hiding (new)",
+              "plainDefinition": "Declares a new member that hides a base member. Does NOT participate in virtual dispatch — a common interview trap.",
+              "example": "`public new string Kind => \"lti-handler\";`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Practical restraint",
-      "prose": "Template Method with a few protected abstract hooks is enough for an auth family. Deep virtual stacks in a high-concurrency submit path make reasoning and inlining harder. Prefer sealing workers. Interface polymorphism (next) is often the better seam because it does not consume your single base class."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Polymorphism lets you write code against a base type and plug in different behaviors. A grading pipeline can accept `AuthHandler` and work with any sealed provider without knowing which one it got. But every `virtual` member is a **compatibility promise** — once shipped, changing or removing it can break derived types. Keep virtual surfaces small, document them, and prefer `sealed override` to close the slot when no further derivation is planned."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "override versus new",
+          "body": "`override` replaces the slot — calling through the base type hits the derived method. `new` hides the name — calling through the base type still hits the base method. Interviewers love this distinction."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Virtual dispatch flow",
+          "items": [
+            {
+              "title": "Base declares virtual",
+              "body": "`public virtual string Name => \"base\";` opens a dispatch slot in the method table."
+            },
+            {
+              "title": "Derived declares override",
+              "body": "`public override string Name => \"lti\";` fills that slot for `LtiHandler`."
+            },
+            {
+              "title": "Call through base reference",
+              "body": "`AuthHandler h = new LtiHandler(); h.Name` — the CLR looks up the slot on the runtime type (`LtiHandler`), not the compile-time type (`AuthHandler`)."
+            },
+            {
+              "title": "sealed override closes the slot",
+              "body": "`public sealed override string Name => \"lti\";` prevents any further derived type from overriding `Name` again."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Virtual dispatch versus member hiding",
+            "source": "flowchart LR\n  CALL[\"h.Name where h is AuthHandler\"] --> CHECK{Is Name virtual?}\n  CHECK -->|override| SLOT[Runtime type slot\\nLtiHandler.Name = lti]\n  CHECK -->|new hiding| BASE[Compile-time type\\nHandler.Kind = handler]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "override versus new — the interview classic",
+            "code": "class Handler\n{\n    public virtual string Name => \"base\";\n    public string Kind => \"handler\";\n}\n\nsealed class LtiHandler : Handler\n{\n    public override string Name => \"lti\";\n    public new string Kind => \"lti-handler\";\n}\n\nHandler h = new LtiHandler();\nConsole.WriteLine(h.Name); // lti — virtual dispatch\nConsole.WriteLine(h.Kind); // handler — hidden, NOT dispatched",
+            "explanation": "Line 2: `Name` is virtual — opens a slot. Line 3: `Kind` is non-virtual. Line 8: `override` replaces the `Name` slot. Line 9: `new` creates a separate `Kind` member. Lines 12–13: through a `Handler` reference, `Name` dispatches to `LtiHandler` but `Kind` resolves to the base member."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "abstract method and sealed override",
+            "code": "abstract class AuthHandler\n{\n    public abstract AuthToken Parse(string raw);\n    public virtual bool IsExpired(AuthToken token) =>\n        token.ExpiresAt < DateTimeOffset.UtcNow;\n}\n\nsealed class LtiHandler : AuthHandler\n{\n    public override AuthToken Parse(string raw) => new AuthToken(raw, \"lti\");\n    public sealed override bool IsExpired(AuthToken token) =>\n        base.IsExpired(token); // no further override allowed\n}",
+            "explanation": "Line 3: `abstract` demands an override and forbids `new AuthHandler()`. Line 4: `virtual` provides a default that derived types may replace. Line 10: `sealed override` closes the `IsExpired` slot — no child of `LtiHandler` can override it (and none can exist because `LtiHandler` is sealed)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Template Method with protected hooks",
+            "code": "abstract class TokenParser\n{\n    public AuthToken Parse(string raw)\n    {\n        Validate(raw);\n        return ParseCore(raw);\n    }\n\n    private void Validate(string raw)\n    {\n        if (string.IsNullOrWhiteSpace(raw))\n            throw new ArgumentException(\"Token required\");\n    }\n\n    protected abstract AuthToken ParseCore(string raw);\n}",
+            "explanation": "Line 3: public `Parse` is the Template Method — shared algorithm. Line 5: `Validate` is private — not overridable. Line 12: `ParseCore` is `protected abstract` — the variation point for derived types. This is a practical, small virtual surface."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Polymorphism across languages",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Dispatch mechanism", "CLR method table (virtual slot)", "Prototype chain property lookup"],
+            ["Override keyword", "`override` required; compiler checks base", "Just assign a method on the derived class or prototype"],
+            ["Hiding vs overriding", "`new` hides; `override` dispatches", "No language distinction — always replaces on prototype"],
+            ["sealed override", "Blocks further override at metadata level", "No equivalent"],
+            ["Compile-time safety", "Cannot override non-virtual", "TypeScript `override` keyword is compile-time only"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Calling virtual methods from constructors",
+          "body": "If a base constructor calls a virtual method, the derived override runs before derived field initializers finish. The override may read uninitialized state. Keep constructors free of virtual calls."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using new by accident after a refactor",
+          "body": "After renaming a base method, the compiler may accept `new` instead of `override` if the base method is not virtual. The code compiles but dispatch breaks silently. Always check whether the base member is virtual before choosing `new` vs `override`."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -45,13 +180,13 @@
     {
       "language": "javascript",
       "concept": "prototype method replacement",
-      "note": "JS ‘override’ is just assigning a function on the derived prototype. There is no virtual keyword; hiding versus override is not a language distinction.",
+      "note": "JavaScript override is just assigning a function on the derived prototype. There is no virtual keyword; hiding versus override is not a language distinction.",
       "futureTopicSlug": "javascript/classes/methods"
     },
     {
       "language": "typescript",
       "concept": "override keyword",
-      "note": "TS override is a compile-time check that a base method exists. It does not create a CLR slot. C# override is metadata.",
+      "note": "TypeScript override is a compile-time check that a base method exists. It does not create a CLR slot. C# override is metadata enforced by the runtime.",
       "futureTopicSlug": "typescript/classes/override"
     }
   ],

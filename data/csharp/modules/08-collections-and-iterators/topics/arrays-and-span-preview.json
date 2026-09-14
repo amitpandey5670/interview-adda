@@ -1,36 +1,167 @@
 {
   "id": "csharp-08-arrays-and-span-preview",
   "slug": "arrays-and-span-preview",
-  "title": "Arrays and a Span preview",
+  "title": "Arrays (fixed-length sequences) and a Span preview",
   "moduleId": "csharp-08-collections-and-iterators",
   "order": 1,
-  "hook": "An array is a CLR object with a fixed Length and O(1) indexing. Span<T> is a view over memory, not a collection you store on a class. Name Span here; the rules live in module 17.",
+  "hook": "An array is a fixed-size list of items stored in one block of memory. You pick the size when you create it, and it never grows — that is the first collection type every C# program uses.",
   "sections": [
     {
-      "heading": "Arrays are objects with a length",
-      "prose": "int[] scores = new int[3]; allocates a reference-type array on the heap (unless stackalloc, which is not an array object). Length never changes. You can write scores[i]; going past Length throws IndexOutOfRangeException. Rectangular arrays (int[,]) and jagged arrays (int[][]) are different types — jagged is an array of arrays and is what you actually ship. Arrays implement IList<T> but throw on Add. SZ arrays (single-dimension, zero-based) are the fast path the JIT special-cases. An SQS ReceiveMessage result you immediately map to Message[] is fine when the batch size is capped (10 is the SQS classic). Do not use an array as an append buffer; that is List<T>.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Fixed batch as array",
-          "code": "Message[] batch = response.Messages.ToArray();\nfor (int i = 0; i < batch.Length; i++)\n{\n    Process(batch[i]);\n}\n// Length is the batch size. You will not Add a late message to this array.",
-          "explanation": "Once the receive call returns, the batch is a closed set. Array matches that. A later retry is a new receive, a new array."
+          "type": "prose",
+          "text": "An array in C# is written as int[] scores or string[] names. It has a Length property that never changes after creation. You access items with an index: scores[0] is the first element. Arrays live on the heap (they are reference types), even though the items inside might be value types like int. A Simple Queue Service (SQS) batch of exactly 10 messages maps naturally to an array — you know the size when the receive call returns."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "array",
+              "longForm": "array",
+              "plainDefinition": "A fixed-length, zero-based collection where every slot is the same type.",
+              "example": "int[] scores = new int[3]; creates three int slots."
+            },
+            {
+              "term": "Length",
+              "longForm": "Length property",
+              "plainDefinition": "The number of slots in the array. Set once at creation; cannot grow.",
+              "example": "scores.Length is 3 forever for the array above."
+            },
+            {
+              "term": "Span",
+              "shortForm": "Span",
+              "longForm": "Span<T>",
+              "plainDefinition": "A lightweight view over a slice of memory — an array, stack buffer, or other storage — without copying the data.",
+              "example": "Span<char> slice = line.AsSpan(0, 10); reads the first 10 characters."
+            },
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The .NET runtime that loads your compiled code and manages memory.",
+              "example": "When you run dotnet run, the CLR executes your program."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Array covariance is a loaded gun",
-      "prose": "string[] names = [\"a\"]; object[] boxed = names; compiles because arrays are covariant. boxed[0] = 3; compiles as object and throws ArrayTypeMismatchException at run time. Generic List<string> does not allow this — that is a reason generics exist (module 09). Mention covariance of arrays in interviews so you can contrast it with IEnumerable<out T> later."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Arrays are the fastest way to store a known number of items with constant-time indexing. They are also the foundation every other collection builds on — List<T> is literally an array plus a count. Picking an array when you need a growable buffer leads to painful resize logic; picking a List when the size is fixed wastes memory and hides intent. Understanding array covariance (a subtle trap) also sets you up for why generics exist in module 09."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Fixed size is a feature",
+          "body": "If the batch size is capped — SQS returns at most 10 messages — an array matches reality. If you need to append later, use List<T> instead."
+        }
+      ]
     },
     {
-      "heading": "Span<T> is a preview, not this module",
-      "prose": "Span<T> and ReadOnlySpan<T> let you slice an array, stack memory, or unmanaged memory without copying. Collection expressions can target Span<string> weekDays = [\"Sun\", \"Mon\"];. Span is a ref struct: it cannot live on the heap, cannot be a field of a class, cannot be used in async methods without careful scoping. Those constraints, slicing, and performance belong in module 17 (Span, unsafe, interop). Here you only need the sentence: if the interviewer says “zero-copy slice of the CSV line,” you answer Span<T>, then you do not fake a Span-based parser in this chapter."
+      "heading": "How arrays work step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Creating and using an array",
+          "items": [
+            {
+              "title": "Declare the type and size",
+              "body": "int[] scores = new int[3]; allocates a heap object with three int slots, all initialized to 0."
+            },
+            {
+              "title": "Write values by index",
+              "body": "scores[0] = 95; sets the first slot. Indices run from 0 to Length - 1."
+            },
+            {
+              "title": "Read values by index",
+              "body": "int top = scores[0]; is O(1) — the runtime computes the memory address directly."
+            },
+            {
+              "title": "Stay inside bounds",
+              "body": "scores[3] throws IndexOutOfRangeException. The runtime checks every access."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Array memory layout",
+            "source": "flowchart LR\n  A[\"int[] scores\\nLength = 3\"] --> B[\"[0] = 95\"]\n  A --> C[\"[1] = 88\"]\n  A --> D[\"[2] = 72\"]\n  E[\"scores[i]\"] --> F[\"O(1) direct index\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Fixed batch as array",
+            "code": "Message[] batch = response.Messages.ToArray();\nfor (int i = 0; i < batch.Length; i++)\n{\n    Process(batch[i]);\n}\n// Length equals the batch size. No Add method — the batch is closed.",
+            "explanation": "Once the receive call returns, the batch is a closed set. An array matches that shape. A retry is a new receive and a new array."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Jagged versus rectangular arrays",
+            "code": "// Jagged: array of arrays (common in real code)\nint[][] grid = [[1, 2], [3, 4, 5]];\n\n// Rectangular: one block, fixed columns (rare)\nint[,] matrix = new int[2, 3];\nmatrix[0, 1] = 7;",
+            "explanation": "int[][] is an array where each row can have a different length. int[,] is a single rectangular block. They are different types — you cannot assign one to the other."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Array covariance trap",
+            "code": "string[] names = [\"alice\", \"bob\"];\nobject[] boxed = names;          // compiles — arrays are covariant\nboxed[0] = 42;                   // compiles as object\n// throws ArrayTypeMismatchException at run time",
+            "explanation": "The compiler allows assigning string[] to object[] because arrays are covariant. Writing an int into a string slot fails at run time, not compile time. List<string> does not allow this — that is why generics exist."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Arrays in C# versus JavaScript",
+          "headers": ["Aspect", "C# T[]", "JavaScript Array"],
+          "rows": [
+            ["Length", "Fixed after creation", "Grows with push()"],
+            ["Type", "All elements same type", "Mixed types allowed"],
+            ["Indexing", "0 to Length - 1, bounds checked", "0 to length - 1, sparse allowed"],
+            ["Closest cousin", "Fixed buffer", "List<T> in C#"],
+            ["Covariance", "Yes at run time (dangerous)", "No static type system"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling Add on an array typed as IList<T> throws NotSupportedException — arrays do not grow. Using object[] as a mixed-type bag and hitting array covariance bugs. Trying to store Span<T> as a class field — Span is a ref struct and cannot live on the heap; full rules are in module 17."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Arrays have fixed Length; indexing is O(1); they are reference types.",
-    "Array covariance can throw ArrayTypeMismatchException; List<T> does not.",
-    "Span<T> is a ref-struct view — full treatment is module 17."
+    "Arrays have fixed Length; indexing is O(1); they are reference types on the heap.",
+    "Array covariance (string[] to object[]) can throw ArrayTypeMismatchException at run time.",
+    "Span<T> is a zero-copy view over memory — full treatment is module 17."
   ],
   "commonPitfalls": [
     "Calling Add on an array typed as IList<T> and being surprised by NotSupportedException.",
@@ -48,13 +179,13 @@
     {
       "language": "javascript",
       "concept": "Array.length is mutable",
-      "note": "JS arrays grow. C# arrays do not. JS Array is closer to List<T> than to T[].",
+      "note": "JavaScript arrays grow with push(). C# arrays do not. A JS Array is closer to List<T> than to T[].",
       "futureTopicSlug": "javascript/arrays/length"
     },
     {
       "language": "typescript",
       "concept": "T[] vs readonly T[] vs tuple",
-      "note": "TS T[] is a growable JS array at run time. C# T[] is fixed. TS tuples are closer in intent to a fixed array but still JS arrays.",
+      "note": "TypeScript T[] is a growable JS array at run time. C# T[] is fixed. TS tuples are closer in intent to a fixed array but still JS arrays underneath.",
       "futureTopicSlug": "typescript/types/arrays-tuples"
     }
   ],

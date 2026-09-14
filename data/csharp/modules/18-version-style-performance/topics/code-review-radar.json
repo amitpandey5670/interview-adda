@@ -1,41 +1,151 @@
 {
   "id": "csharp-18-code-review-radar",
   "slug": "code-review-radar",
-  "title": "Code-review radar for interviews",
+  "title": "Code-review radar for interviews (what seniors flag)",
   "moduleId": "csharp-18-version-style-performance",
   "order": 5,
-  "hook": "Interviewers do not want a compiler. They want the order you notice danger. This page is that order, citing the modules behind it.",
+  "hook": "Interview code review is a checklist in your head: async correctness, allocation hot paths, thread safety, API surface, nullability, and security at boundaries. This topic turns that radar into explicit signals interviewers listen for.",
   "sections": [
     {
-      "heading": "Pass 1: lifetime and asynchrony",
-      "prose": "Look for `IDisposable` that never got `using` — SkiaSharp, `HttpClient` misuse, `IMemoryOwner` (modules 06 and 17). Look for `async void` except event handlers, discarded `Task`s on an SQS handler, and `lock` around `await` (modules 13 and 15). Look for `Span` stored on a field or used after `await` (module 17). Look for `fixed` pointers that escape the block. If the snippet is a consumer, ask where cancellation token flows. This pass finds production outages. Style can wait.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Radar hits in one method",
-          "code": "async Task HandleAsync(string json)\n{\n    var span = json.AsSpan();\n    await Task.Delay(1); // SPAN WOULD BE ILLEGAL if we used span after this\n    var dto = JsonSerializer.Deserialize<AttemptCacheDto>(json);\n    _cache[dto!.Id] = dto; // public mutable dictionary, no token, no Dispose story\n}",
-          "explanation": "Call out: no CancellationToken, possible null dto, shared mutable cache, deserialize allocating on a hot path. Do not start with “Id should be camelCase.”"
+          "type": "prose",
+          "text": "Code-review radar is the set of questions you ask on every pull request: Does this block the thread pool? Does it allocate in a loop? Is shared state synchronized? Are public types intentional? Are nullability warnings honest? Does SQS handler respect cancellation? Seniors trade off speed versus risk — they flag .Result, lock across await, and string concat in Redis paths immediately."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Sync-over-async",
+              "longForm": "Synchronous over asynchronous blocking",
+              "plainDefinition": "Blocking on Task.Result or .Wait() instead of awaiting.",
+              "example": "var data = GetDataAsync().Result; // starves thread pool"
+            },
+            {
+              "term": "Poison message",
+              "longForm": "Poison queue message",
+              "plainDefinition": "Message that always fails processing and must not infinite-retry.",
+              "example": "Malformed JSON — dead-letter after N attempts."
+            },
+            {
+              "term": "Hot path",
+              "longForm": "Performance hot path",
+              "plainDefinition": "Code executed very frequently under production load.",
+              "example": "Redis cache read on every authenticated request."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Pass 2: allocations and closed world",
-      "prose": "CSV `Split`, LINQ `ToList` on a hot path already enumerated (module 12), `+` string loops instead of `string.Create`/`TryWrite`, reflection `GetTypes` on each message (module 16), extra DTO clones (previous topic). Ask whether Native AOT is in play (module 01). If yes, string-named `GetMethod` is a trim bug, not a style nit. Prefer a generated dispatcher. High-concurrency attempt-submit (199 → 999) makes these nits into incidents."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "System design interviews increasingly include 'review this code' slides. Naming the smell and the fix — single-flight cache, ConfigureAwait in library, IDisposable on native wrapper — demonstrates production experience. Radar connects modules 13–17 into one pass."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Review order",
+          "body": "Correctness and security first, then concurrency, then allocations, then style."
+        }
+      ]
     },
     {
-      "heading": "Pass 3: surface, then style",
-      "prose": "New `public` on a library without PublicAPI.Unshipped.txt (module 16) is a contract change. `InternalsVisibleTo` missing so someone made the parser public. `[Obsolete]` without a replacement. Then naming: `_` vs `s_`, interface `I`, record properties PascalCase (identifier-names). Then language-version toys used for no reason: interceptors, unexplained `unsafe`, `dynamic`. In a live interview, say the pass number. It shows you will not bikeshed while a native handle leaks. Tie the recap together: C# 8–14 (this module) is how you date a construct; modules 14–17 are how you decide if it is safe at run time."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Senior review pass",
+          "items": [
+            { "title": "Async and cancellation", "body": "await through stack; token passed to SQS/HTTP." },
+            { "title": "Concurrency", "body": "Shared dictionaries, locks, stampede patterns." },
+            { "title": "Memory", "body": "LINQ materialize, string concat, Dispose native." },
+            { "title": "API and nulls", "body": "public surface, nullable honesty, validation." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Code review radar",
+            "source": "mindmap\n  root((Review radar))\n    Async\n      No Result Wait\n      CancellationToken passed\n    Concurrency\n      No lock across I/O\n      Concurrent collections\n    Memory\n      No ToList in loop\n      using native types\n    API\n      public intentional\n      nullable honest\n    Security\n      auth on endpoints\n      no secrets in logs"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Flags: sync-over-async",
+            "code": "// REVIEW FLAG: blocks pool thread\npublic User GetUser(string id) => _service.GetUserAsync(id).Result;\n\n// FIX:\npublic async Task<User> GetUserAsync(string id, CancellationToken ct) =>\n    await _service.GetUserAsync(id, ct);",
+            "explanation": "First smell in async services — blocking wait on async method."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Flags: SQS handler without token",
+            "code": "// REVIEW FLAG: ignores shutdown\npublic async Task HandleAsync(Message msg)\n{\n    await _db.SaveAsync(Parse(msg.Body));\n}\n\n// FIX: pass CancellationToken from host, catch OperationCanceledException",
+            "explanation": "Queue consumers must observe host cancellation for graceful drain."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Flags: nullable lie",
+            "code": "public string GetName(User? user) => user!.Name; // REVIEW: null-forgiving abuse\n\n// FIX:\npublic string? GetName(User? user) => user?.Name;",
+            "explanation": "Suppressing nullability with ! without guard is a review reject."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Review smells",
+          "headers": ["Smell", "C# radar", "TS radar"],
+          "rows": [
+            ["Blocking", ".Result, .Wait()", "sync fs, busy loops on main thread"],
+            ["Types", "nullable!, public API", "any, unchecked JSON"],
+            ["Resources", "missing using", "unclosed streams, missing destroy"],
+            ["Concurrency", "lock across await", "shared mutable module state"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Nitpicking naming while missing .Result on hot path. Approving public types without API check. Ignoring allocation in code that runs per message on SQS."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Review lifetime and async before allocations, public API, and naming.",
-    "Cite module-level rules (Span, Dispose, InternalsVisibleTo) instead of vague “best practices.”",
-    "Treat unapproved public surface as a product bug, not a formatter issue."
+    "Review correctness, concurrency, memory, API, security — in that priority.",
+    "Flag sync-over-async, lock across I/O, and allocation in loops immediately.",
+    "Connect smells to module fixes you already know."
   ],
   "commonPitfalls": [
-    "Spending the interview on brace style while async void ships.",
-    "Demanding Span in a once-a-day admin tool — wrong pass, wrong intensity.",
-    "Failing to mention CI public API files when the prompt is a shared library PR."
+    "Style comments without production risk assessment.",
+    "Missing cancellation in queue handlers.",
+    "Approving null-forgiving without invariant proof."
   ],
   "relatedTopicIds": [
     "csharp-18-csharp-8-to-14-map",
@@ -44,26 +154,18 @@
   ],
   "jsTsCorrelations": [
     {
-      "language": "javascript",
-      "concept": "review order in Node PRs",
-      "note": "A senior Node review also starts with resource leaks (streams) and unhandled promises, then allocations, then exports. The C#-specific radar is pinning, ref structs, and assembly public surface.",
-      "futureTopicSlug": "javascript/process/code-review"
+      "language": "typescript",
+      "concept": "PR review checklist",
+      "note": "Same radar: async correctness, type honesty, resource cleanup — different syntax, same senior instincts.",
+      "futureTopicSlug": "typescript/review"
     }
   ],
   "officialSources": [
     {
-      "title": "Identifier names",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/identifier-names"
-    },
-    {
-      "title": "Memory<T> usage guidelines",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
-    },
-    {
-      "title": "What's new in C# 14",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14"
+      "title": "Code analysis rules",
+      "url": "https://learn.microsoft.com/en-us/dotnet/fundamentals/code-analysis/overview"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "sqs-consumer"
+  "scenarioTag": "sqs-consumer",
+  "animationHint": "flow"
 }

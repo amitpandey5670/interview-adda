@@ -1,20 +1,158 @@
 {
   "id": "csharp-03-object-cts-dynamic",
   "slug": "object-cts-dynamic",
-  "title": "object, CTS, and dynamic",
+  "title": "object, Common Type System, and dynamic (late binding)",
   "moduleId": "csharp-03-type-system",
   "order": 8,
-  "hook": "`object` is the CTS root — every value can be treated as one (boxing if needed). `dynamic` is a compiler conspiracy to emit run-time binding. It is not TypeScript `any`, and it is not `unknown`.",
+  "hook": "Every C# type ultimately connects to `object` through the Common Type System (CTS). `dynamic` is different — it tells the compiler to figure out members at run time, like a safety-off switch.",
   "sections": [
     {
-      "heading": "Unified hierarchy versus late binding",
-      "prose": "The Common Type System says all types derive from `System.Object`. Value types inherit `System.ValueType` then `object`. That is why a `List<object>` can hold an `int` (boxed) and a `string`. Useful for heterogeneous logging; costly if you meant a generic. `dynamic` turns member access into a run-time binder (`Microsoft.CSharp.RuntimeBinder`). Typos compile; they throw at run time. JSON libraries sometimes expose `dynamic` — prefer `JsonElement` or a DTO for auth tokens. TypeScript `any` disables checking and erases; `unknown` forces you to narrow. C# `object` still requires casts/`is`; `dynamic` skips compile-time member checking. There is no C# `unknown`. When a RabbitMQ payload is `object`, you immediately `is` it into a typed message.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "object needs a test; dynamic fails late",
-          "code": "object boxed = 199;\nif (boxed is int n)\n{\n    Use(n);\n}\n\ndynamic loose = ReadJson();\n// loose.nme.ToString(); // compiles, throws at run time\n\n// Right for tokens: a DTO, not dynamic\nvar token = JsonSerializer.Deserialize<AuthToken>(json);",
-          "explanation": "Wrong: `dynamic` as a substitute for generics. Wrong: calling `dynamic` the same as TS `any` without mentioning the DLR binder and extra dependency."
+          "type": "prose",
+          "text": "The **Common Type System (CTS)** is the rulebook that says every type in .NET inherits from `System.Object` (written `object` in C#). Value types inherit `System.ValueType`, which itself inherits `object`. That is why a `List<object>` can hold an `int` (via **boxing**) and a `string` side by side. **`dynamic`** is not a new type — it tells the compiler to defer member lookup to the **Dynamic Language Runtime (DLR)** binder at run time. Typos compile; they throw at run time."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CTS",
+              "shortForm": "CTS",
+              "longForm": "Common Type System",
+              "plainDefinition": "The .NET rule set that unifies types across languages. Every type derives from `object` and can be described with common metadata.",
+              "example": "C#, F#, and Visual Basic types can interoperate because they follow the CTS."
+            },
+            {
+              "term": "object",
+              "longForm": "object (System.Object)",
+              "plainDefinition": "The root reference type. Variables typed `object` can hold any value, but you must cast or test before using specific members.",
+              "example": "`object boxed = 199;` — the `int` is boxed into an `object` reference."
+            },
+            {
+              "term": "dynamic",
+              "longForm": "dynamic",
+              "plainDefinition": "A compile-time hint that member access is resolved at run time by the DLR. Errors that `object` would catch at compile time slip through until execution.",
+              "example": "`dynamic d = GetJson(); d.nme.ToString();` — compiles, throws at run time (typo in `nme`)."
+            },
+            {
+              "term": "DLR",
+              "shortForm": "DLR",
+              "longForm": "Dynamic Language Runtime",
+              "plainDefinition": "The .NET component that resolves `dynamic` member calls at run time. Adds overhead and a dependency on `Microsoft.CSharp`.",
+              "example": "Used when calling COM objects or some JSON APIs — prefer typed DTOs instead."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Heterogeneous logging (`List<object>`) is convenient but boxes value types and costs allocations. JSON from an auth provider should deserialize into a typed DTO (`AuthToken`), not a `dynamic` blob. In interviews, saying C# has TypeScript `any` is wrong — say `object` (static, needs cast) or `dynamic` (late binding). TypeScript `unknown` forces narrowing; C# has no `unknown` keyword — use `object` plus `is` patterns."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "object vs dynamic",
+          "body": "`object`: compile-time type is `object` — the compiler blocks `.Length` until you cast. `dynamic`: compile-time checks are skipped — the DLR resolves at run time and throws on failure."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From value to object and back",
+          "items": [
+            {
+              "title": "Assign a value type to object",
+              "body": "The runtime **boxes** the value — copies it into a heap object. `object o = 42;`"
+            },
+            {
+              "title": "Use the value",
+              "body": "With `object`, you must cast or pattern-match: `if (o is int n) Use(n);`"
+            },
+            {
+              "title": "Or declare dynamic",
+              "body": "`dynamic d = o;` — the compiler emits DLR calls for `d.SomeMethod()` without knowing `SomeMethod` exists."
+            },
+            {
+              "title": "Prefer generics over both",
+              "body": "`List<int>` avoids boxing. A typed DTO avoids `dynamic` entirely."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "CTS hierarchy and dynamic binding",
+            "source": "flowchart TB\n  OBJ[\"object (CTS root)\"]\n  OBJ --> VT[\"ValueType\"]\n  OBJ --> CLS[\"class types (string, List)\"]\n  VT --> INT[\"int, bool, decimal, struct...\"]\n  INT -->|box| BOX[\"object wrapper on heap\"]\n  DYN[\"dynamic variable\"] -->|\"DLR binder at run time\"| CALL[\"Member call resolved late\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "object needs a test; dynamic fails late",
+            "code": "object boxed = 199;\nif (boxed is int n)\n{\n    Use(n);\n}\n\n// object o = boxed;\n// o.GetType();              // OK — inherited from object\n// int x = (int)o;           // unbox\n\n// o.SomeCustomMethod();     // compile error on object",
+            "explanation": "Lines 1–5: `object` holds a boxed `int`; `is int n` unboxes safely. Line 11: `object` only exposes `object` members at compile time — custom methods need a cast to a derived type."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "dynamic compiles, throws at run time",
+            "code": "dynamic loose = ReadJson();\n\n// Typo compiles — fails when this line runs:\n// string s = loose.nme.ToString();\n\n// Right: typed deserialization\nvar token = JsonSerializer.Deserialize<AuthToken>(json);\nValidate(token!.Issuer);",
+            "explanation": "Line 4: `dynamic` skips compile-time member checking — `nme` is a typo for `name`. Line 7: `JsonSerializer.Deserialize<AuthToken>` gives compile-time safety and IntelliSense. Prefer DTOs over `dynamic` for auth tokens."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Heterogeneous list vs generic",
+            "code": "// Convenient but boxes value types:\nvar bag = new List<object> { 199, \"ok\", 3.14m };\n\n// Type-safe — no boxing for int:\nvar scores = new List<int> { 199, 999 };\n\nforeach (var item in bag)\n{\n    if (item is int score) Console.WriteLine(score);\n}",
+            "explanation": "Line 2: `List<object>` boxes the `int` and `decimal`. Line 5: `List<int>` stores unboxed integers. Line 8: when you must use `object`, immediately narrow with `is`."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "object / dynamic vs any / unknown",
+          "headers": ["Concept", "C#", "TypeScript"],
+          "rows": [
+            ["Root type", "`object` (CTS root, real type)", "No single root — `object` in lib"],
+            ["Skip member checks", "`dynamic` (DLR at run time)", "`any` (erased, no checks)"],
+            ["Force narrowing", "`object` + `is` / cast", "`unknown` + narrowing"],
+            ["Exists at run time?", "Yes — metadata and DLR", "Erased — no run-time types"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `dynamic` for JSON because it \"feels like JavaScript.\" Storing value types in `object` collections and creating boxing traffic in hot paths. Saying C# has `any` — it does not; say `object` or `dynamic` and explain the difference."
         }
       ]
     }
@@ -22,10 +160,10 @@
   "interviewTakeaways": [
     "CTS: one object hierarchy; boxing is how values enter it.",
     "`object` is statically typed as object; you must convert to use members.",
-    "`dynamic` is compile-time `object`-ish with run-time binding — closer to `any` than to `unknown`, but it is still a .NET feature with a binder."
+    "`dynamic` is compile-time `object`-ish with run-time binding — closer to `any` than to `unknown`, but still a .NET DLR feature."
   ],
   "commonPitfalls": [
-    "Using `dynamic` for JSON because it “feels like JS.”",
+    "Using `dynamic` for JSON because it \"feels like JS.\"",
     "Storing value types in `object` collections and creating boxing traffic.",
     "Saying C# has `any` — it does not; say `object` or `dynamic` and know the difference."
   ],
@@ -39,7 +177,7 @@
     {
       "language": "typescript",
       "concept": "any vs unknown vs object",
-      "note": "`any` skips checks and erases. `unknown` must be narrowed. C# `object` is a real type you cast; `dynamic` skips member checks but still runs on the CLR binder.",
+      "note": "TypeScript `any` skips checks and erases. `unknown` must be narrowed. C# `object` is a real type you cast; `dynamic` skips member checks but still runs on the CLR DLR binder.",
       "futureTopicSlug": "typescript/types/any-unknown"
     }
   ],

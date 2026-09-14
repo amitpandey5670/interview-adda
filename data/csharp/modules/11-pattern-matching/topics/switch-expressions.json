@@ -1,38 +1,150 @@
 {
   "id": "csharp-11-switch-expressions",
   "slug": "switch-expressions",
-  "title": "Switch expressions",
+  "title": "Switch expressions (pattern-matching switch that returns a value)",
   "moduleId": "csharp-11-pattern-matching",
   "order": 2,
-  "hook": "Auth token kind is a value. A switch expression returns a pipeline; a switch statement is for when you must sequence side effects.",
+  "hook": "A switch expression picks the first matching pattern and returns a value — perfect when auth token kind should map to a processing mode, not a pile of if statements.",
   "sections": [
     {
-      "heading": "Arms, discards, and exhaustiveness",
-      "prose": "A switch expression selects the first matching arm and produces a value. Arms use patterns, not case labels. There is no fall-through. The compiler warns when the input type is not fully covered and when an arm is subsumed by an earlier one. _ matches whatever remains; omitting it on a non-exhaustive input makes the compiler complain, and at run time an unmatched value throws. Enum switches should still have _ because an enum can hold an undefined integer.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Token kind to a processing mode",
-          "code": "public static AuthMode ModeFor(string scheme) => scheme switch\n{\n    \"Bearer\" => AuthMode.Oidc,\n    \"LTI\" => AuthMode.Lti13,\n    \"ApiKey\" => AuthMode.LegacyKey,\n    _ => throw new ArgumentException($\"Unsupported scheme '{scheme}'\", nameof(scheme))\n};\n\npublic enum AuthMode { Oidc, Lti13, LegacyKey }",
-          "explanation": "Each arm is a value. The discard is a hard failure, not AuthMode.Oidc. That default-to-privileged-path bug is an interview favorite."
+          "type": "prose",
+          "text": "A switch expression looks like value switch { pattern => result, ... }. Each arm pairs a pattern with an expression that becomes the result. Unlike a classic switch statement, there is no fall-through, every arm must produce a value, and the whole expression evaluates to that value. Patterns can be constants, types, properties, relational tests, and more."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Switch expression",
+              "longForm": "switch expression",
+              "plainDefinition": "A C# expression that matches an input against patterns and returns the result of the first matching arm.",
+              "example": "var label = score switch { < 50 => \"fail\", _ => \"pass\" };"
+            },
+            {
+              "term": "Discard pattern",
+              "shortForm": "_",
+              "longForm": "Discard pattern",
+              "plainDefinition": "The _ pattern matches anything not caught by earlier arms. It is how you handle \"everything else\" or satisfy exhaustiveness.",
+              "example": "_ => throw new ArgumentException(\"unknown\")"
+            },
+            {
+              "term": "Exhaustiveness",
+              "longForm": "pattern exhaustiveness",
+              "plainDefinition": "The compiler check that every possible input value is handled by at least one arm.",
+              "example": "Switching on a bool needs true, false, or _ — the compiler warns if a case is missing."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Switch statement still exists",
-      "prose": "Use a switch statement when arms must contain multiple statements without wrapping them in local functions, or when you are matching in a void method. You can mix pattern case labels (case AuthToken { Scheme: \"LTI\" } t:) with when guards. Do not convert a statement to an expression by stuffing side effects into a discarded value. Readability beats uniformity.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Pattern case in a switch statement",
-          "code": "switch (token)\n{\n    case { Scheme: \"LTI\", Version: \"1.3\" }:\n        ValidateLti13(token);\n        break;\n    case { Scheme: \"Bearer\" } t when t.ExpiresAt > DateTimeOffset.UtcNow:\n        ValidateOidc(t);\n        break;\n    default:\n        throw new InvalidOperationException(\"Token not usable.\");\n}",
-          "explanation": "when is a guard evaluated after the pattern matches. The property pattern avoids a nest of ifs on Scheme and Version."
+          "type": "prose",
+          "text": "Switch expressions turn branching into data. Instead of mutating a variable in each if branch, you assign once from a expression that maps input to output. The compiler warns when arms overlap or when coverage is incomplete. That is especially valuable for auth schemes, status codes, and enum handling where a silent default can become a security bug."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Expression vs statement",
+          "body": "Use a switch expression when you need a value. Use a switch statement when arms must run multiple statements, call void methods, or break early. Do not stuff side effects into a switch expression just to avoid a statement."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "How a switch expression evaluates",
+          "items": [
+            {
+              "title": "Evaluate the input once",
+              "body": "The value after switch is computed once, then tested against arms top to bottom."
+            },
+            {
+              "title": "Test each arm's pattern",
+              "body": "The first pattern that matches wins. Later arms are never considered for that input."
+            },
+            {
+              "title": "Run the arm expression",
+              "body": "The right-hand side of => is evaluated and becomes the result of the whole switch expression."
+            },
+            {
+              "title": "Compiler checks coverage",
+              "body": "If no arm matches at run time, SwitchExpressionException is thrown. The compiler warns when arms are unreachable or coverage looks incomplete."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Switch expression evaluation",
+            "source": "flowchart TD\n  A[Input value] --> B{Arm 1 pattern?}\n  B -->|yes| C[Return arm 1 result]\n  B -->|no| D{Arm 2 pattern?}\n  D -->|yes| E[Return arm 2 result]\n  D -->|no| F{More arms?}\n  F -->|yes| D\n  F -->|no| G[SwitchExpressionException]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Token scheme to processing mode",
+            "code": "public static AuthMode ModeFor(string scheme) => scheme switch\n{\n    \"Bearer\" => AuthMode.Oidc,\n    \"LTI\" => AuthMode.Lti13,\n    \"ApiKey\" => AuthMode.LegacyKey,\n    _ => throw new ArgumentException($\"Unsupported scheme '{scheme}'\", nameof(scheme))\n};\n\npublic enum AuthMode { Oidc, Lti13, LegacyKey }",
+            "explanation": "Each string constant is a pattern. The method returns AuthMode directly — no temp variable. The discard throws on unknown schemes instead of defaulting to a privileged mode."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Relational arms on a score",
+            "code": "public static string Band(int percent) => percent switch\n{\n    < 0 or > 100 => throw new ArgumentOutOfRangeException(nameof(percent)),\n    < 50 => \"fail\",\n    < 70 => \"pass\",\n    < 90 => \"merit\",\n    _ => \"distinction\"\n};",
+            "explanation": "Arms are ordered. After < 50 matches, only values 50–99 remain for < 70. The or combinator rejects impossible percents before banding runs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Pattern case in a switch statement (when you need statements)",
+            "code": "switch (token)\n{\n    case { Scheme: \"LTI\", Version: \"1.3\" }:\n        ValidateLti13(token);\n        break;\n    case { Scheme: \"Bearer\" } t when t.ExpiresAt > DateTimeOffset.UtcNow:\n        ValidateOidc(t);\n        break;\n    default:\n        throw new InvalidOperationException(\"Token not usable.\");\n}",
+            "explanation": "When arms need void calls and multiple steps, use a switch statement. when is a guard evaluated after the pattern matches. Property patterns avoid nested ifs on Scheme and Version."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "JavaScript switch statements fall through unless you break — a classic source of bugs. C# switch statements do not fall through (except empty cases stacked together). C# switch expressions never fall through at all; each arm is independent. TypeScript can approximate exhaustiveness with discriminated unions and a never check in default, but the compiler does not enforce it as strictly as C# does on closed types."
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using _ => 0 as a silent default for token time-to-live or role assignment. Overlapping relational arms in the wrong order so a later arm never runs. Expecting fall-through like C or older JavaScript switch. Assuming enums are closed at run time — an enum can hold any int, so keep a discard arm."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Switch expressions return a value and must be exhaustive (or use _).",
+    "Switch expressions return a value and should be exhaustive (or use _).",
     "First matching arm wins; order is part of the spec.",
     "Enums are not closed at run time; keep a discard.",
     "Throw on unknown auth schemes; never fall through to the privileged mode."
@@ -52,13 +164,13 @@
     {
       "language": "javascript",
       "concept": "switch and fall-through",
-      "note": "JS switch falls through without break. C# switch statements do not (except empty cases). C# switch expressions cannot fall through at all. JS has no exhaustiveness checker unless you use a never helper in TypeScript.",
+      "note": "JavaScript switch falls through without break. C# switch statements do not (except empty cases). C# switch expressions cannot fall through at all. JavaScript has no exhaustiveness checker unless you use a never helper in TypeScript.",
       "futureTopicSlug": "javascript/control-flow/switch"
     },
     {
       "language": "typescript",
       "concept": "Discriminated unions",
-      "note": "TS switch on a union tag plus never in default is the analogue of C# exhaustive switch expressions on records or enums.",
+      "note": "TypeScript switch on a union tag plus never in default is the analogue of C# exhaustive switch expressions on records or enums.",
       "futureTopicSlug": "typescript/types/discriminated-unions"
     }
   ],

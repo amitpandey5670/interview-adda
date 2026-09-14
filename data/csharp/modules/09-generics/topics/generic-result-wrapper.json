@@ -1,30 +1,152 @@
 {
   "id": "csharp-09-generic-result-wrapper",
   "slug": "generic-result-wrapper",
-  "title": "A generic Result wrapper for cache and APIs",
+  "title": "A generic Result wrapper (cache hits, misses, and faults)",
   "moduleId": "csharp-09-generics",
   "order": 5,
-  "hook": "Returning T? from a cache Get mixes three stories: miss, stored empty, and fault. A small Result<T> (or a TryGet) makes the generic real in production instead of a textbook List<T>.",
+  "hook": "Returning null from Get<T> mixes three different stories: cache miss, stored empty value, and deserialize failure. A small Result<T> or TryGet pattern makes generics practical at API boundaries instead of just textbook List<T> examples.",
   "sections": [
     {
-      "heading": "The production problem",
-      "prose": "Redis GET can miss. A session JSON can deserialize to a DTO whose claims are missing. An SQS payload can be well-formed JSON of the wrong type. If your API is SessionDto? Get(string key), a null means all of those. Interviewers who have shipped workers want a discriminated outcome. You can use bool TryGet<T> with [MaybeNullWhen(false)] (module 07 attributes) or a dedicated generic struct. Keep it in your domain; do not pull a 15-package Result library to look senior.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Result<T> for a Redis session lookup",
-          "code": "readonly struct CacheResult<T>\n{\n    public bool Hit { get; }\n    public T? Value { get; }\n    public string? Error { get; }\n\n    private CacheResult(bool hit, T? value, string? error)\n    {\n        Hit = hit;\n        Value = value;\n        Error = error;\n    }\n\n    public static CacheResult<T> Miss() => new(false, default, null);\n    public static CacheResult<T> Found(T value) => new(true, value, null);\n    public static CacheResult<T> Fault(string error) => new(false, default, error);\n}\n\nCacheResult<SessionDto> ReadSession(IDatabase redis, string key)\n{\n    RedisValue raw = redis.StringGet(key);\n    if (!raw.HasValue) return CacheResult<SessionDto>.Miss();\n    try\n    {\n        SessionDto? dto = JsonSerializer.Deserialize<SessionDto>((string)raw!);\n        return dto is null\n            ? CacheResult<SessionDto>.Fault(\"null json\")\n            : CacheResult<SessionDto>.Found(dto);\n    }\n    catch (JsonException ex)\n    {\n        return CacheResult<SessionDto>.Fault(ex.Message);\n    }\n}",
-          "explanation": "Hit versus Miss versus Fault stay distinct. T is closed at the call site (SessionDto). Callers switch on Hit/Error instead of testing null three ways."
+          "type": "prose",
+          "text": "A Result<T> (or CacheResult<T>, TryResult<T>) is a closed generic type you write to represent outcomes at an input/output boundary. Instead of T? Get(string key) where null could mean miss, empty, or error, you return a struct with explicit states: Hit with a value, Miss with no value, or Fault with an error message. This is where generics become production code — T is closed at the call site (SessionDto, int, TokenClaims) and callers pattern-match on the outcome."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "discriminated outcome",
+              "longForm": "discriminated outcome type",
+              "plainDefinition": "A type that carries a tag saying which case you are in — hit, miss, or fault — instead of overloading null with many meanings.",
+              "example": "CacheResult<T>.Hit versus .Miss versus .Fault."
+            },
+            {
+              "term": "TryGet pattern",
+              "longForm": "TryGet pattern",
+              "plainDefinition": "A bool-returning method with an out parameter, like Dictionary.TryGetValue.",
+              "example": "bool TryGet<T>(string key, [MaybeNullWhen(false)] out T value)."
+            },
+            {
+              "term": "MaybeNullWhen",
+              "longForm": "MaybeNullWhen attribute",
+              "plainDefinition": "A nullable analysis attribute telling the compiler the out value is unreliable when the method returns false.",
+              "example": "[MaybeNullWhen(false)] out T value on a cache miss."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Design notes",
-      "prose": "Prefer a readonly struct to avoid allocating on the miss path. Do not constrain T to class unless you must; a cache of int counters should work. Found(T value) takes a non-nullable T so you do not store a “hit” of null. Fault carries a string or an exception type — keep it small. This is not a replacement for exceptions on programmer errors (ThrowIfNull on the key). It is for expected outcomes at an I/O boundary. Pattern matching on Result belongs with module 11; here the generic is the point."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Redis GET can miss. A session JSON can deserialize to a DTO with missing claims. An SQS payload can be valid JSON of the wrong shape. If your API is SessionDto? Get(string key), null means all of those at once. Interviewers who have shipped workers want a discriminated outcome. Keep the type small and in your domain — do not pull a fifteen-package Result library to look senior. Use exceptions for programmer errors (null key); use Result for expected I/O outcomes."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When TryGet is enough",
+          "body": "Dictionary.TryGetValue is the BCL Result pattern. Mirror it for Redis when you only need hit/miss. Reach for CacheResult<T> when you have a third state — deserialize fault — that you refuse to encode as miss."
+        }
+      ]
     },
     {
-      "heading": "When TryGet is enough",
-      "prose": "Dictionary.TryGetValue already is the BCL Result. Mirror it for Redis when you only need hit/miss: bool TryGet<T>(string key, [MaybeNullWhen(false)] out T value). Reach for CacheResult<T> when you have a third state (deserialize fault) you refuse to encode as miss. That choice is the senior sentence."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Modeling a cache lookup",
+          "items": [
+            {
+              "title": "Call Redis GET",
+              "body": "Read the raw string. No value means Miss — not null as T."
+            },
+            {
+              "title": "Deserialize to T",
+              "body": "JsonSerializer.Deserialize<SessionDto>. Success with a value is Hit."
+            },
+            {
+              "title": "Handle bad JSON",
+              "body": "JsonException becomes Fault with a message — distinct from Miss."
+            },
+            {
+              "title": "Caller switches on outcome",
+              "body": "if (result.Hit) use result.Value; else if (result.Error is not null) log fault; else treat as miss."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Cache lookup outcomes",
+            "source": "flowchart TD\n  A[GET key from Redis] --> B{Has raw value?}\n  B -->|No| C[Miss]\n  B -->|Yes| D{Deserialize to T}\n  D -->|Success| E[Hit with T]\n  D -->|JsonException| F[Fault with error]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "CacheResult<T> for a Redis session lookup",
+            "code": "readonly struct CacheResult<T>\n{\n    public bool Hit { get; }\n    public T? Value { get; }\n    public string? Error { get; }\n\n    private CacheResult(bool hit, T? value, string? error)\n    {\n        Hit = hit;\n        Value = value;\n        Error = error;\n    }\n\n    public static CacheResult<T> Miss() => new(false, default, null);\n    public static CacheResult<T> Found(T value) => new(true, value, null);\n    public static CacheResult<T> Fault(string error) => new(false, default, error);\n}",
+            "explanation": "Three factory methods make the three states explicit. Found(T value) takes a non-nullable T so a Hit never stores null. Fault carries the error string separately from Miss."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Using CacheResult at the boundary",
+            "code": "CacheResult<SessionDto> ReadSession(IDatabase redis, string key)\n{\n    RedisValue raw = redis.StringGet(key);\n    if (!raw.HasValue) return CacheResult<SessionDto>.Miss();\n    try\n    {\n        SessionDto? dto = JsonSerializer.Deserialize<SessionDto>((string)raw!);\n        return dto is null\n            ? CacheResult<SessionDto>.Fault(\"null json\")\n            : CacheResult<SessionDto>.Found(dto);\n    }\n    catch (JsonException ex)\n    {\n        return CacheResult<SessionDto>.Fault(ex.Message);\n    }\n}\n\n// Caller:\nvar result = ReadSession(redis, sessionKey);\nif (result.Hit) UseSession(result.Value!);\nelse if (result.Error is not null) LogFault(result.Error);\nelse RefreshFromDatabase();",
+            "explanation": "T is closed as SessionDto at the call site. The caller never wonders whether null means miss or bad JSON. ThrowIfNull on the key handles programmer errors separately."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "TryGet alternative for hit/miss only",
+            "code": "bool TryGet<T>(IDatabase redis, string key, [MaybeNullWhen(false)] out T value)\n{\n    RedisValue raw = redis.StringGet(key);\n    if (!raw.HasValue)\n    {\n        value = default!;\n        return false;\n    }\n    value = JsonSerializer.Deserialize<T>((string)raw!)!;\n    return true;\n}\n\n// Use when deserialize failure should throw, not become a third state.",
+            "explanation": "TryGet mirrors Dictionary.TryGetValue. MaybeNullWhen(false) tells nullable analysis the out value is unreliable on false. Add CacheResult<T> when you need Fault as a first-class state."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Result patterns across languages",
+          "headers": ["Aspect", "C# CacheResult<T>", "TypeScript"],
+          "rows": [
+            ["Shape", "readonly struct with Hit/Error", "{ ok: true, value: T } | { ok: false, error: string }"],
+            ["Run-time enforcement", "Real struct, compiler-checked fields", "Erased — only tsc checks"],
+            ["Null as miss signal", "Avoid on unconstrained T", "undefined/null overload many meanings"],
+            ["Third state (fault)", "Explicit Fault factory", "Extra union member or nested error type"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Returning default! on miss and calling it a hit. Making Result a mutable class with ten properties copied from an exception hierarchy. Using exceptions for Redis misses in a hot high-concurrency path. Using T? on an unconstrained T as a miss signal — it means different things for struct versus class."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -48,7 +170,7 @@
     {
       "language": "typescript",
       "concept": "discriminated unions",
-      "note": "{ ok: true, value: T } | { ok: false, error: string } is the TS shape of CacheResult<T>. TS erases it; C# can keep a real struct.",
+      "note": "{ ok: true, value: T } | { ok: false, error: string } is the TypeScript shape of CacheResult<T>. TypeScript erases it; C# keeps a real struct at run time.",
       "futureTopicSlug": "typescript/types/discriminated-unions"
     }
   ],

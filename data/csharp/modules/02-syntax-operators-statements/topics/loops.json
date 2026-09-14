@@ -1,33 +1,166 @@
 {
   "id": "csharp-02-loops",
   "slug": "loops",
-  "title": "Loops",
+  "title": "Repeating work with for, while, and foreach loops",
   "moduleId": "csharp-02-syntax-operators-statements",
   "order": 4,
-  "hook": "`for`, `while`, and `do` are index or condition loops. `foreach` walks a sequence through `GetEnumerator` — the shape you want for CSV rows and SQS batches.",
+  "hook": "Loops repeat a block of code. Use for when you need an index, while when you test a condition first, do-while when you need at least one run, and foreach when you want to walk every item in a sequence.",
   "sections": [
     {
-      "heading": "Walking sequences",
-      "prose": "`while (cond) { }` tests first. `do { } while (cond);` tests after at least one body. `for (init; cond; iter)` is the index form — use it when you have an array and a known bound, not as a default. `foreach (var row in rows)` is the idiomatic walk: it works on arrays, `List<T>`, and anything enumerable. You cannot assign to the iteration variable to mutate the collection slot (for most collections). Do not `foreach` and `Add` to the same `List` — the enumerator throws. High-concurrency attempt submit is not solved by a tighter loop; that is threading later. Here: pick `foreach` for a batch, `for` for index math.",
-      "snippets": [
+      "heading": "What are loops?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "foreach CSV rows versus indexed for",
-          "code": "foreach (var row in csvRows)\n{\n    ImportRow(row);\n}\n\nfor (int i = 0; i < csvRows.Length; i++)\n{\n    if (i == 0) continue; // skip header by index\n    ImportRow(csvRows[i]);\n}",
-          "explanation": "foreach is the default for a sequence. Use for when the index is part of the business rule (header row, window of 199–999)."
+          "type": "prose",
+          "text": "A **loop** runs a block of code repeatedly until a condition fails or the sequence ends. C# has four loop forms: **for** (index-based), **while** (condition-first), **do-while** (body-first, at least once), and **foreach** (sequence walk). The foreach loop is the idiomatic choice for walking arrays, lists, and any type that implements IEnumerable — the shape you want for CSV rows and message batches."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "foreach",
+              "longForm": "foreach loop",
+              "plainDefinition": "A loop that walks each element of a sequence by calling GetEnumerator internally.",
+              "example": "foreach (var row in csvRows) { ImportRow(row); }"
+            },
+            {
+              "term": "IEnumerable",
+              "longForm": "IEnumerable interface",
+              "plainDefinition": "A contract that lets a type be walked with foreach. Arrays, List<T>, and many collection types implement it.",
+              "example": "List<string>, string[], and HashSet<int> all work with foreach."
+            },
+            {
+              "term": "iteration variable",
+              "longForm": "iteration variable",
+              "plainDefinition": "The variable declared in foreach (var item in collection). It is read-only for most collection types.",
+              "example": "You cannot assign to item to change the collection slot."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why foreach is the default",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Reach for foreach when you need every item in a collection and the index does not matter. Use for only when the index is part of the business rule — skipping a CSV header row, processing a sliding window, or parallel index math. Do not foreach and Add to the same List at the same time — the enumerator throws InvalidOperationException. High-concurrency work is not solved by a tighter loop; that is threading in a later module."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Choosing the right loop",
+          "body": "foreach for a batch of SQS messages. for when you need row numbers or index-based windowing. while for polling until a condition changes. do-while for retry-at-least-once patterns where the first attempt always runs."
+        }
+      ]
+    },
+    {
+      "heading": "How each loop form executes",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "foreach execution model",
+          "items": [
+            {
+              "title": "Get the enumerator",
+              "body": "The compiler calls GetEnumerator() on the collection."
+            },
+            {
+              "title": "MoveNext",
+              "body": "Each iteration calls MoveNext(). When it returns false, the loop ends."
+            },
+            {
+              "title": "Read Current",
+              "body": "The iteration variable gets the value of Current for this step."
+            },
+            {
+              "title": "Dispose",
+              "body": "When the loop ends (or breaks), Dispose() is called on the enumerator if needed."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Loop form decision",
+            "source": "flowchart TD\n  A[Need to repeat code?] --> B{Need an index?}\n  B -->|Yes| C[for loop]\n  B -->|No| D{Walk a collection?}\n  D -->|Yes| E[foreach loop]\n  D -->|No| F{Run at least once?}\n  F -->|Yes| G[do-while loop]\n  F -->|No| H[while loop]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough: all four loop forms",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "foreach CSV rows versus indexed for",
+            "code": "foreach (var row in csvRows)\n{\n    ImportRow(row);\n}\n\nfor (int i = 0; i < csvRows.Length; i++)\n{\n    if (i == 0) continue; // skip header by index\n    ImportRow(csvRows[i]);\n}",
+            "explanation": "foreach is the default for a sequence. Use for when the index is part of the business rule (header row, window of 199–999)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "while and do-while",
+            "code": "int retries = 0;\nwhile (retries < 3 && !success)\n{\n    success = TryConnect();\n    retries++;\n}\n\n// do-while: body runs at least once\nint attempt = 0;\ndo\n{\n    attempt++;\n    result = ProcessOnce();\n} while (result == null && attempt < 5);",
+            "explanation": "while tests the condition before the first body run. do-while always executes the body once before checking."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "foreach mutation rules",
+            "code": "// OK: modify properties of the item (if mutable)\nforeach (var order in orders)\n{\n    order.Status = \"Processed\";\n}\n\n// NOT OK: add to the same list during foreach\n// foreach (var x in list) { list.Add(x); } // throws!\n\n// Safe deletion: iterate backwards with for\nfor (int i = list.Count - 1; i >= 0; i--)\n{\n    if (ShouldRemove(list[i])) list.RemoveAt(i);\n}",
+            "explanation": "Mutating a list during foreach throws. Build a new list, or use for backwards when deleting by index."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# vs JavaScript/TypeScript loops",
+          "headers": ["Loop", "C#", "JavaScript/TypeScript"],
+          "rows": [
+            ["Walk values", "foreach (var x in list)", "for...of (closest match)"],
+            ["Walk keys", "Not idiomatic on lists", "for...in (enumerates keys)"],
+            ["Index loop", "for (int i = 0; ...)", "for (let i = 0; ...) or forEach"],
+            ["Async sequences", "await foreach (async module)", "for await...of"],
+            ["Modify during loop", "Throws on most collections", "Generally unsafe in both"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes to avoid",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Top pitfalls",
+          "body": "Using for with Count on a linked structure by habit — foreach or LINQ is clearer. Expecting foreach on IAsyncEnumerable without await foreach (covered in the async module). Off-by-one when mixing 0-based indexes with CSV line numbers. Adding items to a list inside a foreach over that same list."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "`foreach` is “walk a sequence,” not a special array syntax.",
-    "`do-while` always runs once; `while` may run zero times.",
-    "Mutating a list during `foreach` throws; build a new list or use `for` backwards when deleting."
+    "foreach means walk a sequence, not a special array syntax.",
+    "do-while always runs once; while may run zero times.",
+    "Mutating a list during foreach throws; build a new list or use for backwards when deleting.",
+    "Use for only when the index is part of the business rule."
   ],
   "commonPitfalls": [
-    "Using `for` with `Count` on a LinkedList-like structure by habit — foreach (or LINQ later) is clearer.",
-    "Expecting `foreach` on `IAsyncEnumerable` without `await foreach` (async module).",
-    "Off-by-one when mixing 0-based indexes with CSV line numbers."
+    "Using for with Count on a LinkedList-like structure by habit — foreach (or LINQ later) is clearer.",
+    "Expecting foreach on IAsyncEnumerable without await foreach (async module).",
+    "Off-by-one when mixing 0-based indexes with CSV line numbers.",
+    "Trying to assign to the foreach iteration variable to mutate a collection slot."
   ],
   "relatedTopicIds": [
     "csharp-02-jump-statements",
@@ -39,7 +172,7 @@
     {
       "language": "javascript",
       "concept": "for...of vs for...in",
-      "note": "C# `foreach` is closest to `for...of`. `for...in` enumerates keys; there is no C# equivalent you should reach for on lists.",
+      "note": "C# foreach is closest to for...of. for...in enumerates keys; there is no C# equivalent you should reach for on lists.",
       "futureTopicSlug": "javascript/statements/for-of"
     }
   ],

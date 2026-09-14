@@ -1,49 +1,152 @@
 {
   "id": "csharp-18-langversion-breaking-changes",
   "slug": "langversion-breaking-changes",
-  "title": "LangVersion, TFM, and breaking changes",
+  "title": "LangVersion, Target Framework Moniker (TFM), and breaking changes",
   "moduleId": "csharp-18-version-style-performance",
   "order": 2,
-  "hook": "Module 01 told you not to set `LangVersion` to `latest`. This page is why CI boxes lie, and what “breaking change” means when only the compiler moved.",
+  "hook": "LangVersion controls which C# syntax the compiler accepts. The Target Framework Moniker (TFM) like net10.0 controls which runtime APIs exist. Upgrading either without a plan causes build breaks, nullable warnings, and package incompatibilities.",
   "sections": [
     {
-      "heading": "TFM picks the language; csproj can override",
-      "prose": "SDK projects pair a target framework with a default language: `net8.0` → C# 12, `net9.0` → C# 13, `net10.0` → C# 14. Visual Studio disables the language dropdown for that reason. A newer LangVersion than the TFM is unsupported — you may parse syntax whose runtime APIs do not exist. Override in the csproj or `Directory.Build.props` with `preview` or `14.0` when you mean it. `latest` means whatever compiler is installed on that agent; two GitHub runners can accept different syntax. `latestMajor`/`default` track the compiler’s latest major, still not a pinned TFM. `#error version` (case sensitive) prints compiler and language versions as CS8304. File-based apps (module 01) inherit the SDK’s defaults unless `#:property` says otherwise.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "xml",
-          "label": "Pin net10.0, do not pin latest",
-          "code": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <Nullable>enable</Nullable>\n    <ImplicitUsings>enable</ImplicitUsings>\n    <!-- <LangVersion>latest</LangVersion>  -->\n    <!-- <LangVersion>14.0</LangVersion> only if you must document it -->\n  </PropertyGroup>\n</Project>",
-          "explanation": "net10.0 already means C# 14 on a current SDK. Explicit latest is how a laptop with a preview SDK ships syntax CI cannot build."
+          "type": "prose",
+          "text": "LangVersion can be latest, preview, or a specific number (14). TFM (net10.0, netstandard2.0) defines the API surface from reference assemblies. Breaking changes come from: nullable context on legacy code, removed APIs between .NET versions, stricter analyzers, and public API guards in shared libraries. Pin versions in Directory.Build.props for consistent CI builds."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TFM",
+              "shortForm": "TFM",
+              "longForm": "Target Framework Moniker",
+              "plainDefinition": "MSBuild property naming the target framework and API set.",
+              "example": "<TargetFramework>net10.0</TargetFramework>"
+            },
+            {
+              "term": "LangVersion",
+              "longForm": "C# language version setting",
+              "plainDefinition": "MSBuild property selecting C# language features for compilation.",
+              "example": "<LangVersion>14</LangVersion>"
+            },
+            {
+              "term": "Nullable context",
+              "longForm": "Nullable reference type context",
+              "plainDefinition": "Per-project setting enabling nullable warnings for reference types.",
+              "example": "<Nullable>enable</Nullable>"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Compiler breaking changes are not BCL breaking changes",
-      "prose": "Raising C# can change overload resolution, definite assignment, and how identifiers bind. C# 14’s `field` token inside accessors shadows a member named `field` — Microsoft documents `@field` / `this.field` as the escape. Null-conditional assignment changes evaluation of the right-hand side. Method-group natural type tightened in C# 13. These are listed in the compiler breaking-changes notes (Roslyn / “Breaking changes in the C# compiler”), separate from .NET runtime breaking changes. A library compiled with C# 14 can still target an older TFM only if you stay in the supported pairing; do not assume binaries are a free pass to newer syntax on older runtimes.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "field keyword collision",
-          "code": "public class CacheEntry\n{\n    private string field = \"old\";\n\n    public string Value\n    {\n        get => field; // C# 14: synthesized backing field, not the member named field\n        set => @field = value; // the real member, if you insist on the name\n    }\n}",
-          "explanation": "Rename the member. Do not ship a property named around the collision. Call this out in a LangVersion bump PR."
+          "type": "prose",
+          "text": "A library on netstandard2.0 cannot use C# 12 features that require newer BCL types unless you multitarget. Turning on nullable on a million-line codebase floods warnings — migrate project by project. CI should catch TFM drift and unintended public API changes when you bump versions."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Upgrade order",
+          "body": "Bump TFM first (fix API breaks), then enable nullable, then raise LangVersion for syntax sugar."
         }
       ]
     },
     {
-      "heading": "What CI should lock",
-      "prose": "Lock the SDK with `global.json`. Lock the TFM in the csproj. Treat PublicAPI files (module 16) as a third lock for libraries. Analyzers that fire on new language rules should be upgraded deliberately; an SDK bump that silently enables a warning-as-error is a breaking change for the repo even if the language spec calls it a bug fix. Read the C# 14 breaking-changes article before you merge `net10.0`."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Safe version upgrade",
+          "items": [
+            { "title": "Inventory projects", "body": "List TFMs and LangVersion across solution." },
+            { "title": "Upgrade TFM", "body": "Fix obsolete API compiler errors." },
+            { "title": "Enable analyzers", "body": "Nullable, PublicApiAnalyzers — treat warnings as errors incrementally." },
+            { "title": "Raise LangVersion", "body": "Adopt new syntax where it simplifies code." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "LangVersion vs TFM",
+            "source": "flowchart LR\n  LV[LangVersion 14\\nsyntax only] --> C[Roslyn compiler]\n  TFM[TFM net10.0\\nAPI surface] --> R[Reference assemblies]\n  C --> D[Assembly output]\n  R --> C"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Central version pins",
+            "code": "<!-- Directory.Build.props -->\n<Project>\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <LangVersion>14</LangVersion>\n    <Nullable>enable</Nullable>\n    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n  </PropertyGroup>\n</Project>",
+            "explanation": "Central props keep every project aligned — critical for large repos and CI."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Multi-targeting library",
+            "code": "<PropertyGroup>\n  <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>\n</PropertyGroup>\n<ItemGroup Condition=\"'$(TargetFramework)' == 'net10.0'\">\n  <PackageReference Include=\"System.Text.Json\" Version=\"*\" />\n</ItemGroup>",
+            "explanation": "Ship broad compatibility while using newer APIs only on modern TFM via conditional references."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Obsolete API migration",
+            "code": "#pragma warning disable CS0618 // Obsolete\nvar legacy = OldCrypto.Hash(data);\n#pragma warning restore CS0618\n\n// Better: replace with modern API before removing obsolete in next major",
+            "explanation": "Track CS0618 warnings in CI; do not ignore forever."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Version axes",
+          "headers": ["Axis", ".NET", "TypeScript / Node"],
+          "rows": [
+            ["Runtime APIs", "TFM net10.0", "Node engine version"],
+            ["Language", "LangVersion", "TypeScript compiler target / lib"],
+            ["Strictness", "Nullable enable", "strictNullChecks"],
+            ["Breaking CI", "PublicApiAnalyzers", "api-extractor on .d.ts"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "LangVersion latest on library consumers cannot rebuild. Nullable enable everywhere in one PR. Upgrading TFM without running integration tests."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Language version follows TFM; net10.0 is C# 14. Avoid LangVersion=latest.",
-    "Compiler breaking changes (field, overload resolution) are documented separately from runtime breaks.",
-    "global.json plus TFM plus public API baselines make the bump reviewable."
+    "LangVersion is syntax; TFM is API availability — two independent knobs.",
+    "Upgrade TFM before chasing new syntax features.",
+    "Nullable and public API analyzers catch breaking changes early."
   ],
   "commonPitfalls": [
-    "Directory.Build.props LangVersion shared with VB projects — the numbers are not the same language.",
-    "Raising LangVersion to use span conversions while staying on net8.0 and then hitting missing runtime support.",
-    "Ignoring #error version when two agents disagree."
+    "Using net10-only APIs in netstandard2.0 build.",
+    "Nullable flood without incremental migration.",
+    "latest LangVersion in shipped libraries."
   ],
   "relatedTopicIds": [
     "csharp-18-csharp-8-to-14-map",
@@ -54,25 +157,17 @@
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "typescript vs lib vs node",
-      "note": "`typescript` package vs `lib` vs `@types/node` is the same three-lock problem as SDK vs LangVersion vs TFM. `latest` in either ecosystem is a reproducibility smell.",
-      "futureTopicSlug": "typescript/compiler/tsconfig"
+      "concept": "tsconfig lib and target",
+      "note": "TypeScript target and lib mirror LangVersion plus TFM split — syntax vs available builtins.",
+      "futureTopicSlug": "typescript/tsconfig"
     }
   ],
   "officialSources": [
     {
       "title": "Configure language version",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/configure-language-version"
-    },
-    {
-      "title": "Breaking changes in the C# compiler",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/breaking-changes"
-    },
-    {
-      "title": "What's new in C# 14",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14"
     }
   ],
-  "animationHint": "timeline",
-  "scenarioTag": "high-concurrency"
+  "scenarioTag": "high-concurrency",
+  "animationHint": "timeline"
 }

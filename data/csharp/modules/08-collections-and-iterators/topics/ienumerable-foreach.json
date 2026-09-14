@@ -1,30 +1,159 @@
 {
   "id": "csharp-08-ienumerable-foreach",
   "slug": "ienumerable-foreach",
-  "title": "IEnumerable and foreach",
+  "title": "IEnumerable (sequence interface) and foreach",
   "moduleId": "csharp-08-collections-and-iterators",
   "order": 3,
-  "hook": "foreach is not magic. It is GetEnumerator, MoveNext, Current, and dispose if the enumerator is IDisposable. IEnumerable<T> is the sequence contract the rest of the BCL speaks.",
+  "hook": "The foreach loop is not magic — it calls GetEnumerator, then MoveNext and Current in a loop. IEnumerable<T> is the contract that says \"you can walk through my items one at a time.\"",
   "sections": [
     {
-      "heading": "The foreach pattern",
-      "prose": "Microsoft’s iteration-statement docs: foreach works on IEnumerable / IEnumerable<T>, and also on any type with a public GetEnumerator whose return has Current and MoveNext(). GetEnumerator may be an extension method. If Current is a ref return, the iteration variable can be ref. An empty collection skips the body. A null collection throws NullReferenceException — annotate the parameter as IEnumerable<T> not IEnumerable<T>? if you already guarded. List<T>.Enumerator is a struct; foreach on List avoids boxing that enumerator. foreach on IEnumerable<T> boxes it. That is why APIs that take IEnumerable<T> are flexible and sometimes slower. Do not mutate a List while foreach is running; the version counter throws InvalidOperationException.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "foreach over a batch",
-          "code": "void Acknowledge(IEnumerable<Message> messages)\n{\n    ArgumentNullException.ThrowIfNull(messages);\n    foreach (Message message in messages)\n    {\n        Console.WriteLine(message.MessageId);\n    }\n}\n// await foreach (var item in asyncSequence) lives in module 13 (IAsyncEnumerable<T>).",
-          "explanation": "The method accepts any sequence. Null is a throw, not an empty loop. Async sequences are a different interface."
+          "type": "prose",
+          "text": "IEnumerable<T> is an interface in System.Collections.Generic that promises a sequence of items. The foreach statement works on any type that provides a GetEnumerator method whose return type has Current and MoveNext. You do not even need to implement IEnumerable<T> directly — if your type has the right pattern, foreach compiles. List<T>, Dictionary<TKey,TValue>, arrays, and yield iterators all support foreach."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IEnumerable",
+              "longForm": "IEnumerable<T>",
+              "plainDefinition": "An interface that represents a sequence of items you can walk through one at a time.",
+              "example": "foreach (Message m in messages) walks an IEnumerable<Message>."
+            },
+            {
+              "term": "enumerator",
+              "longForm": "enumerator",
+              "plainDefinition": "A cursor object that tracks your position in a sequence. MoveNext advances; Current returns the item at that position.",
+              "example": "var e = list.GetEnumerator(); e.MoveNext(); var item = e.Current;"
+            },
+            {
+              "term": "foreach",
+              "longForm": "foreach statement",
+              "plainDefinition": "A C# loop that hides the enumerator boilerplate — GetEnumerator, MoveNext, Current, and Dispose.",
+              "example": "foreach (var x in items) { ... } is syntactic sugar over the enumerator pattern."
+            },
+            {
+              "term": "IReadOnlyList",
+              "longForm": "IReadOnlyList<T>",
+              "plainDefinition": "A sequence you can walk and index by position, with a Count property — but not mutate.",
+              "example": "IReadOnlyList<string> names gives you names[0] and names.Count."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "IEnumerable<T> versus IReadOnlyList<T>",
-      "prose": "IEnumerable<T> promises you can walk it, not that you can Count in O(1) or index. LINQ Count() may enumerate the whole thing. If you need a snapshot with indexer, take IReadOnlyList<T> or T[]. Returning IEnumerable<T> from a public API hides whether you allocated a List or a yield iterator — which is good for flexibility and bad when callers enumerate twice (next topic). ICollection<T> and IList<T> add mutation; prefer the read-only interfaces on outputs."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IEnumerable<T> is the most flexible parameter type for methods that only need to walk items. A method accepting IEnumerable<Message> works with a List, an array, a yield iterator, or a LINQ query. The trade-off: IEnumerable<T> does not promise you can Count in O(1) or index by position. Calling Count() on a lazy sequence may enumerate the entire thing. Returning IEnumerable<T> from a public API hides whether you allocated a List or built a deferred iterator."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Walkable, not necessarily materialized",
+          "body": "IEnumerable<T> means you can foreach over it. It does not mean the data is already in memory as a list. await foreach on IAsyncEnumerable<T> is a different interface — taught in module 13."
+        }
+      ]
     },
     {
-      "heading": "Variance is later",
-      "prose": "IEnumerable<out T> is covariant: IEnumerable<string> can be passed where IEnumerable<object> is expected. That is why foreach (object o in strings) is legal. The in/out rules, how they differ from TypeScript, and why IList<T> is invariant wait for module 09. Here, treat IEnumerable<T> as “a sequence of T.”"
+      "heading": "How foreach works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "What the compiler generates",
+          "items": [
+            {
+              "title": "Get an enumerator",
+              "body": "The compiler calls collection.GetEnumerator() (or an extension method) and stores the result."
+            },
+            {
+              "title": "Loop with MoveNext",
+              "body": "while (enumerator.MoveNext()) runs the loop body. MoveNext returns false when there are no more items."
+            },
+            {
+              "title": "Read Current",
+              "body": "Inside the loop, the iteration variable is set to enumerator.Current."
+            },
+            {
+              "title": "Dispose if needed",
+              "body": "If the enumerator implements IDisposable, foreach calls Dispose when the loop ends — even on an exception."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "foreach execution flow",
+            "source": "flowchart TD\n  A[foreach item in collection] --> B[GetEnumerator]\n  B --> C{MoveNext?}\n  C -->|true| D[item = Current]\n  D --> E[Loop body]\n  E --> C\n  C -->|false| F[Dispose enumerator]\n  F --> G[Done]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "foreach over any sequence",
+            "code": "void Acknowledge(IEnumerable<Message> messages)\n{\n    ArgumentNullException.ThrowIfNull(messages);\n    foreach (Message message in messages)\n    {\n        Console.WriteLine(message.MessageId);\n    }\n}",
+            "explanation": "The method accepts any sequence — List, array, or yield iterator. Null throws immediately; an empty sequence simply skips the body."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "What foreach compiles to",
+            "code": "IEnumerator<Message> e = messages.GetEnumerator();\ntry\n{\n    while (e.MoveNext())\n    {\n        Message message = e.Current;\n        Console.WriteLine(message.MessageId);\n    }\n}\nfinally\n{\n    e.Dispose();\n}",
+            "explanation": "This is the desugared form. foreach hides this boilerplate. The finally block ensures Dispose runs even if the loop throws."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IEnumerable vs IReadOnlyList",
+            "code": "void ProcessAll(IEnumerable<string> items)\n{\n    // Cannot do items[0] or items.Count — not on the interface\n    foreach (string item in items) { ... }\n}\n\nvoid ProcessIndexed(IReadOnlyList<string> items)\n{\n    for (int i = 0; i < items.Count; i++)\n        Console.WriteLine(items[i]);\n}",
+            "explanation": "Use IEnumerable when you only need to walk. Use IReadOnlyList when callers need Count and an indexer. ICollection and IList add mutation — prefer read-only interfaces on outputs."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Iteration protocols",
+          "headers": ["Aspect", "C# foreach", "JavaScript for...of"],
+          "rows": [
+            ["Protocol", "GetEnumerator / MoveNext / Current", "Symbol.iterator / next()"],
+            ["Null handling", "NullReferenceException", "TypeError on null/undefined"],
+            ["Async variant", "await foreach (module 13)", "for await...of"],
+            ["Structural typing", "Pattern-based (duck typing)", "Iterable protocol (duck typing)"],
+            ["Boxing", "IEnumerable<T> may box struct enumerator", "No boxing (JS has no value types)"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Passing null into foreach and calling it an empty batch — null throws NullReferenceException. Using IEnumerable<T> in a tight inner loop where you needed IReadOnlyList<T> for Count and indexer. Mutating a List while foreach is running — the version counter throws InvalidOperationException."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
@@ -54,7 +183,7 @@
     {
       "language": "typescript",
       "concept": "Iterable<T>",
-      "note": "TS Iterable<T> is the structural cousin of IEnumerable<T>, erased at run time. IEnumerable<T> is a real CLR interface.",
+      "note": "TypeScript Iterable<T> is the structural cousin of IEnumerable<T>, erased at run time. IEnumerable<T> is a real CLR interface.",
       "futureTopicSlug": "typescript/types/iterable"
     }
   ],

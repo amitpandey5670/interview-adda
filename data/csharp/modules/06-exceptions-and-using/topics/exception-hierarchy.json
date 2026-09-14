@@ -1,35 +1,170 @@
 {
   "id": "csharp-06-exception-hierarchy",
   "slug": "exception-hierarchy",
-  "title": "Exception hierarchy",
+  "title": "Exception hierarchy (choosing what to catch)",
   "moduleId": "csharp-06-exceptions-and-using",
   "order": 3,
-  "hook": "Everything hangs off System.Exception. The skill is choosing what a worker swallows, what it retries, and what it lets kill the message versus the process.",
+  "hook": "Every failure type in .NET hangs off System.Exception. The interview skill is knowing which types a worker should retry, which should go to a dead-letter queue, and which should crash the process.",
   "sections": [
     {
-      "heading": "Types you actually name",
-      "prose": "SystemException is a historical bucket; you catch more specific types: ArgumentException (and ArgumentNullException, ArgumentOutOfRangeException), InvalidOperationException, IOException, HttpRequestException, JsonException, OperationCanceledException, TimeoutException. ApplicationException is obsolete as a policy. Custom exceptions should be rare, serializable in spirit (message + inner), and named for the domain (LeaseExpiredException), not for every if."
-    },
-    {
-      "heading": "Worker versus bubble",
-      "prose": "An SQS or RabbitMQ consumer is a boundary. At HandleAsync you may catch known transient faults, retry, then fail the message to a DLQ. Unknown failures should bubble to the host so visibility stays honest — metrics, poison-message counts, process health. Catching Exception, logging, and returning as success is silent data loss. Static constructors that throw become TypeInitializationException wrapping the inner cause; you cannot “retry” that type in-process without unloading. High-concurrency submit paths should fail fast on cancellation and on invariant breaks, not wrap every call in Exception.",
-      "snippets": [
+      "heading": "What is the exception hierarchy?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Message boundary: retry known, bubble unknown",
-          "code": "async Task ConsumeAsync(string body, CancellationToken ct)\n{\n    try\n    {\n        await HandleAsync(body, ct);\n    }\n    catch (OperationCanceledException) when (ct.IsCancellationRequested)\n    {\n        throw;\n    }\n    catch (TimeoutException ex)\n    {\n        Log(ex);\n        throw; // host: retry / DLQ policy\n    }\n}",
-          "explanation": "Timeout is a known worker failure: log and rethrow so the queue infrastructure retries. There is no catch (Exception). Argument bugs bubble untouched."
+          "type": "prose",
+          "text": "All exceptions inherit from **System.Exception**. Below it sit familiar branches: **ArgumentException** (and **ArgumentNullException**, **ArgumentOutOfRangeException**) for bad inputs, **InvalidOperationException** for wrong state, **IOException** for file and stream problems, **HttpRequestException** for HTTP failures, **JsonException** for bad JSON, **OperationCanceledException** for cancellation, and **TimeoutException** for timed-out work. Catch the most specific type you can handle; leave **Exception** for true boundaries only."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "System.Exception",
+              "longForm": "System.Exception",
+              "plainDefinition": "The root of every throwable type in .NET. Carries Message, StackTrace, InnerException, and HResult.",
+              "example": "catch (Exception ex) — catches everything derived, use sparingly."
+            },
+            {
+              "term": "ArgumentException",
+              "longForm": "ArgumentException family",
+              "plainDefinition": "Thrown when a method receives an invalid argument. ArgumentNullException and ArgumentOutOfRangeException are more specific children.",
+              "example": "throw new ArgumentNullException(nameof(userId));"
+            },
+            {
+              "term": "TypeInitializationException",
+              "longForm": "TypeInitializationException",
+              "plainDefinition": "Wraps a failure in a static constructor (.cctor). The type is unusable for the rest of the process.",
+              "example": "Thrown when static readonly config fails to load."
+            },
+            {
+              "term": "DLQ",
+              "shortForm": "DLQ",
+              "longForm": "dead-letter queue",
+              "plainDefinition": "A queue where poison or repeatedly failing messages land after retries are exhausted.",
+              "example": "After three TimeoutException retries, send the message to the DLQ."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Process-level facts",
-      "prose": "If no catch exists, the thread dies. In ASP.NET or a Worker Service the host may crash or log depending on configuration — still not a reason to catch everything. Unobserved Task exceptions used to crash processes on later .NET; the modern default logs them. That policy is module 13. Finalizer exceptions abort the finalizer — module 14."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A message consumer is a **boundary**. Catching **TimeoutException** to retry makes sense. Catching **Exception**, logging, and returning success is silent data loss — the message disappears as if it succeeded. Static constructor failures become **TypeInitializationException** — you cannot retry that in-process without unloading the type. Knowing the hierarchy tells you what is transient, what is a bug, and what kills the type forever."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "ApplicationException is obsolete",
+          "body": "Do not inherit from ApplicationException as a policy. Use domain-specific names (LeaseExpiredException) only when callers catch by name. Most custom exceptions add no value over InvalidOperationException with a clear message."
+        }
+      ]
+    },
+    {
+      "heading": "How to choose catch versus bubble",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Decision at a worker boundary",
+          "items": [
+            {
+              "title": "Identify transient faults",
+              "body": "TimeoutException, throttling (HTTP 429), brief network blips — log, retry with backoff, then dead-letter if exhausted."
+            },
+            {
+              "title": "Let programming bugs bubble",
+              "body": "ArgumentException, NullReferenceException, InvalidOperationException from bad state — these need a fix, not a retry loop."
+            },
+            {
+              "title": "Handle cancellation explicitly",
+              "body": "catch OperationCanceledException when (ct.IsCancellationRequested) and rethrow — do not treat shutdown as a failure."
+            },
+            {
+              "title": "Avoid catch (Exception) { return; }",
+              "body": "Succeeding the message after an unknown failure hides poison data. Bubble or dead-letter with visibility."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Common exception branches",
+            "source": "flowchart TD\n  EX[System.Exception]\n  EX --> ARG[ArgumentException]\n  ARG --> ANE[ArgumentNullException]\n  EX --> IOE[InvalidOperationException]\n  EX --> IO[IOException]\n  EX --> HTTP[HttpRequestException]\n  EX --> JSON[JsonException]\n  EX --> OCE[OperationCanceledException]\n  EX --> TO[TimeoutException]\n  EX --> TIE[TypeInitializationException]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Message boundary: retry known, bubble unknown",
+            "code": "async Task ConsumeAsync(string body, CancellationToken ct)\n{\n    try\n    {\n        await HandleAsync(body, ct);\n    }\n    catch (OperationCanceledException) when (ct.IsCancellationRequested)\n    {\n        throw;\n    }\n    catch (TimeoutException ex)\n    {\n        Log(ex);\n        throw; // host applies retry / DLQ policy\n    }\n    // ArgumentException and other bugs bubble untouched\n}",
+            "explanation": "Line 10: TimeoutException is a known transient fault — log and rethrow so queue infrastructure retries. There is no catch (Exception). Programming bugs reach the host unchanged."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Specific types for specific failures",
+            "code": "static User ParseUser(string json)\n{\n    try\n    {\n        return JsonSerializer.Deserialize<User>(json)!;\n    }\n    catch (JsonException ex)\n    {\n        throw new InvalidOperationException(\"user JSON invalid\", ex);\n    }\n}",
+            "explanation": "Line 7: JsonException is the precise parse failure. Line 9: wrap once with InnerException so the worker sees InvalidOperationException but logs retain the JSON detail."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Static constructor failure",
+            "code": "static class Config\n{\n    static readonly string ApiKey = LoadKeyOrThrow();\n\n    static string LoadKeyOrThrow()\n    {\n        var key = Environment.GetEnvironmentVariable(\"API_KEY\");\n        return key ?? throw new InvalidOperationException(\"API_KEY missing\");\n    }\n}\n// First access to Config throws TypeInitializationException wrapping the inner cause",
+            "explanation": "Line 3: if LoadKeyOrThrow fails, the type initializer throws. Line 11: callers see TypeInitializationException — the type is broken for this process; retrying the same code path will not help."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Exception hierarchies in C# vs JS/TS",
+          "headers": ["Aspect", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Hierarchy culture", "Real type tree under Exception — catch by type", "Error subclasses exist but many libraries throw plain objects"],
+            ["Exhaustive handling", "Ordered catch clauses approximate exhaustive failure handling", "TS cannot exhaustively type thrown errors"],
+            ["Custom types", "Rare, named for domain, caught by type", "Common but inconsistent — often just message strings"],
+            ["Process impact", "Unhandled thread exception can kill the process", "Uncaught errors log; Node policy varies"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "catch (Exception) { return; } in a queue handler",
+          "body": "The message is marked processed while data was never handled. Metrics look green; customers lose data. Rethrow unknown failures or route to a dead-letter queue."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Custom exceptions nobody catches by name",
+          "body": "LeaseExpiredException that adds no properties and is never caught specifically is noise. Use InvalidOperationException with a clear message unless a caller truly branches on the type."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Catch specific types; Exception only at a true boundary.",
-    "Workers: retry/DLQ policy versus bubble. Do not succeed after a swallowed failure.",
+    "Workers: retry/DLQ for transient faults; bubble programming bugs.",
     "TypeInitializationException means the type is done for this process."
   ],
   "commonPitfalls": [
@@ -46,13 +181,13 @@
     {
       "language": "javascript",
       "concept": "Error subclasses",
-      "note": "JS has Error, TypeError, and user subclasses, but many libraries throw plain objects. C# culture is a real hierarchy under Exception.",
+      "note": "JavaScript has Error, TypeError, and user subclasses, but many libraries throw plain objects. C# culture expects a real hierarchy under Exception.",
       "futureTopicSlug": "javascript/errors/error-types"
     },
     {
       "language": "typescript",
       "concept": "never a closed exception union",
-      "note": "TS cannot exhaustively type thrown errors. C# catch lists are the closest thing to an exhaustive failure story.",
+      "note": "TypeScript cannot exhaustively type thrown errors. C# catch lists are the closest thing to an exhaustive failure story at compile time.",
       "futureTopicSlug": "typescript/errors/hierarchy"
     }
   ],

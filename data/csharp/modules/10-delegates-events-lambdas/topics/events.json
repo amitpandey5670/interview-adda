@@ -1,32 +1,162 @@
 {
   "id": "csharp-10-events",
   "slug": "events",
-  "title": "Events versus public delegates",
+  "title": "Events versus public delegates (publisher-subscriber safety)",
   "moduleId": "csharp-10-delegates-events-lambdas",
   "order": 4,
-  "hook": "A long-lived SQS consumer that exposes a public Action field will leak every pipeline that subscribed once — and any code can null the field and drop production handlers.",
+  "hook": "An event lets a class notify listeners when something happens. Unlike a public delegate field, outsiders can only subscribe and unsubscribe — they cannot wipe the handler list or raise the event themselves.",
   "sections": [
     {
-      "heading": "Publisher, subscriber, and the event keyword",
-      "prose": "Events let a publisher notify subscribers that something happened. The publisher decides when to raise; subscribers decide what to do. An event with no subscribers is a no-op. Multiple subscribers are invoked synchronously in subscription order. The .NET pattern is EventHandler or EventHandler<TEventArgs> with a sender and args. C# 14 also allows partial events: one defining field-like declaration and one implementing declaration that supplies add and remove.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Field-like event versus a public delegate field",
-          "code": "public sealed class SqsHostedConsumer : IDisposable\n{\n    public event EventHandler<SqsMessage>? MessageReceived;\n\n    // Do not do this on a hosted service:\n    public Action<SqsMessage>? UnsafeHook;\n\n    public void OnMessage(SqsMessage message)\n    {\n        MessageReceived?.Invoke(this, message);\n        UnsafeHook?.Invoke(message);\n    }\n\n    public void Dispose() => MessageReceived = null; // only the publisher can assign\n}\n\npublic sealed record SqsMessage(string MessageId, string Body);",
-          "explanation": "Outside the declaring class, MessageReceived supports only += and -=. UnsafeHook can be replaced with null by any assembler of the type, wiping metrics and ack paths together."
+          "type": "prose",
+          "text": "An **event** is a member that wraps a delegate with restricted access. Outside the declaring type, callers may use only `+=` and `-=` to subscribe and unsubscribe. Only the publisher invokes the delegate and can assign it. The standard .NET pattern is **EventHandler** or **EventHandler<TEventArgs>** with a sender and event-args object. Multiple subscribers run **synchronously** in subscription order when the publisher raises the event."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "event",
+              "longForm": "event member",
+              "plainDefinition": "A delegate-backed member that exposes add and remove accessors instead of public get/set.",
+              "example": "public event EventHandler<SqsMessage>? MessageReceived;"
+            },
+            {
+              "term": "publisher",
+              "longForm": "event publisher",
+              "plainDefinition": "The type that declares and raises the event when something happens.",
+              "example": "host.OnMessage(msg) calls MessageReceived?.Invoke(this, msg);"
+            },
+            {
+              "term": "subscriber",
+              "longForm": "event subscriber",
+              "plainDefinition": "Code that += a handler to react when the event fires.",
+              "example": "host.MessageReceived += (_, m) => Process(m);"
+            },
+            {
+              "term": "EventHandler",
+              "longForm": "EventHandler<TEventArgs>",
+              "plainDefinition": "The standard delegate shape: void Handler(object? sender, TEventArgs e).",
+              "example": "EventHandler<SqsMessage> handler = (_, msg) => { };"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Unsubscribe or leak",
-      "prose": "The publisher’s invocation list holds the subscriber’s delegate, which holds the subscriber instance. A process-wide SQS or RabbitMQ host lives for the lifetime of the worker. A scoped per-message processor that += MessageReceived and never -= stays rooted until the host dies. Unsubscribe in Dispose, use a short-lived local function that you remove after the batch, or avoid events and pass an interface into the consumer. Custom add/remove accessors exist when you need synchronization or weak references; they must stay paired with -=.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Subscribe for a batch, then detach",
-          "code": "public async Task ProcessBatchAsync(SqsHostedConsumer host, CancellationToken ct)\n{\n    EventHandler<SqsMessage> handler = (_, msg) => Console.WriteLine(msg.MessageId);\n    host.MessageReceived += handler;\n    try\n    {\n        await host.DrainAsync(ct);\n    }\n    finally\n    {\n        host.MessageReceived -= handler;\n    }\n}",
-          "explanation": "The handler is a named method group (or a stored delegate). Unsubscribing a fresh lambda with the same shape does nothing — it is a different instance."
+          "type": "prose",
+          "text": "A long-lived Amazon Simple Queue Service (SQS) consumer that exposes a public Action field lets any code assign null and drop production handlers — or invoke the callback whenever it wants. The **event** keyword fixes that: outsiders subscribe but never control invocation. The flip side is **memory leaks**: the publisher's invocation list holds the subscriber's delegate, which holds the subscriber instance. A scoped per-message processor that += and never -= stays rooted until the host dies."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Unsubscribe in finally or Dispose",
+          "body": "Store the handler in a named variable, += in try, -= in finally. Unsubscribing a freshly allocated lambda with the same body does nothing — delegate identity matters, not source text."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Event lifecycle",
+          "items": [
+            {
+              "title": "Publisher declares event",
+              "body": "Field-like event: public event EventHandler<T>? Name; Custom add/remove when you need locking or weak references."
+            },
+            {
+              "title": "Subscriber += handler",
+              "body": "The compiler calls the add accessor. The invocation list grows."
+            },
+            {
+              "title": "Publisher raises",
+              "body": "Inside the declaring type: Name?.Invoke(this, args). Handlers run left to right, synchronously."
+            },
+            {
+              "title": "Subscriber -= handler",
+              "body": "Must pass the same delegate instance that was added. Dispose or finally blocks prevent leaks."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Event access rules",
+            "source": "flowchart LR\n  subgraph outside [Outside declaring class]\n    P[+= subscribe]\n    Q[-= unsubscribe]\n  end\n  subgraph inside [Inside declaring class]\n    R[Invoke raise]\n    S[= assign null]\n  end\n  P --> L[Invocation list]\n  Q --> L\n  R --> L\n  S --> L"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Field-like event versus a public delegate field",
+            "code": "public sealed class SqsHostedConsumer : IDisposable\n{\n    public event EventHandler<SqsMessage>? MessageReceived;\n\n    // Do not do this on a hosted service:\n    public Action<SqsMessage>? UnsafeHook;\n\n    public void OnMessage(SqsMessage message)\n    {\n        MessageReceived?.Invoke(this, message);\n        UnsafeHook?.Invoke(message);\n    }\n\n    public void Dispose() => MessageReceived = null;\n}\n\npublic sealed record SqsMessage(string MessageId, string Body);",
+            "explanation": "Line 3: outside callers may only += and -= MessageReceived. Line 6: UnsafeHook can be replaced with null by anyone. Line 14: only the publisher assigns the event field."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Subscribe for a batch, then detach",
+            "code": "public async Task ProcessBatchAsync(SqsHostedConsumer host, CancellationToken ct)\n{\n    EventHandler<SqsMessage> handler = (_, msg) => Console.WriteLine(msg.MessageId);\n    host.MessageReceived += handler;\n    try\n    {\n        await host.DrainAsync(ct);\n    }\n    finally\n    {\n        host.MessageReceived -= handler;\n    }\n}",
+            "explanation": "Line 3: store the handler in a variable. Line 12: -= must use the same instance; a new lambda with identical code will not detach."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Safe raise with GetInvocationList",
+            "code": "protected virtual void OnMessageReceived(SqsMessage message)\n{\n    var handlers = MessageReceived;\n    if (handlers is null) return;\n\n    foreach (var d in handlers.GetInvocationList())\n    {\n        try { ((EventHandler<SqsMessage>)d)(this, message); }\n        catch (Exception ex) { LogHandlerFailure(ex); }\n    }\n}",
+            "explanation": "Line 3: snapshot before invoke. Line 6: isolate failures so one broken metrics handler does not stop message processing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# events vs DOM EventTarget",
+          "headers": ["Feature", "C# event", "JavaScript EventTarget"],
+          "rows": [
+            ["Subscription", "+= and -= on a typed member", "addEventListener / removeEventListener with string type name"],
+            ["Unsubscribe identity", "Same delegate instance required", "Same function reference required"],
+            ["Replace all handlers", "Only publisher can assign null", "element.onclick = null replaces one handler; addEventListener stack is separate"],
+            ["Built-in once", "No — unsubscribe yourself in handler", "addEventListener(..., { once: true }) or AbortSignal"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using a public delegate field as an event",
+          "body": "public Action<T>? OnDone lets callers invoke or null the field. Use event Action<T>? Done instead."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Raising from a background thread without documenting reentrancy",
+          "body": "Handlers run on the raiser's thread. UI subscribers may need BeginInvoke or a synchronization context — document threading expectations."
         }
       ]
     }
@@ -52,13 +182,13 @@
     {
       "language": "javascript",
       "concept": "EventTarget addEventListener / removeEventListener",
-      "note": "Browser events require the same function reference to remove, exactly like C# -=. JS does not stop you from replacing onclick entirely; C# event does.",
+      "note": "Browser events require the same function reference to remove, exactly like C# -=. JavaScript does not stop you from replacing onclick entirely; C# event does.",
       "futureTopicSlug": "javascript/dom/event-target"
     },
     {
       "language": "javascript",
       "concept": "EventTarget",
-      "note": "addEventListener/removeEventListener is subscribe/unsubscribe. C# events hide the delegate invocation list.",
+      "note": "addEventListener/removeEventListener is subscribe/unsubscribe. C# events hide the delegate invocation list from outside callers.",
       "futureTopicSlug": "javascript/browser/event-target"
     }
   ],

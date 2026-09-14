@@ -1,32 +1,181 @@
 {
   "id": "csharp-12-linq-to-objects",
   "slug": "linq-to-objects",
-  "title": "LINQ to Objects versus later SQL",
+  "title": "LINQ to Objects versus remote query providers (in-memory vs server)",
   "moduleId": "csharp-12-linq",
   "order": 5,
-  "hook": "Bulk CSV import is LINQ to Objects: the rows are already in a List. Later SQL is a different provider with a smaller language. Do not write one query and expect both to mean the same.",
+  "hook": "LINQ to Objects runs every operator in your process against data already in memory. A remote provider like SQL translates only a subset of C# — mixing them without a clear boundary is how import code works on a list but times out on a table.",
   "sections": [
     {
-      "heading": "What LINQ to Objects is",
-      "prose": "LINQ to Objects is Enumerable’s implementation over any IEnumerable<T> already in the process: arrays, List, Dictionary, the result of File.ReadLines, a parsed CSV. Lambdas may call any C# you could call in a foreach. Deferred execution still applies. This is the right default for import pipelines, in-memory reporting after you already loaded attempts, and Redis payloads you deserialized. It is not slower than foreach by some law; allocations from delegates, closures, and intermediate iterators are the real cost, measurable on the submit hot path.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "CSV import with LINQ to Objects",
-          "code": "public static IReadOnlyList<AttemptRow> ParseAttempts(IEnumerable<string> lines) =>\n    lines\n        .Skip(1)\n        .Select(line => line.Split(','))\n        .Where(cols => cols.Length >= 3 && cols[0] is not \"\")\n        .Select(cols => new AttemptRow(cols[0], cols[1], int.Parse(cols[2])))\n        .ToList();\n\npublic sealed record AttemptRow(string AttemptId, string Status, int Score);",
-          "explanation": "Skip/Select/Where run in process. ToList materializes before the file enumerator is lost. Pattern cols[0] is not \"\" is ordinary C# in a Func."
+          "type": "prose",
+          "text": "LINQ to Objects is System.Linq.Enumerable's implementation over any IEnumerable<T> already in the process: arrays, List<T>, Dictionary values, File.ReadLines results, or parsed CSV rows. Lambdas can call any C# you could call in a foreach — pattern matching, extension methods, StringComparison, switch expressions. Deferred execution still applies. This is the right default for import pipelines, in-memory reporting after you already loaded data, and deserialized JSON payloads."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "LINQ to Objects",
+              "plainDefinition": "Enumerable's in-process LINQ implementation. Full C# in lambdas; runs on data already in memory.",
+              "example": "lines.Skip(1).Select(l => l.Split(',')).Where(c => c.Length >= 3)",
+              "longForm": "LINQ to Objects"
+            },
+            {
+              "term": "Remote query provider",
+              "plainDefinition": "An IQueryProvider that translates expression trees to a server language like SQL.",
+              "example": "Entity Framework Core translating Where to a SQL WHERE clause.",
+              "longForm": "Remote query provider"
+            },
+            {
+              "term": "Translatable predicate",
+              "plainDefinition": "A filter the provider can rewrite to its remote language — usually property access, constants, and basic string methods.",
+              "example": "a.Score >= 50 — translatable. CustomScoreCurve(a) > 0.8 — not.",
+              "longForm": "Translatable predicate"
+            },
+            {
+              "term": "Materialization wall",
+              "plainDefinition": "ToList or AsEnumerable that pulls remote data into memory before running rich C#.",
+              "example": "var rows = remoteQuery.ToList(); // then filter with full C#",
+              "longForm": "Materialization wall"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What changes if a SQL provider shows up later",
-      "prose": "A future IQueryable source will reject or mis-translate: DateTime.Now in a filter (often evaluated locally by accident), string.Format, your extension properties from C# 14, collection expressions, and switch expressions. The interview-level move is to keep translatable predicates boring (property, constant, a few string methods) and to pull to objects with ToList before you use the rest of C#. This module will not walk EF Core translations. Your answer is: LINQ to Objects is the full language; a SQL provider is a subset plus a server. Mixing them without a wall is how import code “worked on a list” and then timed out on a table.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Keep the wall explicit",
-          "code": "IReadOnlyList<AttemptRow> imported = ParseAttempts(lines);\n\n// Full C# from here — including C# 14 extension properties.\nvar retry = imported.Where(r => r.Status.Equals(\"fail\", StringComparison.OrdinalIgnoreCase)\n                                && r.Score < 50);",
-          "explanation": "OrdinalIgnoreCase is trivial in memory and historically awkward for some SQL providers. Doing it after ParseAttempts.ToList is honest."
+          "type": "prose",
+          "text": "CSV import, Redis JSON deserialization, and already-loaded attempt lists belong in LINQ to Objects. A remote provider is a different contract with a smaller language — not a faster List. Copy-pasting an in-memory query onto IQueryable and shipping it is the most common migration failure. The interview-level move: keep translatable predicates boring, then pull to objects with ToList before using the rest of C#."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to materialize",
+          "body": "If you need StringComparison, custom methods, pattern matching, or C# 14 extension properties in a filter, do it after ToList on an in-memory sequence — or after the remote chain's ToList wall."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing the right LINQ flavor",
+          "items": [
+            {
+              "title": "Data already in memory?",
+              "body": "Use LINQ to Objects on IEnumerable. Full C# available in every lambda."
+            },
+            {
+              "title": "Data on a remote server?",
+              "body": "Use IQueryable with a provider. Keep predicates translatable."
+            },
+            {
+              "title": "Need rich C# on remote data?",
+              "body": "Pull with ToList first (the wall), then run LINQ to Objects on the result."
+            },
+            {
+              "title": "Measure, don't assume",
+              "body": "LINQ to Objects is not slower than foreach by law. Allocations from delegates and iterators are the real cost."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "In-memory vs remote LINQ",
+            "source": "flowchart TD\n  D[Data source] --> M{Already in memory?}\n  M -->|Yes| O[LINQ to Objects\\nIEnumerable + full C#]\n  M -->|No| R[IQueryable + provider]\n  R --> T{Predicate translatable?}\n  T -->|Yes| S[Runs on server\\ne.g. SQL WHERE]\n  T -->|No| W[ToList wall\\nthen LINQ to Objects]\n  O --> E[Results]\n  S --> E\n  W --> E"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "CSV import with LINQ to Objects",
+            "code": "public static IReadOnlyList<AttemptRow> ParseAttempts(IEnumerable<string> lines) =>\n    lines\n        .Skip(1)                                          // skip header row\n        .Select(line => line.Split(','))                  // split columns\n        .Where(cols => cols.Length >= 3 && cols[0] is not \"\")\n        .Select(cols => new AttemptRow(cols[0], cols[1], int.Parse(cols[2])))\n        .ToList();                                        // materialize before stream closes\n\npublic sealed record AttemptRow(string AttemptId, string Status, int Score);",
+            "explanation": "Skip/Select/Where run in process. ToList materializes before the file enumerator is lost. Pattern cols[0] is not \"\" is ordinary C# in a Func."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Keep the wall explicit after import",
+            "code": "IReadOnlyList<AttemptRow> imported = ParseAttempts(lines);\n\n// Full C# from here — including StringComparison and extension properties.\nvar retry = imported.Where(r =>\n    r.Status.Equals(\"fail\", StringComparison.OrdinalIgnoreCase)\n    && r.Score < 50);",
+            "explanation": "OrdinalIgnoreCase is trivial in memory and historically awkward for some SQL providers. Doing it after ParseAttempts.ToList is honest and predictable."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "What a remote provider may reject",
+            "code": "// These work in LINQ to Objects but often fail on IQueryable:\nvar badOnRemote = attempts.Where(a =>\n    DateTime.Now > a.ExpiresAt          // evaluated locally by accident\n    || string.Format(\"{0}\", a.Id) == x  // not translatable\n    || a.Score switch { > 90 => true, _ => false }); // switch may not translate\n\n// Safe pattern: pull first, then filter with full C#\nvar safe = attempts.Where(a => a.Tenant == tenant).ToList()\n    .Where(a => DateTime.Now > a.ExpiresAt);",
+            "explanation": "Remote providers accept a subset of C#. DateTime.Now, string.Format, and switch expressions are common translation failures. Materialize, then use rich C#."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "In-memory transforms vs query builders",
+          "headers": [
+            "Aspect",
+            "LINQ to Objects",
+            "JavaScript"
+          ],
+          "rows": [
+            [
+              "Typical use",
+              "Array/List already in memory",
+              "array.filter/map on loaded data"
+            ],
+            [
+              "Remote analogue",
+              "IQueryable with a provider",
+              "Prisma, Knex, or raw SQL builders"
+            ],
+            [
+              "Full language in filter",
+              "Yes — any C# in a Func",
+              "Yes — any JS in a callback"
+            ],
+            [
+              "Deferred execution",
+              "Yes (until ToList/foreach)",
+              "No — Array methods are eager"
+            ],
+            [
+              "Migration trap",
+              "Copy in-memory query to IQueryable",
+              "Copy array logic to ORM without checking translation"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Copy-pasting an in-memory query onto IQueryable and shipping it. Leaving a query over File.ReadLines un-materialized after the stream closes. Micro-optimizing LINQ versus foreach before measuring allocations on the submit path. Assuming a remote provider is just a faster List."
         }
       ]
     }
@@ -34,7 +183,7 @@
   "interviewTakeaways": [
     "LINQ to Objects = Enumerable + in-memory sequences + full C# in lambdas.",
     "CSV, Redis JSON, and already-loaded attempts belong here.",
-    "A later SQL provider is a different contract, not a faster List.",
+    "A remote provider is a different contract, not a faster List.",
     "Materialize, then use rich C#, when translation is not guaranteed."
   ],
   "commonPitfalls": [

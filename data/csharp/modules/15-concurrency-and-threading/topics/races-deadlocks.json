@@ -1,37 +1,162 @@
 {
   "id": "csharp-15-races-deadlocks",
   "slug": "races-deadlocks",
-  "title": "Races, deadlocks, and visibility",
+  "title": "Races, deadlocks, and memory visibility",
   "moduleId": "csharp-15-concurrency-and-threading",
   "order": 3,
-  "hook": "A race is two threads interleaving a multi-step invariant. A deadlock is waits that cycle. Visibility is the third bug: a write that never becomes visible because the memory model allowed it to stay local.",
+  "hook": "A race happens when two threads read and write shared state without coordination. A deadlock happens when threads wait on each other forever. Memory visibility is whether one thread sees another thread's writes — the .NET memory model guarantees visibility after proper synchronization.",
   "sections": [
     {
-      "heading": "Races are about invariants, not ‘two threads exist’",
-      "prose": "check-then-act on a Dictionary without a lock is a race: both threads see missing key, both insert. ++ on int is a race. Even bool flags can tear in interesting ways without barriers. The C# memory model allows compilers and CPUs to reorder ordinary reads and writes. A lock (or Interlocked, or volatile in its narrow sense) introduces acquire/release semantics so that writes inside a locked region become visible to the next thread that takes the same lock. If only one method takes the lock, you have a race with the unlocked reader. Deadlocks: thread A holds lock1 waits lock2; B the reverse. Also: thread holds a lock and waits for a Task whose continuation needs the same lock or the same SynchronizationContext. Also: two RabbitMQ consumers waiting on each other’s in-memory gate. Fix with lock ordering, smaller sections, and never waiting for I/O or another lock while holding one.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Lock ordering and no I/O under the lock",
-          "code": "public sealed class DualIndex\n{\n    private readonly Lock _users = new();\n    private readonly Lock _exams = new();\n\n    public void Relink(string userId, string examId)\n    {\n        var first = string.CompareOrdinal(userId, examId) < 0 ? _users : _exams;\n        var second = ReferenceEquals(first, _users) ? _exams : _users;\n        lock (first)\n        {\n            lock (second)\n            {\n                // mutate both maps; no await here\n            }\n        }\n    }\n}",
-          "explanation": "A consistent order avoids the classic two-lock deadlock. The section still must not call Redis."
+          "type": "prose",
+          "text": "A data race: thread A and B both increment _count without synchronization — you lose updates. A deadlock: thread A holds lock1 waiting for lock2 while thread B holds lock2 waiting for lock1. Visibility: without lock or volatile, CPU caches may let one thread see stale values — though lock and Interlocked establish proper ordering in practice."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Race condition",
+              "longForm": "Data race",
+              "plainDefinition": "Outcome depends on unpredictable thread scheduling when shared state lacks synchronization.",
+              "example": "Two threads incrementing a counter without lock lose one increment."
+            },
+            {
+              "term": "Deadlock",
+              "longForm": "Thread deadlock",
+              "plainDefinition": "Circular wait where each thread holds a resource another needs.",
+              "example": "A waits on B's lock while B waits on A's lock."
+            },
+            {
+              "term": "Memory model",
+              "longForm": ".NET memory model",
+              "plainDefinition": "Rules for which writes one thread observes from another.",
+              "example": "Exiting a lock ensures subsequent reads see prior writes inside the lock."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Visibility without a data race in the language sense",
-      "prose": "You can write a field from one thread and read it from another with no crash and still see a stale value forever if the JIT hoists the read in a loop. That is the _shouldStop example. lock or Interlocked.CompareExchange publishes. Double-checked locking for a singleton requires a volatile field or Lazy<T> because the first read of the instance must see all writes that constructed it. Prefer Lazy<T> or static initialization. Interviewers who ask about the .NET memory model want: locks hide reordering; Interlocked is a full fence for that location; do not invent your own lock-free queue unless you can name acquire and release."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "RabbitMQ consumers on multiple threads sharing a non-thread-safe Dictionary corrupt internal buckets. Deadlocks under load freeze services — often from lock ordering bugs or locking then awaiting messaging I/O. ConfigureAwait(false) in libraries avoids deadlocks with UI SynchronizationContext; ASP.NET Core has no context but lock-order bugs remain."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Deadlock prevention",
+          "body": "Acquire locks in a fixed global order. Never await while holding a lock. Use timeouts on WaitAsync when appropriate."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Diagnosing concurrency bugs",
+          "items": [
+            {
+              "title": "Reproduce under load",
+              "body": "Races hide at low concurrency; stress with parallel tests."
+            },
+            {
+              "title": "Check shared mutable state",
+              "body": "Fields, statics, singleton caches — who writes without sync?"
+            },
+            {
+              "title": "Map lock acquisition order",
+              "body": "Different orders across code paths invite deadlock."
+            },
+            {
+              "title": "Replace with concurrent types or messages",
+              "body": "Channels pass ownership instead of sharing dictionaries."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Classic deadlock",
+            "source": "flowchart LR\n  T1[Thread A\\nholds Lock1] -->|waits| L2[Lock2]\n  T2[Thread B\\nholds Lock2] -->|waits| L1[Lock1]\n  L1 -.-> T1\n  L2 -.-> T2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Lost update race",
+            "code": "private int _processed;\n\npublic void OnMessage()\n{\n    _processed++; // race: two threads can read same value\n}\n\n// Fix:\npublic void OnMessageSafe() => Interlocked.Increment(ref _processed);",
+            "explanation": "Read-modify-write without synchronization loses updates under parallel handlers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Lock ordering deadlock",
+            "code": "// Thread 1: lock(a) then lock(b)\n// Thread 2: lock(b) then lock(a)  // deadlock possible\n\n// Fix: always lock in same order — e.g. by hash code\nobject first = ReferenceEquals(a, b) ? a : (RuntimeHelpers.GetHashCode(a) < RuntimeHelpers.GetHashCode(b) ? a : b);",
+            "explanation": "Consistent lock ordering prevents circular wait. Prefer one lock or concurrent collections instead."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Unsafe shared dictionary",
+            "code": "// BAD in multi-threaded RabbitMQ consumer:\nprivate readonly Dictionary<string, int> _counts = new();\n\npublic void Handle(string key)\n{\n    _counts.TryGetValue(key, out var c);\n    _counts[key] = c + 1; // not thread-safe\n}\n\n// Fix: ConcurrentDictionary or Channel aggregation",
+            "explanation": "Dictionary is not thread-safe for concurrent writes. Use ConcurrentDictionary or message passing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Concurrency bugs",
+          "headers": ["Bug", "C# multi-threaded service", "Node.js default"],
+          "rows": [
+            ["Data race on counter", "Common without Interlocked/lock", "Rare on main thread"],
+            ["Deadlock", "Lock ordering, sync-over-async", "Rare; callback deadlock patterns exist"],
+            ["Visibility", "Needs synchronization primitives", "Single-threaded semantics on main thread"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming Dictionary is safe because reads are common. Different lock order in two methods. Using .Result after locking — blocks pool threads and worsens deadlocks."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Protect the whole invariant with the same lock object.",
-    "Deadlock: lock order, or waiting (including await/Result) while holding a lock.",
-    "Publication of constructed objects: Lazy<T> or lock, not a naked static bool."
+    "Races need shared mutable state without proper synchronization.",
+    "Deadlocks need circular lock waits — fix with ordering or fewer locks.",
+    "Prefer concurrent collections and Channels over hand-rolled locked dictionaries."
   ],
   "commonPitfalls": [
-    "Double-checked locking without volatile/Lazy.",
-    "lock on string keys that intern.",
-    "Waiting on a Task inside a lock that the continuation also needs."
+    "Non-thread-safe collections in parallel consumers.",
+    "Inconsistent lock acquisition order.",
+    "Mixing lock with blocking async (.Result)."
   ],
   "relatedTopicIds": [
     "csharp-15-locks-and-interlocked",
@@ -41,21 +166,17 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Single-threaded races still exist via interleaving awaits",
-      "note": "JS has no data race on small fields between workers unless SharedArrayBuffer is used, but await interleaving still breaks check-then-act on a Map. C# adds true parallel races plus visibility.",
-      "futureTopicSlug": "javascript/async/races"
+      "concept": "Event loop vs threads",
+      "note": "JS avoids many races on the main thread but worker_threads and Atomics introduce the same concerns as C#.",
+      "futureTopicSlug": "javascript/concurrency/races"
     }
   ],
   "officialSources": [
-    {
-      "title": "Synchronizing data for multithreading",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/synchronizing-data-for-multithreading"
-    },
     {
       "title": "Managed threading best practices",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
     }
   ],
-  "animationHint": "timeline",
-  "scenarioTag": "rabbitmq"
+  "scenarioTag": "rabbitmq",
+  "animationHint": "timeline"
 }

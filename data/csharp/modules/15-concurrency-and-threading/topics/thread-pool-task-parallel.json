@@ -1,37 +1,165 @@
 {
   "id": "csharp-15-thread-pool-task-parallel",
   "slug": "thread-pool-task-parallel",
-  "title": "Thread pool, TPL, and PLINQ",
+  "title": "Thread pool, Task Parallel Library (TPL), and PLINQ",
   "moduleId": "csharp-15-concurrency-and-threading",
   "order": 1,
-  "hook": "The thread pool is a process-wide queue of work items. TPL Tasks are the usual ticket. PLINQ and Parallel are how you spend extra cores on CPU — not how you call SQS.",
+  "hook": "The thread pool reuses operating system threads so you do not pay the cost of creating one per work item. The Task Parallel Library (TPL) schedules CPU-bound work on that pool; Parallel LINQ (PLINQ) splits sequence operations across cores.",
   "sections": [
     {
-      "heading": "Pool threads are a scarce, shared resource",
-      "prose": "Kestrel, Task.Run, Timer callbacks, and many I/O completions share System.Threading.ThreadPool. The pool injects extra threads when work sits in the queue, but that injection is slow compared with a sudden jump from 199 to 999 blocked calls. Blocking Redis or .Result on the pool is how you starve ASP.NET. async I/O completions also use the pool, but they do not occupy a thread during the wait. Task.Run(Func<Task>) is a trap: it queues a method that immediately hits more I/O. Use Task.Run for CPU: hashing, CPU-bound CSV transforms, SkiaSharp raster you moved off the request. Set MaxDegreeOfParallelism when you Parallel.ForEach a CPU loop so you do not nest 999 workers on an 4-vCPU pod.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "CPU parallel, I/O sequential-await",
-          "code": "public async Task<byte[]> RasterBatchAsync(IReadOnlyList<Stream> pages, CancellationToken cancellationToken)\n{\n    var encoded = new byte[pages.Count][];\n    await Parallel.ForEachAsync(\n        Enumerable.Range(0, pages.Count),\n        new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = cancellationToken },\n        async (index, token) =>\n        {\n            encoded[index] = await RasterOneCpuBoundAsync(pages[index], token);\n        });\n    return Combine(encoded);\n}\n\npublic IEnumerable<int> ScoreRows(IEnumerable<int> raw) =>\n    raw.AsParallel().WithDegreeOfParallelism(4).Select(static n => n * 2).ToList();",
-          "explanation": "Parallel.ForEachAsync bounds CPU workers. PLINQ AsParallel is for in-memory CPU projections, not for HttpClient inside Select."
+          "type": "prose",
+          "text": "ThreadPool.QueueUserWorkItem and Task.Run queue delegates to a shared pool of worker threads. Task represents asynchronous work — often I/O via async/await (module 13) or CPU work via Task.Run. Parallel.For and PLINQ (.AsParallel()) partition data across threads for CPU-bound algorithms. The pool grows under load and shrinks when idle."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Thread pool",
+              "longForm": ".NET thread pool",
+              "plainDefinition": "A managed pool of worker threads shared by the runtime and your code.",
+              "example": "Task.Run schedules work on a pool thread."
+            },
+            {
+              "term": "TPL",
+              "shortForm": "TPL",
+              "longForm": "Task Parallel Library",
+              "plainDefinition": "APIs built around Task for parallel and asynchronous programming.",
+              "example": "Task.WhenAll, Parallel.ForEach, and PLINQ are TPL features."
+            },
+            {
+              "term": "PLINQ",
+              "shortForm": "PLINQ",
+              "longForm": "Parallel LINQ",
+              "plainDefinition": "Parallel execution of LINQ to Objects queries via .AsParallel().",
+              "example": "numbers.AsParallel().Where(n => IsPrime(n)).ToList()"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "PLINQ is not LINQ-to-Redis",
-      "prose": "AsParallel partitions the enumerable across pool threads. WithDegreeOfParallelism, AsOrdered, and merging have costs. A Select that awaits I/O inside PLINQ will block those workers unless you have already materialized data. Prefer async channels or Parallel.ForEachAsync with async bodies for mixed work. Dedicated Thread objects are for rare STA or long-lived specialists; they do not scale to request counts. ThreadPool.SetMinThreads can reduce injection delay after a quiet period, but it is a last-ditch ops knob, not an application design."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Blocking the pool with synchronous I/O starves other work — that is why module 13 uses async for Redis and HTTP. CPU-bound CSV parsing or image resizing belongs on the pool via Task.Run or Parallel, not on the request thread. Misusing PLINQ on tiny collections adds overhead without speedup."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "CPU vs I/O split",
+          "body": "async/await for I/O waits. Task.Run or Parallel for CPU-bound work that would block a thread for milliseconds of computation."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Scheduling CPU work",
+          "items": [
+            {
+              "title": "Identify CPU-bound section",
+              "body": "Hashing, compression, parsing millions of rows — not network waits."
+            },
+            {
+              "title": "Choose API",
+              "body": "Task.Run for a chunk; Parallel.ForEach for data parallelism; PLINQ for LINQ-style queries."
+            },
+            {
+              "title": "Avoid oversubscription",
+              "body": "Do not nest Parallel inside Parallel without throttling."
+            },
+            {
+              "title": "Return to caller",
+              "body": "await Task.Run(...) keeps the API async-friendly for ASP.NET Core."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Thread pool scheduling",
+            "source": "flowchart TD\n  A[Work item] --> B[Thread pool queue]\n  B --> C[Worker thread 1]\n  B --> D[Worker thread 2]\n  B --> E[Worker thread N]\n  F[Task.Run CPU work] --> B\n  G[async I/O await] -->|releases thread| B"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Task.Run for CPU-bound work",
+            "code": "public async Task<string> HashFileAsync(string path, CancellationToken ct)\n{\n    return await Task.Run(() =>\n    {\n        using var stream = File.OpenRead(path);\n        using var sha = SHA256.Create();\n        var hash = sha.ComputeHash(stream);\n        return Convert.ToHexString(hash);\n    }, ct);\n}",
+            "explanation": "File read is I/O; hashing is CPU. Task.Run moves hashing off the request thread to a pool thread."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Parallel.ForEach for CSV rows",
+            "code": "var results = new ConcurrentBag<RowResult>();\nParallel.ForEach(rows, new ParallelOptions { MaxDegreeOfParallelism = 4 }, row =>\n{\n    var parsed = ParseRow(row);\n    results.Add(parsed);\n});\nreturn results.ToList();",
+            "explanation": "Partitions row parsing across up to four threads. Use ConcurrentBag for thread-safe collection."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "PLINQ with degree limit",
+            "code": "var primes = Enumerable.Range(2, 100_000)\n    .AsParallel()\n    .WithDegreeOfParallelism(Environment.ProcessorCount)\n    .Where(IsPrime)\n    .ToList();",
+            "explanation": "PLINQ parallelizes the Where filter. Only worth it for large sequences and non-trivial predicates."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Parallelism models",
+          "headers": ["Aspect", "C# TPL / PLINQ", "JavaScript"],
+          "rows": [
+            ["CPU parallelism", "Thread pool, worker threads", "worker_threads module for CPU work"],
+            ["I/O concurrency", "async/await on pool threads", "Event loop + non-blocking I/O"],
+            ["Data parallel", "Parallel.ForEach, PLINQ", "No built-in PLINQ; manual chunking to workers"],
+            ["Combine results", "Task.WhenAll", "Promise.all"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Task.Run for trivial work — overhead exceeds benefit. PLINQ on ten items. Blocking .Result on pool threads causing starvation. Using Parallel when work is I/O-bound — use async instead."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Thread pool: shared. Blocking it hurts everyone in the process.",
-    "Task.Run is CPU offload. async/await is I/O composition (module 13).",
-    "PLINQ and Parallel need a degree cap in containers."
+    "Thread pool reuses threads; Task.Run is for CPU-bound work off the caller thread.",
+    "async/await is for I/O; do not confuse with data parallelism.",
+    "PLINQ and Parallel need enough work to justify thread coordination cost."
   ],
   "commonPitfalls": [
-    "HttpClient.GetAsync inside a PLINQ Select.",
-    "Unbounded Parallel.ForEach over every CSV row on a 2-core pod.",
-    "new Thread per SQS message."
+    "Task.Run wrapping already-async I/O.",
+    "Unbounded Parallel.ForEach on millions of tiny items.",
+    "Blocking waits that starve the pool."
   ],
   "relatedTopicIds": [
     "csharp-13-why-async",
@@ -43,15 +171,19 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Worker threads versus the event loop",
-      "note": "Node worker_threads are closer to Task.Run/Parallel than to await. await in JS never uses extra JS threads; C# Task.Run explicitly does.",
-      "futureTopicSlug": "javascript/async/worker-threads"
+      "concept": "worker_threads",
+      "note": "Node worker_threads are the JS analogue for CPU parallelism. The main thread event loop is closer to async I/O in C#.",
+      "futureTopicSlug": "javascript/concurrency/worker-threads"
     }
   ],
   "officialSources": [
     {
-      "title": "Task Parallel Library (TPL)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-parallel-library-tpl"
+      "title": "Task-based asynchronous programming",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/task-based-asynchronous-programming"
+    },
+    {
+      "title": "Parallel LINQ (PLINQ)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/parallel-linq-plinq"
     }
   ],
   "scenarioTag": "csv-import"

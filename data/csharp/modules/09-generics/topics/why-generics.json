@@ -1,40 +1,162 @@
 {
   "id": "csharp-09-why-generics",
   "slug": "why-generics",
-  "title": "Why generics: List versus ArrayList",
+  "title": "Why generics exist (type safety versus ArrayList boxing)",
   "moduleId": "csharp-09-generics",
   "order": 1,
-  "hook": "ArrayList is a bag of object. List<T> is a bag of T. The difference is compile-time rejection, no boxing of int, and a constructed type the CLR still knows at run time.",
+  "hook": "Before generics, collections stored everything as object. That meant boxing value types, risky casts, and bugs that only showed up at run time. Generics let you write List<int> and have the compiler reject mistakes before your app ships.",
   "sections": [
     {
-      "heading": "The ArrayList failure mode",
-      "prose": "System.Collections.ArrayList.Add(object) accepts an SQS message id string and an attempt count int in the same list. The int is boxed onto the heap. The reader casts: (int)list[0] throws InvalidCastException if someone inserted a string. Hashtable keys and values are object too. This is the 2002 collections story. You still see it in old samples and in COM-era APIs. In a .NET 10 interview, naming ArrayList without saying “don’t use it” is a miss.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "The cast that should never ship",
-          "code": "ArrayList legacy = [];\nlegacy.Add(199);          // boxed int\nlegacy.Add(\"attempt-id\"); // string\nint n = (int)legacy[0]!;  // works today, explodes if the order changes\n\nList<int> counts = [199, 999];\n// counts.Add(\"attempt-id\"); // compile error\nint first = counts[0];     // no cast, no box",
-          "explanation": "List<int> stores ints in the backing array. ArrayList stored a boxed object. The compiler is the entire test suite for the mixed-type bug."
+          "type": "prose",
+          "text": "Generics let you write code that works with many types while keeping each type separate at compile time. Instead of a bag of object, you declare a type parameter T — for example List<T> — and the compiler tracks whether you are working with int, string, or SessionDto. The Common Language Runtime (CLR) still knows the real type at run time, unlike TypeScript where generic parameters disappear after compilation."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "boxing",
+              "longForm": "boxing (value type to object)",
+              "plainDefinition": "Wrapping a value type (like int) inside a heap-allocated object so it can be stored where object is expected.",
+              "example": "ArrayList.Add(42) boxes the int into an object on the heap."
+            },
+            {
+              "term": "reification",
+              "longForm": "generic reification",
+              "plainDefinition": "Keeping generic type information at run time. List<int> and List<string> are different types in the CLR.",
+              "example": "typeof(List<int>) is not the same as typeof(List<string>)."
+            },
+            {
+              "term": "type erasure",
+              "longForm": "generic type erasure",
+              "plainDefinition": "Removing generic type parameters before run time. Java and TypeScript erase; C# does not.",
+              "example": "A TypeScript function identity<T>(x: T) has no T left in the emitted JavaScript."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Reification, not erasure",
-      "prose": "Microsoft’s generics overview contrasts C# with Java templates/erasure and with C++ templates. List<int> and List<string> are different constructed types at run time. You can ask typeof(List<int>).GetGenericArguments(). Reflection, AOT, and the JIT use that. TypeScript generics erase completely; at run time you have arrays. That is why a C# Redis serializer can have a closed generic Get<SessionDto> and still know T in IL, while a TS get<T>() is a comment to tsc."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "System.Collections.ArrayList and Hashtable stored object. Every int you added was boxed onto the heap. Reading back required a cast that could throw InvalidCastException if someone mixed types. In production code — message queues, caches, API payloads — that failure mode is unacceptable. List<T>, Dictionary<TKey, TValue>, and HashSet<T> are the everyday replacements: compile-time checks, no boxing for value types, and clearer intent."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview one-liner",
+          "body": "ArrayList = object + boxing + casts. List<T> = compile-time type checking, no boxing for structs, and a constructed type the CLR still knows at run time."
+        }
+      ]
     },
     {
-      "heading": "What you reach for",
-      "prose": "Daily production: List<T>, Dictionary<TKey, TValue>, HashSet<T>, Queue<T>, Task<T>, Func<T, TResult>. Those are generic types you consume. You write your own when the invariant is yours — a cache client, a Result<T>, a handler pipeline. You do not write GenericList<T> as a linked list in 2026; Microsoft’s own sample says use List<T>."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From untyped collection to generic safety",
+          "items": [
+            {
+              "title": "Legacy collections accept object",
+              "body": "ArrayList.Add(object) takes any value. Value types are boxed; reference types are stored as-is."
+            },
+            {
+              "title": "Reader must cast",
+              "body": "Getting an element back returns object. You cast to int or string — and hope nobody changed the order."
+            },
+            {
+              "title": "Generics parameterize the type",
+              "body": "List<int> only accepts int. The compiler rejects list.Add(\"oops\") before you run the app."
+            },
+            {
+              "title": "CLR keeps the closed type",
+              "body": "List<int> and List<string> are different constructed types. Reflection and the Just-In-Time (JIT) compiler use that information."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "ArrayList versus List<T>",
+            "source": "flowchart LR\n  A[int value 42] -->|Add| B[ArrayList stores object]\n  B -->|box on heap| C[object reference]\n  D[int value 42] -->|Add| E[List int stores int]\n  E -->|no box| F[int in backing array]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "The cast that should never ship",
+            "code": "ArrayList legacy = [];\nlegacy.Add(199);            // boxed int\nlegacy.Add(\"attempt-id\");   // string — legal on ArrayList\nint n = (int)legacy[0]!;    // works today, breaks if order changes\n\nList<int> counts = [199, 999];\n// counts.Add(\"attempt-id\"); // compile error: cannot convert string to int\nint first = counts[0];      // no cast, no box",
+            "explanation": "List<int> stores ints directly in its backing array. ArrayList stored boxed objects. The compiler catches the mixed-type bug on List<T>; ArrayList only fails at run time with InvalidCastException."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Reification at run time",
+            "code": "Type intList = typeof(List<int>);\nType stringList = typeof(List<string>);\n\nConsole.WriteLine(intList == stringList);           // False\nConsole.WriteLine(intList.GetGenericArguments()[0]); // System.Int32",
+            "explanation": "C# generics are reified: the CLR knows List<int> is not List<string>. TypeScript generics erase completely, so there is no typeof equivalent for T at run time."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Everyday generic collections",
+            "code": "List<string> messageIds = [\"msg-1\", \"msg-2\"];\nDictionary<string, int> retryCounts = new() { [\"msg-1\"] = 3 };\nHashSet<Guid> processed = [];\nTask<SessionDto> loadTask = FetchSessionAsync();\n\n// You consume these; you rarely write your own linked-list generic.",
+            "explanation": "Production code reaches for BCL generic types daily. You write your own generic types when the invariant is yours — a cache client, a Result<T>, or a handler pipeline."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Generics: C# versus TypeScript",
+          "headers": ["Aspect", "C#", "TypeScript"],
+          "rows": [
+            ["Run-time type info", "Reified — List<int> is a real type", "Erased — only exists for the compiler"],
+            ["Untyped collection analogue", "ArrayList (legacy object bag)", "JavaScript arrays accept any value"],
+            ["Value type in collection", "Stored without boxing in List<int>", "All numbers are one JavaScript number type"],
+            ["Wrong-type insert", "Compile error on List<T>", "Compile error in TS; no check at run time in JS"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using List<object> as a quiet ArrayList — you lose type safety again. Saying C# generics work like C++ templates — C# does not generate a new source file per T; the JIT or Ahead-of-Time (AOT) compiler specializes at run time or publish time. Boxing anyway by storing structs as interface types inside a List<IComparable> when you meant List<int>."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Generics give compile-time T and avoid boxing value types in collections.",
-    "C# generics are reified; Java/TS generics are erased.",
-    "ArrayList / Hashtable are legacy object collections."
+    "Generics give compile-time type safety and avoid boxing value types in collections.",
+    "C# generics are reified at run time; Java and TypeScript generics are erased.",
+    "ArrayList and Hashtable are legacy object collections — prefer System.Collections.Generic."
   ],
   "commonPitfalls": [
     "Using List<object> as a quiet ArrayList.",
-    "Saying C# generics work like C++ templates (no compile-time codegen per T in source; the JIT/AOT specializes).",
+    "Saying C# generics work like C++ templates (no per-T source codegen; JIT/AOT specializes).",
     "Boxing anyway by storing structs as interface types inside the list."
   ],
   "relatedTopicIds": [
@@ -47,13 +169,13 @@
     {
       "language": "typescript",
       "concept": "generic type parameters and erasure",
-      "note": "function identity<T>(x: T): T erases. C# identity<T> remains in metadata and can be invoked via reflection with a closed T.",
+      "note": "function identity<T>(x: T): T erases T before run time. C# identity<T> remains in metadata and can be invoked via reflection with a closed type argument.",
       "futureTopicSlug": "typescript/generics/erasure"
     },
     {
       "language": "javascript",
       "concept": "untyped arrays",
-      "note": "JS arrays are ArrayList-shaped: any value, no T. TypeScript only paints T on top.",
+      "note": "JavaScript arrays accept any value — they behave like ArrayList. TypeScript only adds T as a compile-time annotation on top.",
       "futureTopicSlug": "javascript/arrays/untyped"
     }
   ],

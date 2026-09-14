@@ -1,33 +1,166 @@
 {
   "id": "csharp-02-jump-statements",
   "slug": "jump-statements",
-  "title": "Jump statements",
+  "title": "Changing flow with break, continue, return, and goto",
   "moduleId": "csharp-02-syntax-operators-statements",
   "order": 5,
-  "hook": "`break`, `continue`, `return`, and `goto` move the instruction pointer. In production code you will use the first three constantly and `goto` almost never — except `goto case` in a classic switch.",
+  "hook": "Jump statements move execution to a different place in your code. You will use break, continue, and return constantly. goto is legal but rare — except goto case in a classic switch, which is the honest way to fall through.",
   "sections": [
     {
-      "heading": "break, continue, return, goto",
-      "prose": "`break` leaves the innermost `switch`, loop, or (rarely) labeled statement. `continue` skips to the next loop iteration. `return` exits the method (or top-level program) and optionally yields a value. `goto label;` jumps to a label in the same method; `goto case 2;` / `goto default;` are the supported switch fall-through. Do not use `goto` to skip `finally` cleanup — you cannot jump out of a `finally` anyway, and dispose belongs in `using` (module 06). In an SQS batch loop, `continue` on a poison payload after logging is clearer than nested ifs.",
-      "snippets": [
+      "heading": "What are jump statements?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "continue on bad messages; return a code",
-          "code": "foreach (var msg in batch)\n{\n    if (string.IsNullOrWhiteSpace(msg.Body))\n    {\n        continue;\n    }\n    Process(msg);\n}\n\nreturn 0;\n\n// goto case is the honest fall-through:\nswitch (kind)\n{\n    case 1:\n    case 2:\n        HandleSmall();\n        break;\n    default:\n        HandleOther();\n        break;\n}",
-          "explanation": "Stacked `case 1: case 2:` without code between is not fall-through of statements; it is multiple labels on one section. Statement fall-through still needs `goto case`."
+          "type": "prose",
+          "text": "A **jump statement** transfers control away from the current line. **break** exits the innermost loop or switch. **continue** skips to the next iteration of a loop. **return** exits the current method and optionally provides a value. **goto** jumps to a label in the same method — or to another case in a switch via goto case. These are not errors or hacks; they are first-class language features with clear rules."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "break",
+              "longForm": "break statement",
+              "plainDefinition": "Exits the innermost enclosing switch, loop, or labeled statement immediately.",
+              "example": "break; inside a switch case prevents fall-through to the next case."
+            },
+            {
+              "term": "continue",
+              "longForm": "continue statement",
+              "plainDefinition": "Skips the rest of the current loop iteration and moves to the next one.",
+              "example": "continue; after logging a bad SQS message skips Process() for that message."
+            },
+            {
+              "term": "goto case",
+              "longForm": "goto case statement",
+              "plainDefinition": "The only legal way to fall through between switch cases in C#. Jumps execution to another case label.",
+              "example": "goto case 404; after handling a 500 status code."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why jumps beat deeply nested ifs",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In an SQS batch loop, continue on a poison payload after logging is clearer than three levels of nested if. return early from a method when validation fails instead of wrapping the rest in else blocks. break out of a search loop when you find the target. These patterns keep code flat and readable. Reserve goto for goto case in switches — unstructured goto across methods is never legal."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "return and process exit codes",
+          "body": "return from Main or a top-level program with an int sets the process exit code. return 0 means success; non-zero signals failure to scripts and orchestrators."
+        }
+      ]
+    },
+    {
+      "heading": "How jump statements transfer control",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "What each jump does",
+          "items": [
+            {
+              "title": "break",
+              "body": "Leaves the nearest switch or loop. Execution continues at the statement after the closing brace."
+            },
+            {
+              "title": "continue",
+              "body": "Skips to the loop condition check (while/for) or the next MoveNext (foreach)."
+            },
+            {
+              "title": "return",
+              "body": "Exits the entire method. No code after return in that method runs."
+            },
+            {
+              "title": "goto label / goto case",
+              "body": "Jumps to a label in the same method, or to a switch case label."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Jump targets in a loop",
+            "source": "flowchart TD\n  A[Loop body start] --> B{Bad message?}\n  B -->|Yes| C[continue — skip to next iteration]\n  B -->|No| D[Process message]\n  D --> E{Batch done?}\n  E -->|No| A\n  E -->|Yes| F[break — exit loop]\n  F --> G[return 0 — exit method]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough: jumps in practice",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "continue on bad messages; return a code",
+            "code": "foreach (var msg in batch)\n{\n    if (string.IsNullOrWhiteSpace(msg.Body))\n    {\n        continue; // skip this message, process the rest\n    }\n    Process(msg);\n}\n\nreturn 0; // process exit code: success",
+            "explanation": "continue skips the rest of the current iteration. return exits the method entirely. In a top-level program, return 0 sets the process exit code."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "goto case for explicit switch fall-through",
+            "code": "switch (kind)\n{\n    case 1:\n    case 2:\n        HandleSmall(); // stacked labels share one body\n        break;\n    case 3:\n        LogWarning();\n        goto case 1;    // explicit fall-through to case 1 logic\n    default:\n        HandleOther();\n        break;\n}",
+            "explanation": "Stacked case 1: case 2: without code between is multiple labels on one section — not statement fall-through. Statement fall-through still needs goto case."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Early return for validation",
+            "code": "int ProcessOrder(Order? order)\n{\n    if (order is null)\n        return -1; // early exit: invalid input\n\n    if (order.Items.Count == 0)\n        return -2; // early exit: empty order\n\n    // main logic — no else nesting needed\n    Submit(order);\n    return 0;\n}",
+            "explanation": "Early return flattens validation logic. Each failure path exits immediately with a distinct code."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "C# vs JavaScript/TypeScript jumps",
+          "headers": ["Statement", "C#", "JavaScript/TypeScript"],
+          "rows": [
+            ["break", "Exits loop or switch", "Same — exits loop or switch"],
+            ["continue", "Next loop iteration", "Same"],
+            ["return", "Exits function/method", "Same — but return in forEach only exits callback"],
+            ["goto", "Legal with labels; goto case in switch", "No goto keyword"],
+            ["switch fall-through", "Forbidden without goto case", "Falls through by default in JS"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes to avoid",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Top pitfalls",
+          "body": "Expecting C-style implicit switch fall-through. Using goto across try/finally blocks — the compiler forbids jumping out of a finally. Returning from a void lambda expecting it to exit the outer method — it only exits the lambda (delegates covered later). Using break outside a loop or switch — compile error."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "`break`/`continue` affect the nearest loop or switch.",
-    "`return` from Main/top-level sets the process exit code when the type is `int`.",
-    "`goto` is legal; cite `goto case` if asked for a legitimate use."
+    "break and continue affect the nearest loop or switch.",
+    "return from Main or top-level sets the process exit code when the type is int.",
+    "goto is legal; cite goto case if asked for a legitimate use.",
+    "Early return beats deeply nested else chains for validation."
   ],
   "commonPitfalls": [
     "Expecting C-style implicit switch fall-through.",
-    "Using `goto` across try/finally and fighting the compiler.",
-    "Returning from a `void` lambda by habit of JS `return` in `forEach` — different construct (delegates later)."
+    "Using goto across try/finally and fighting the compiler.",
+    "Returning from a void lambda by habit of JS return in forEach — different construct (delegates later).",
+    "Using break to exit multiple nested loops — it only exits the innermost one."
   ],
   "relatedTopicIds": [
     "csharp-02-loops",
@@ -38,7 +171,7 @@
     {
       "language": "javascript",
       "concept": "break/continue/return",
-      "note": "Same words, same idea. JS labeled statements exist but are rare; C# labels are mainly for goto. JS switch fall-through is the default; C# forbids it without goto case.",
+      "note": "Same words, same idea. JavaScript labeled statements exist but are rare; C# labels are mainly for goto. JavaScript switch fall-through is the default; C# forbids it without goto case.",
       "futureTopicSlug": "javascript/statements/jumps"
     }
   ],

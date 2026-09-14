@@ -1,32 +1,189 @@
 {
   "id": "csharp-13-async-enumerable",
   "slug": "async-enumerable",
-  "title": "IAsyncEnumerable and await foreach",
+  "title": "IAsyncEnumerable and await foreach (streaming async sequences)",
   "moduleId": "csharp-13-async-await",
   "order": 6,
-  "hook": "IEnumerable cannot await between items. IAsyncEnumerable is the language’s way to pull the next SQS page or CSV chunk without buffering the whole stream.",
+  "hook": "IEnumerable cannot await between items. IAsyncEnumerable is the language's way to pull the next page of queue messages or CSV chunks without buffering the whole stream in memory.",
   "sections": [
     {
-      "heading": "await foreach is the consumer syntax",
-      "prose": "C# 8 introduced IAsyncEnumerable<T> and await foreach. The iterator method is async IAsyncEnumerable<T> and uses yield return. Between yields you can await I/O. The compiler generates a state machine that implements IAsyncEnumerator. Cancellation uses [EnumeratorCancellation] CancellationToken so the foreach can pass a token into the iterator. CancellationToken on the method without that attribute is easy to get wrong — the token from await foreach WithCancellation is what you want. DisposeAsync runs when the foreach exits, including on break and exceptions, which is how you close a RabbitMQ cursor or a file stream.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Paging SQS with await foreach",
-          "code": "public async IAsyncEnumerable<Message> ReceiveAllAsync(\n    string queueUrl,\n    [EnumeratorCancellation] CancellationToken cancellationToken)\n{\n    while (!cancellationToken.IsCancellationRequested)\n    {\n        var response = await _sqs.ReceiveMessageAsync(queueUrl, cancellationToken);\n        if (response.Messages.Count == 0)\n        {\n            yield break;\n        }\n\n        foreach (var message in response.Messages)\n        {\n            yield return message;\n        }\n    }\n}\n\npublic async Task DrainAsync(string queueUrl, CancellationToken cancellationToken)\n{\n    await foreach (var message in ReceiveAllAsync(queueUrl).WithCancellation(cancellationToken))\n    {\n        await HandleAsync(message, cancellationToken);\n    }\n}",
-          "explanation": "Each page is awaited. Callers see a stream of messages, not a List allocated for the whole drain."
+          "type": "prose",
+          "text": "IAsyncEnumerable<T> (introduced in C# 8) is an asynchronous sequence you consume with await foreach. The producer method is async IAsyncEnumerable<T> and uses yield return between awaits. Between yields you can await I/O — fetching the next page of results, reading the next file chunk, or receiving the next batch of queue messages. The compiler generates a state machine implementing IAsyncEnumerator<T>. DisposeAsync runs when the foreach exits, including on break and exceptions."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IAsyncEnumerable<T>",
+              "plainDefinition": "An asynchronous sequence that produces items over time, with awaits between them.",
+              "example": "async IAsyncEnumerable<Message> ReceiveAllAsync(...)",
+              "longForm": "IAsyncEnumerable<T>"
+            },
+            {
+              "term": "await foreach",
+              "plainDefinition": "Consumer syntax for IAsyncEnumerable. Awaits each MoveNextAsync before accessing Current.",
+              "example": "await foreach (var msg in stream) { await HandleAsync(msg); }",
+              "longForm": "await foreach"
+            },
+            {
+              "term": "EnumeratorCancellation",
+              "plainDefinition": "An attribute on the CancellationToken parameter so await foreach can pass its token into the iterator.",
+              "example": "[EnumeratorCancellation] CancellationToken cancellationToken",
+              "longForm": "EnumeratorCancellation"
+            },
+            {
+              "term": "WithCancellation",
+              "plainDefinition": "Extension that attaches a CancellationToken to an IAsyncEnumerable for await foreach.",
+              "example": "await foreach (var x in stream.WithCancellation(token))",
+              "longForm": "WithCancellation"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "When not to stream",
-      "prose": "If the next step needs the full CSV in memory for a sort, IAsyncEnumerable buys nothing. If you need LINQ over async sequences, System.Linq.Async (or the newer BCL async LINQ APIs as they land) is the toolkit; the in-box LINQ-to-objects operators are synchronous. Do not mix yield return with yield break after you have already committed a side effect you cannot undo unless the consumer contract is clear. For Channels (module 15) the producer/consumer is a different shape: IAsyncEnumerable is pull, ChannelReader.ReadAllAsync is also pull but backed by a thread-safe buffer."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Buffering an entire CSV import or SQS drain into a List allocates memory proportional to the total size. IAsyncEnumerable lets you process one page at a time — constant memory regardless of total volume. If the next step needs the full dataset for a sort, streaming buys nothing. For pull-based pipelines where the consumer controls pace, IAsyncEnumerable is the right abstraction."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Cancellation wiring",
+          "body": "Use [EnumeratorCancellation] on the iterator's token parameter. Without it, WithCancellation from the consumer side is ignored — a common bug during host shutdown."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Producing and consuming async streams",
+          "items": [
+            {
+              "title": "Define async iterator",
+              "body": "Write async IAsyncEnumerable<T> with yield return between awaits."
+            },
+            {
+              "title": "Await I/O between yields",
+              "body": "Each yield return can follow an await — fetching the next page or batch."
+            },
+            {
+              "title": "Consumer uses await foreach",
+              "body": "The compiler calls MoveNextAsync, awaits it, then accesses Current."
+            },
+            {
+              "title": "Cleanup on exit",
+              "body": "DisposeAsync runs when the foreach exits — close connections, release resources."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IAsyncEnumerable pull stream",
+            "source": "sequenceDiagram\n  participant C as Consumer await foreach\n  participant I as IAsyncEnumerable iterator\n  participant N as Network\n  C->>I: MoveNextAsync\n  I->>N: await fetch page\n  N-->>I: data\n  I-->>C: true + Current item\n  C->>C: process item\n  C->>I: MoveNextAsync\n  I-->>C: false — done\n  C->>I: DisposeAsync"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Paging SQS with await foreach",
+            "code": "public async IAsyncEnumerable<Message> ReceiveAllAsync(\n    string queueUrl,\n    [EnumeratorCancellation] CancellationToken cancellationToken)\n{\n    while (!cancellationToken.IsCancellationRequested)\n    {\n        var response = await _sqs.ReceiveMessageAsync(queueUrl, cancellationToken);\n        if (response.Messages.Count == 0) yield break;\n\n        foreach (var message in response.Messages)\n            yield return message;\n    }\n}\n\npublic async Task DrainAsync(string queueUrl, CancellationToken cancellationToken)\n{\n    await foreach (var message in ReceiveAllAsync(queueUrl)\n        .WithCancellation(cancellationToken))\n    {\n        await HandleAsync(message, cancellationToken);\n    }\n}",
+            "explanation": "Each page is awaited. Callers see a stream of messages, not a List allocated for the whole drain. EnumeratorCancellation wires the consumer's token into the iterator."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Streaming CSV lines without loading the file",
+            "code": "public async IAsyncEnumerable<AttemptRow> ReadAttemptsAsync(\n    string filePath,\n    [EnumeratorCancellation] CancellationToken cancellationToken)\n{\n    using var reader = new StreamReader(filePath);\n    await reader.ReadLineAsync(cancellationToken); // skip header\n\n    while (!reader.EndOfStream)\n    {\n        cancellationToken.ThrowIfCancellationRequested();\n        var line = await reader.ReadLineAsync(cancellationToken);\n        if (line is null) break;\n\n        var cols = line.Split(',');\n        if (cols.Length >= 3)\n            yield return new AttemptRow(cols[0], cols[1], int.Parse(cols[2]));\n    }\n}",
+            "explanation": "One row at a time, one await per line. Memory stays constant regardless of file size."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "When streaming does not help",
+            "code": "// BAD: ToListAsync defeats the purpose of streaming\nvar all = await ReadAttemptsAsync(path, token).ToListAsync();\nvar sorted = all.OrderBy(r => r.Score).ToList(); // needs everything anyway\n\n// GOOD: if you need the full sorted set, just load it\nvar allRows = await File.ReadAllLinesAsync(path, token);\nvar sorted = allRows.Skip(1)\n    .Select(ParseRow)\n    .OrderBy(r => r.Score)\n    .ToList();",
+            "explanation": "If the next step needs all data for a sort or aggregate, IAsyncEnumerable buys nothing. Choose the right tool for the access pattern."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Async iteration in C# vs JavaScript",
+          "headers": [
+            "Aspect",
+            "C# IAsyncEnumerable",
+            "JavaScript async generators"
+          ],
+          "rows": [
+            [
+              "Producer syntax",
+              "async IAsyncEnumerable<T> + yield return",
+              "async function* + yield"
+            ],
+            [
+              "Consumer syntax",
+              "await foreach (var x in stream)",
+              "for await...of"
+            ],
+            [
+              "Cancellation",
+              "[EnumeratorCancellation] + WithCancellation",
+              "Manual check or AbortSignal"
+            ],
+            [
+              "Disposal",
+              "DisposeAsync on exit",
+              "return in generator ends iteration"
+            ],
+            [
+              "LINQ support",
+              "System.Linq.Async package",
+              "No built-in async LINQ"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forgetting [EnumeratorCancellation] so WithCancellation is ignored. Calling ToListAsync() on a huge import and recreating the memory problem. Yielding after disposing the resource the next MoveNextAsync still needs. Mixing yield return with side effects you cannot undo unless the consumer contract is clear."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "await foreach pulls; it does not run the producer on a new thread by itself.",
     "Use EnumeratorCancellation so host shutdown actually stops the iterator.",
-    "Streaming pages avoids a giant List on CSV or SQS drains."
+    "Streaming pages avoids a giant List on CSV or queue drains."
   ],
   "commonPitfalls": [
     "Forgetting [EnumeratorCancellation] so WithCancellation is ignored.",

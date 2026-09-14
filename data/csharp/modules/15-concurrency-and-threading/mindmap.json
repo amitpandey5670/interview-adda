@@ -1,31 +1,52 @@
 {
   "moduleId": "csharp-15-concurrency-and-threading",
-  "title": "Concurrency mind map",
-  "nodes": [
-    { "id": "conc-root", "label": "Shared state and parallelism" },
-    { "id": "pool", "label": "ThreadPool and TPL", "parentId": "conc-root" },
-    { "id": "plinq", "label": "PLINQ / Parallel", "parentId": "pool" },
-    { "id": "sync", "label": "Synchronization", "parentId": "conc-root" },
-    { "id": "lock", "label": "lock / Monitor / Lock", "parentId": "sync" },
-    { "id": "inter", "label": "Interlocked", "parentId": "sync" },
-    { "id": "vol", "label": "volatile (rare)", "parentId": "sync" },
-    { "id": "sem", "label": "SemaphoreSlim", "parentId": "sync" },
-    { "id": "bugs", "label": "Races and deadlocks", "parentId": "conc-root" },
-    { "id": "vis", "label": "Memory visibility", "parentId": "bugs" },
-    { "id": "coll", "label": "Concurrent* and Channel", "parentId": "conc-root" },
-    { "id": "stampede", "label": "Cache stampede 199→999", "parentId": "conc-root" }
+  "title": "Concurrency and threading — concept map",
+  "intro": "This module covers shared state and parallelism: the thread pool, Task Parallel Library (TPL), locks, Interlocked, races, deadlocks, concurrent collections, Channels, and a real cache-stampede scenario. Async input/output composition stays in module 13 — the hard rule here is never hold a lock across Redis, Simple Queue Service (SQS), or HTTP.",
+  "overviewDiagram": {
+    "type": "mermaid",
+    "title": "Concurrency decision flow",
+    "source": "flowchart TD\n  A[Shared work] --> B{Type}\n  B -->|I/O wait| C[async await module 13]\n  B -->|CPU bound| D[Task.Run Parallel PLINQ]\n  B -->|Shared mutable state| E{Pattern}\n  E -->|Counter| F[Interlocked]\n  E -->|Map| G[ConcurrentDictionary]\n  E -->|Queue| H[Channel]\n  E -->|Invariant| I[lock short section]\n  I --> J[Never await inside lock]"
+  },
+  "conceptCards": [
+    {
+      "id": "card-pool",
+      "title": "Thread pool and TPL",
+      "summary": "Task.Run and Parallel for CPU work. async for I/O. PLINQ for large data-parallel LINQ.",
+      "example": "await Task.Run(() => HashFile(stream))",
+      "topicSlug": "thread-pool-task-parallel"
+    },
+    {
+      "id": "card-lock",
+      "title": "lock and Interlocked",
+      "summary": "lock for multi-step invariants. Interlocked for counters. SemaphoreSlim for throttling.",
+      "example": "Interlocked.Increment(ref _hits)",
+      "topicSlug": "locks-and-interlocked"
+    },
+    {
+      "id": "card-races",
+      "title": "Races and deadlocks",
+      "summary": "Races from unsynchronized shared state. Deadlocks from circular lock waits. Fixed lock ordering.",
+      "example": "Dictionary in parallel RabbitMQ handlers — use ConcurrentDictionary",
+      "topicSlug": "races-deadlocks"
+    },
+    {
+      "id": "card-channels",
+      "title": "Concurrent collections",
+      "summary": "ConcurrentDictionary, Channel for producer-consumer. Bounded channel for backpressure.",
+      "example": "await foreach var msg in channel.Reader.ReadAllAsync()",
+      "topicSlug": "concurrent-collections-channels"
+    },
+    {
+      "id": "card-stampede",
+      "title": "Cache stampede",
+      "summary": "199 to 999 users, cold Redis key. Single-flight per key. Semaphore on DB. No lock across I/O.",
+      "example": "ConcurrentDictionary<string, Task<User>> inflight loads",
+      "topicSlug": "high-concurrency-scenario"
+    }
   ],
-  "edges": [
-    { "from": "conc-root", "to": "pool" },
-    { "from": "pool", "to": "plinq" },
-    { "from": "conc-root", "to": "sync" },
-    { "from": "sync", "to": "lock" },
-    { "from": "sync", "to": "inter" },
-    { "from": "sync", "to": "vol" },
-    { "from": "sync", "to": "sem" },
-    { "from": "conc-root", "to": "bugs" },
-    { "from": "bugs", "to": "vis" },
-    { "from": "conc-root", "to": "coll" },
-    { "from": "conc-root", "to": "stampede", "label": "never lock I/O" }
-  ]
+  "revisionDiagram": {
+    "type": "mermaid",
+    "title": "Concurrency revision map",
+    "source": "mindmap\n  root((Concurrency))\n    Thread pool\n      Task.Run CPU work\n      Parallel ForEach\n      PLINQ AsParallel\n      Not for I/O waits\n    Synchronization\n      lock Monitor short sections\n      Interlocked counters\n      SemaphoreSlim throttle\n      Never lock across await\n    Bugs\n      Data race lost updates\n      Deadlock circular wait\n      Fixed lock ordering\n      Concurrent not Dictionary\n    Message passing\n      Channel producer consumer\n      Bounded backpressure\n      ReadAllAsync consumers\n    Stampede scenario\n      Many cache misses\n      Single flight per key\n      DB semaphore limit\n      Async Redis not sync lock"
+  }
 }

@@ -1,41 +1,163 @@
 {
   "id": "csharp-16-source-generators",
   "slug": "source-generators",
-  "title": "Source generators: compile-time code, not runtime magic",
+  "title": "Source generators (compile-time code, not run-time magic)",
   "moduleId": "csharp-16-assemblies-attributes-reflection",
   "order": 4,
-  "hook": "A source generator extra-sources your compilation. It is Roslyn looking at your tree, not the CLR inventing types after `Main` starts.",
+  "hook": "Source generators run during compilation and add C# source files to your project — turning attributes or syntax into strongly typed code. They replace slow reflection for serializers, dependency injection glue, and Platform Invoke (P/Invoke) wrappers.",
   "sections": [
     {
-      "heading": "What a generator is allowed to do",
-      "prose": "A source generator is a compiler component that can read the compilation (syntax, symbols, additional files) and add C# files. Incremental generators (`IIncrementalGenerator`) cache work so a keystroke does not re-walk the whole solution. They must not mutate existing files; they only add. Interceptors (C# 12, still experimental) are the narrow exception that can redirect a call site — treat them as preview, not a design default. Generators run on the build agent; if CI cannot load your analyzer package, the generated types do not exist and the product project fails to compile. That is the point: fail closed at compile time instead of `GetTypes()` at 2 a.m.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Attribute as a generator trigger, not a runtime scan",
-          "code": "[AttributeUsage(AttributeTargets.Class)]\npublic sealed class SqsMessageAttribute(string typeName) : Attribute\n{\n    public string TypeName { get; } = typeName;\n}\n\n[SqsMessage(\"OrderSubmitted\")]\npublic sealed class OrderSubmitted\n{\n    public required string OrderId { get; init; }\n}\n\n// Generator emits something like:\n// partial class SqsDispatch\n// {\n//     public static Task HandleAsync(string type, ReadOnlySpan<byte> json, ...)\n// }",
-          "explanation": "The attribute is a compile-time marker. The generated dispatcher is ordinary C# the rest of the app calls. No Assembly.GetTypes on each message."
+          "type": "prose",
+          "text": "IIncrementalGenerator (Roslyn source generator API) inspects your compilation and emits partial classes, methods, or entire files. Generated code appears in obj/ and compiles with your project — you debug it like hand-written code. Examples: System.Text.Json source context, logging MessagePack, LibraryImport for P/Invoke, community generators for records and unions."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Source generator",
+              "longForm": "Roslyn source generator",
+              "plainDefinition": "Compile-time plugin that adds C# source based on your code.",
+              "example": "[JsonSerializable(typeof(OrderDto))] emits serialization code."
+            },
+            {
+              "term": "IIncrementalGenerator",
+              "longForm": "IIncrementalGenerator interface",
+              "plainDefinition": "Modern generator API that caches steps for faster rebuilds.",
+              "example": "Implement IIncrementalGenerator in an analyzer project."
+            },
+            {
+              "term": "Partial class",
+              "longForm": "Partial type declaration",
+              "plainDefinition": "Type split across multiple files; generator adds another part.",
+              "example": "partial class OrderDto { } // other part generated"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Platform generators you already depend on",
-      "prose": "You do not have to write Roslyn to benefit. `System.Text.Json` source generation, regex source generation, `LibraryImport` P/Invoke generation (module 17), and logging source generators are the same idea: inspect attributes, emit partial methods. C# 13 partial properties and C# 14 partial constructors/events exist partly so generators can fill in implementations without fighting auto-properties. `field`-backed properties (C# 14) and extension members are language features; generators may emit them, they are not generators themselves. When an interviewer asks “how would you avoid reflection for mapping?”, name incremental generators or a JSON context — not “a faster Invoke.”"
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "SQS consumers that deserialized JSON via reflection per message can switch to source-generated System.Text.Json context for faster, trim-safe code. Generators eliminate stringly typed method names and catch errors at compile time. They are the .NET answer to TypeScript codegen from OpenAPI — but embedded in the build."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Generator vs reflection",
+          "body": "If you need the same metadata-driven code on every request, generate it once at compile time."
+        }
+      ]
     },
     {
-      "heading": "Operational constraints",
-      "prose": "Generated files show up under analyzers in the IDE; do not check them in unless your team has a documented reason. Determinism matters: two machines must emit the same text for the same input or your public API baseline (next topic) flaps. Generators that parse additional files (proto, OpenAPI, CSV column maps) should treat those files as part of the compilation inputs. Debugging a generator is a second process — you debug the generator project, not the consumer, unless you attach to `VBCSCompiler`. If a feature needs runtime data (the live Redis schema), a generator cannot see it; keep that as configuration, not generated code."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Generator pipeline",
+          "items": [
+            {
+              "title": "Author marks code",
+              "body": "Attributes or syntax trigger the generator."
+            },
+            {
+              "title": "Roslyn runs generator",
+              "body": "During build, analyzer project executes IIncrementalGenerator."
+            },
+            {
+              "title": "Emit source files",
+              "body": "AddSource adds .g.cs files to compilation."
+            },
+            {
+              "title": "Compile together",
+              "body": "Your code calls generated APIs with full IntelliSense."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Source generator flow",
+            "source": "flowchart LR\n  A[Your attributes syntax] --> B[Roslyn compile]\n  B --> C[Source generator]\n  C --> D[Generated .g.cs]\n  D --> B\n  B --> E[Single assembly IL]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "System.Text.Json source context",
+            "code": "[JsonSerializable(typeof(OrderCreatedEvent))]\n[JsonSerializable(typeof(PaymentFailedEvent))]\ninternal partial class AppJsonContext : JsonSerializerContext { }\n\n// Usage — no reflection serializer:\nvar evt = JsonSerializer.Deserialize(json, AppJsonContext.Default.OrderCreatedEvent);",
+            "explanation": "Generator emits optimized serialization code for listed types. Works with trimming and Native AOT."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "LibraryImport P/Invoke generation",
+            "code": "internal static partial class NativeMethods\n{\n    [LibraryImport(\"kernel32.dll\")]\n    internal static partial uint GetCurrentThreadId();\n}",
+            "explanation": "Source generator emits marshalling code at compile time instead of run-time P/Invoke stubs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Consumer calls generated code",
+            "code": "// Generator might emit:\n// partial class MessageRouter { void Route(OrderCreatedEvent e) => _order.Handle(e); }\n\n_messageRouter.Route(deserializedEvent); // compile-time typed",
+            "explanation": "Hand-written code calls generated partial methods — refactor-safe unlike string reflection."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Codegen timing",
+          "headers": ["Approach", "C# source generators", "TypeScript"],
+          "rows": [
+            ["When", "During dotnet build", "tsc, graphql-codegen, openapi-generator"],
+            ["Output", "C# in obj/, compiled to IL", ".ts files in repo or dist"],
+            ["IDE support", "Full for generated C#", "Full for generated TS"],
+            ["Runtime cost", "None — already compiled", "None after compile"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Editing generated files manually — they regenerate on build. Generator project not referenced as analyzer. Debugging without looking at generated .g.cs in obj folder."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Generators add source to the compilation; they do not rewrite your existing files (interceptors aside, and those are experimental).",
-    "Prefer incremental generators and platform ones (JSON, regex, LibraryImport) over runtime reflection.",
-    "Partial members in C# 13/14 exist so generated implementations can coexist with your declarations."
+    "Source generators emit C# at compile time — no run-time reflection cost.",
+    "JsonSerializerContext and LibraryImport are built-in generator consumers.",
+    "Prefer generators over reflection on hot paths and for Native AOT."
   ],
   "commonPitfalls": [
-    "Writing a non-incremental generator that walks every syntax node on each keystroke.",
-    "Checking in generated files that then drift from the generator, doubling the public surface.",
-    "Trying to generate code from data that only exists at run time (live cache keys, current tenant list)."
+    "Hand-editing generated files.",
+    "Missing analyzer reference in csproj.",
+    "Generator not incremental — slow builds on large solutions."
   ],
   "relatedTopicIds": [
     "csharp-16-reflection",
@@ -45,25 +167,17 @@
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "codegen in the compile pipeline",
-      "note": "TS transformers and tools like tsc-plus-plugins add files before emit. Roslyn source generators are first-class in the C# compilation, with symbol access, not a pre-step that rewrites `.ts` on disk.",
-      "futureTopicSlug": "typescript/compiler/transformers"
+      "concept": "OpenAPI codegen",
+      "note": "openapi-typescript and similar tools mirror source generators — schema drives generated types and clients at build time.",
+      "futureTopicSlug": "typescript/tooling/codegen"
     }
   ],
   "officialSources": [
     {
-      "title": "Roslyn SDK and source generators",
+      "title": "Source generators overview",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview"
-    },
-    {
-      "title": "What's new in C# 13 (partial properties)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-13"
-    },
-    {
-      "title": "What's new in C# 14 (partial events and constructors)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "sqs-consumer"
+  "scenarioTag": "sqs-consumer",
+  "animationHint": "flow"
 }

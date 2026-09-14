@@ -1,36 +1,168 @@
 {
   "id": "csharp-14-stack-heap-layout",
   "slug": "stack-heap-layout",
-  "title": "Stack versus heap layout",
+  "title": "Stack versus heap layout (where values and objects live)",
   "moduleId": "csharp-14-memory-and-gc",
   "order": 1,
-  "hook": "The stack is storage for activation records. The managed heap is where the GC tracks objects. ‘Struct versus class’ is about layout, not a promise that a struct never touches the heap.",
+  "hook": "Every thread has a stack for local variables and call frames. The Common Language Runtime (CLR) garbage collector tracks objects on the managed heap. Struct versus class is about memory layout — not a promise that a struct never touches the heap.",
   "sections": [
     {
-      "heading": "What actually lives where",
-      "prose": "Each thread has a stack. Locals and parameters that are value types sit in that frame or in registers, until something promotes them: boxing, a closure, an async state machine, or a field of a heap object. Reference-type locals are pointers (or managed references) on the stack pointing at objects on the managed heap. The CLR heap is a contiguous reserved region per process; bump allocation for small objects is a pointer increment, which is why gen-0 allocation is cheap compared with malloc. You never pin physical RAM yourself; you work in virtual address space. An async method that awaits Redis will hoist locals the compiler considers live across the await onto the state-machine object — that object is a heap allocation even if the locals were ints.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Same bytes, three homes",
-          "code": "public readonly record struct AuthStamp(long UserId, int SchoolId);\n\npublic sealed class AttemptContext\n{\n    public AuthStamp Stamp { get; init; }\n}\n\npublic AuthStamp OnStack(long userId, int schoolId) => new(userId, schoolId);\n\npublic object Boxed(AuthStamp stamp) => stamp;\n\npublic async Task<AuthStamp> AcrossAwaitAsync(AuthStamp stamp, CancellationToken cancellationToken)\n{\n    await Task.Yield();\n    cancellationToken.ThrowIfCancellationRequested();\n    return stamp;\n}",
-          "explanation": "OnStack can stay in the frame. Boxed copies onto the heap. AcrossAwaitAsync stores stamp on the compiler-generated state machine."
+          "type": "prose",
+          "text": "The stack is per-thread storage for activation records: parameters, local variables, and return addresses. The managed heap is a region the CLR owns where reference-type objects and boxed values live. Value types store their data inline — on the stack when they are locals in a method frame, or inside a heap object when they are fields. Reference-type locals are pointers on the stack pointing at heap objects."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Stack",
+              "longForm": "Thread stack",
+              "plainDefinition": "Per-thread memory for method frames. Fast push/pop; dies when the frame returns.",
+              "example": "An int local in a method lives in the current stack frame."
+            },
+            {
+              "term": "Managed heap",
+              "longForm": "CLR managed heap",
+              "plainDefinition": "Memory region where the garbage collector allocates and tracks objects.",
+              "example": "new List<int>() allocates an object on the managed heap."
+            },
+            {
+              "term": "Value type",
+              "longForm": "Value type (struct)",
+              "plainDefinition": "A type whose instances store data inline rather than as a separate heap object.",
+              "example": "int, bool, and record struct AuthStamp are value types."
+            },
+            {
+              "term": "Reference type",
+              "longForm": "Reference type (class)",
+              "plainDefinition": "A type whose instances are heap objects accessed through a reference.",
+              "example": "string and List<T> are reference types."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Why interviews mix this with GC",
-      "prose": "GC only walks the heap. Stack slots are roots: if a local still references a large CSV buffer, that buffer is live. After the local dies, the next gen-0 collection can reclaim it. Pinning (fixed, GCHandleType.Pinned, some interop) prevents compacting around that object; SkiaSharp and other native interop may pin briefly. Prefer stackalloc or Span for short-lived bytes when the APIs allow — that is module 17 territory, but the layout rule starts here: if it is a reference, the object is on the heap until no root can reach it."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The garbage collector only walks the heap. Stack slots are roots: if a local still references a large byte buffer, that buffer stays alive. After the local goes out of scope, the next generation-0 collection can reclaim it. Boxing, closures, async state machines, and fields of heap objects are the usual reasons a struct ends up on the heap even though it is a value type."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: value types are inline; reference types are heap objects plus a reference. Locals can be on the stack until something promotes them — boxing, capture, or await."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Where bytes actually live",
+          "items": [
+            {
+              "title": "Method call creates a frame",
+              "body": "Parameters and value-type locals are laid out in the thread stack frame (or registers)."
+            },
+            {
+              "title": "Reference types allocate on the heap",
+              "body": "new creates a heap object; the local holds a managed reference to it."
+            },
+            {
+              "title": "Structs as fields live inside the object",
+              "body": "A struct field of a class is stored inline in that object's heap layout."
+            },
+            {
+              "title": "Promotion events move data to the heap",
+              "body": "Boxing, lambda capture, and async state machines can store value types on heap objects."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Stack and managed heap",
+            "source": "flowchart TB\n  subgraph Stack[\"Thread stack\"]\n    L1[int local]\n    L2[ref to User]\n  end\n  subgraph Heap[\"Managed heap\"]\n    O1[User object\\nwith inline Stamp struct]\n    O2[Boxed int]\n  end\n  L2 --> O1\n  L1 -.->|boxing| O2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same bytes, three homes",
+            "code": "public readonly record struct AuthStamp(long UserId, int SchoolId);\n\npublic sealed class AttemptContext\n{\n    public AuthStamp Stamp { get; init; }\n}\n\npublic AuthStamp OnStack(long userId, int schoolId) => new(userId, schoolId);\n\npublic object Boxed(AuthStamp stamp) => stamp;\n\npublic async Task<AuthStamp> AcrossAwaitAsync(AuthStamp stamp, CancellationToken ct)\n{\n    await Task.Yield();\n    ct.ThrowIfCancellationRequested();\n    return stamp;\n}",
+            "explanation": "OnStack can stay in the frame. Boxed copies onto the heap as a boxed value. AcrossAwaitAsync stores stamp on the compiler-generated state machine object on the heap."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Reference local, heap object",
+            "code": "public void ProcessToken(string token)\n{\n    // token is a reference on the stack pointing at a heap string object\n    var bytes = token.ToCharArray(); // new char[] on the heap\n    _ = bytes.Length;\n}",
+            "explanation": "The string object lives on the heap. The local token is a reference in the stack frame. ToCharArray allocates another heap array."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Struct field inside a class",
+            "code": "public sealed class Session\n{\n    public AuthStamp Stamp; // inline inside Session object on heap\n}\n\nvar session = new Session { Stamp = new AuthStamp(42, 7) };\n// session ref on stack; Session + Stamp bytes on heap",
+            "explanation": "The Session object is on the heap. AuthStamp is stored inline inside that object's layout — not as a separate allocation."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Primitives versus value types",
+          "headers": ["Aspect", "C# value/reference types", "JavaScript"],
+          "rows": [
+            ["Stack structs", "Structs and primitives can live in stack frames", "No programmer-controlled stack struct for a record of two ints"],
+            ["Objects", "Classes are always heap objects", "Objects and closures always live in the V8 heap"],
+            ["Boxing", "Explicit or implicit boxing copies to heap", "Numbers are not separate stack values like C# int"],
+            ["GC roots", "Stack slots, statics, handles", "JS engine roots; you do not see stack frames"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Saying structs never go on the heap — boxing, async, and closures disprove that. Keeping a large byte[] in a long-lived singleton field for convenience. Ignoring that await extends the lifetime of locals onto the state machine object."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Value types are inline; they are on the stack only when their container is a stack frame.",
-    "Async, lambdas, and boxing are the usual reasons a ‘stack struct’ becomes a heap field.",
-    "Stack slots are GC roots for whatever they still reference."
+    "Async, lambdas, and boxing are the usual reasons a struct becomes a heap field.",
+    "Stack slots are garbage-collection roots for whatever they still reference."
   ],
   "commonPitfalls": [
     "Saying structs never go on the heap.",
-    "Keeping a large byte[] in a field of a long-lived singleton ‘for convenience.’",
+    "Keeping a large byte[] in a field of a long-lived singleton for convenience.",
     "Ignoring that await extends the lifetime of locals to the state machine."
   ],
   "relatedTopicIds": [
@@ -45,7 +177,7 @@
     {
       "language": "javascript",
       "concept": "Primitives versus objects in V8",
-      "note": "JS numbers are not C# value types. Objects and closures always live in the JS heap. There is no programmer-controlled stack struct for a record of two ints.",
+      "note": "JavaScript numbers are not C# value types. Objects and closures always live in the JavaScript heap. There is no programmer-controlled stack struct for a record of two ints.",
       "futureTopicSlug": "javascript/runtime/memory-model"
     }
   ],

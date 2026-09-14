@@ -1,37 +1,162 @@
 {
   "id": "csharp-14-finalizers-vs-dispose",
   "slug": "finalizers-vs-dispose",
-  "title": "Finalizers versus Dispose",
+  "title": "Finalizers versus Dispose (deterministic cleanup)",
   "moduleId": "csharp-14-memory-and-gc",
   "order": 4,
-  "hook": "GC reclaims managed memory. It does not know how to free a SkiaSharp native bitmap. That is Dispose. A finalizer is a delayed, non-deterministic backup that makes the object live longer.",
+  "hook": "Dispose releases resources when you call it — usually in a using block. A finalizer is a last-chance safety net the garbage collector runs later on a separate thread. For SkiaSharp bitmaps and file handles, Dispose is the right tool.",
   "sections": [
     {
-      "heading": "Deterministic cleanup is IDisposable",
-      "prose": "If a type wraps OS handles, pooled sockets, or native Skia objects, it should implement IDisposable or IAsyncDisposable. using and await using compile to try/finally. Dispose runs at the end of the block even when an exception flies. IAsyncDisposable is for cleanup that itself awaits — flushing a pipe, returning a Redis connection with async teardown. The classic dispose pattern also calls GC.SuppressFinalize(this) so the finalizer queue does not resurrect the object for a second pass. In C# 8+, a simple sealed type can implement Dispose without a finalizer if SafeHandle owns the native resource. Prefer SafeHandle over writing ~MyType().",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "SkiaSharp bitmap must leave the using block disposed",
-          "code": "public static async Task<byte[]> RasterPreviewAsync(\n    Stream csvDerivedPng,\n    CancellationToken cancellationToken)\n{\n    await using var input = csvDerivedPng;\n    using var bitmap = SKBitmap.Decode(input);\n    if (bitmap is null)\n    {\n        return [];\n    }\n\n    using var image = SKImage.FromBitmap(bitmap);\n    cancellationToken.ThrowIfCancellationRequested();\n    return image.Encode(SKEncodedImageFormat.Webp, 80).ToArray();\n}",
-          "explanation": "SKBitmap holds native memory. Waiting for a finalizer under 999 concurrent renders will exhaust native RAM while the managed heap still looks small."
+          "type": "prose",
+          "text": "IDisposable.Dispose lets you release unmanaged resources deterministically — native handles, pooled connections, file streams. IAsyncDisposable does the same for async cleanup. A finalizer (~ClassName) runs when the garbage collector reclaims an object, on the finalizer thread, with no guaranteed timing. The dispose pattern combines both: Dispose does the work; a finalizer only as a backstop if someone forgets Dispose."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Dispose",
+              "longForm": "IDisposable.Dispose",
+              "plainDefinition": "Explicit method to release resources immediately when you are done with an object.",
+              "example": "using var stream = File.OpenRead(path); // Dispose called at end of block"
+            },
+            {
+              "term": "Finalizer",
+              "longForm": "Object finalizer",
+              "plainDefinition": "A method the runtime calls before reclaiming an object, on a dedicated thread.",
+              "example": "~NativeWrapper() { /* late native cleanup */ }"
+            },
+            {
+              "term": "SuppressFinalize",
+              "longForm": "GC.SuppressFinalize",
+              "plainDefinition": "Tells the runtime not to run the finalizer because Dispose already cleaned up.",
+              "example": "GC.SuppressFinalize(this) at the end of Dispose."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What a finalizer actually does",
-      "prose": "If you declare a destructor (~Foo), the instance is placed on the finalizer queue when it becomes otherwise unreachable. A dedicated finalizer thread runs ~Foo later. The object survives the collection that discovered it (it was a root from that queue) and is collected on a later pass after SuppressFinalize or after the finalizer runs. Finalizers can run in parallel to your requests, must not take locks that request threads hold, and must not assume ordering. Microsoft’s guidance: you almost never write one; wrap native handles in SafeHandle. Interview sentence: Dispose for prompt native release; finalizers as last chance; never use a finalizer for business logic or for returning a pooled byte[]."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Native libraries like SkiaSharp hold unmanaged memory outside the managed heap. If you rely on finalizers, native memory stays allocated until a full garbage collection notices the wrapper is dead — possibly after thousands of requests. That looks like a memory leak in production. await using with IAsyncDisposable is the modern pattern for async pipelines that stream IAsyncEnumerable."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "SkiaSharp rule",
+          "body": "Wrap SKBitmap, SKSurface, and similar types in using or await using. Never assume the finalizer will run promptly."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Dispose versus finalizer timeline",
+          "items": [
+            {
+              "title": "using block exits",
+              "body": "Dispose runs synchronously on the current thread; native handle released now."
+            },
+            {
+              "title": "No Dispose called",
+              "body": "Object becomes eligible for GC; finalizer is queued if one exists."
+            },
+            {
+              "title": "Finalizer thread runs",
+              "body": "Runs later, one object at a time — unpredictable delay."
+            },
+            {
+              "title": "Object actually collected",
+              "body": "Finalizable objects survive an extra GC cycle, extending lifetime."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Dispose vs finalizer timing",
+            "source": "sequenceDiagram\n  participant App\n  participant Dispose\n  participant GC\n  participant Finalizer\n  App->>Dispose: using block ends\n  Dispose-->>App: native freed now\n  Note over App,GC: If no Dispose\n  GC->>Finalizer: queue finalizer\n  Finalizer-->>GC: late native cleanup"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Standard dispose pattern",
+            "code": "public sealed class NativeBuffer : IDisposable\n{\n    private IntPtr _handle;\n    private bool _disposed;\n\n    public void Dispose()\n    {\n        if (_disposed) return;\n        ReleaseHandle(_handle);\n        _handle = IntPtr.Zero;\n        _disposed = true;\n        GC.SuppressFinalize(this);\n    }\n\n    ~NativeBuffer() => ReleaseHandle(_handle);\n\n    private static void ReleaseHandle(IntPtr h) { /* P/Invoke */ }\n}",
+            "explanation": "Dispose does real work. Finalizer is fallback. SuppressFinalize skips the finalizer when Dispose ran."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "await using for async disposal",
+            "code": "await using var connection = new NpgsqlConnection(connString);\nawait connection.OpenAsync(cancellationToken);\nawait using var reader = await connection.ExecuteReaderAsync(cancellationToken);\nwhile (await reader.ReadAsync(cancellationToken))\n{\n    // rows\n}",
+            "explanation": "await using calls DisposeAsync at the end of the block — important for async I/O types."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SkiaSharp bitmap in using",
+            "code": "using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);\nusing var canvas = new SKCanvas(bitmap);\ncanvas.Clear(SKColors.White);\n// bitmap native memory freed when using ends",
+            "explanation": "SKBitmap wraps native pixels. using ensures immediate release instead of waiting for GC."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Resource cleanup models",
+          "headers": ["Aspect", "C# Dispose/finalizer", "JavaScript"],
+          "rows": [
+            ["Deterministic cleanup", "using / await using calls Dispose", "No IDisposable; rely on GC and explicit .destroy() on some APIs"],
+            ["Native interop", "Critical for P/Invoke handles", "Native addons use finalization or explicit close"],
+            ["Finalizers", "Separate thread, delayed", "WeakRef/finalization registry in modern JS — also delayed"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Relying on finalizers for SkiaSharp or database connections. Throwing from Dispose without guarding _disposed. Implementing a finalizer on every class — only types that wrap unmanaged resources need one."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "using is try/finally plus Dispose — deterministic.",
-    "Finalizers delay collection by at least one extra GC and run on another thread.",
-    "IAsyncDisposable is for async teardown; SkiaSharp bitmaps are typically sync Dispose."
+    "Dispose releases resources now; finalizers run later on another thread.",
+    "Finalizable objects survive an extra GC cycle — avoid finalizers unless necessary.",
+    "Use using and await using for IDisposable and IAsyncDisposable types."
   ],
   "commonPitfalls": [
-    "Letting SKBitmap fall out of scope in a hot API without using.",
-    "Throwing from a finalizer or taking a lock that a request thread holds.",
-    "Implementing a finalizer but forgetting SuppressFinalize in Dispose, doubling the work."
+    "Expecting finalizers to run when a using block would have sufficed.",
+    "Not calling GC.SuppressFinalize in Dispose.",
+    "Disposing objects still needed by other code."
   ],
   "relatedTopicIds": [
     "csharp-14-roots-mark-compact",
@@ -42,15 +167,15 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "FinalizationRegistry versus explicit close",
-      "note": "JS FinalizationRegistry is also non-deterministic. Node streams and file handles still need explicit .close() or await using in modern JS — the same lesson as SkiaSharp.",
-      "futureTopicSlug": "javascript/runtime/finalization"
+      "concept": "Explicit cleanup",
+      "note": "Node streams have .destroy(); Web Streams have abort. C# using is the idiomatic deterministic pattern for IDisposable.",
+      "futureTopicSlug": "javascript/runtime/resources"
     }
   ],
   "officialSources": [
     {
-      "title": "Cleaning up unmanaged resources",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/unmanaged"
+      "title": "Implement a Dispose method",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose"
     }
   ],
   "scenarioTag": "skiasharp-dispose"

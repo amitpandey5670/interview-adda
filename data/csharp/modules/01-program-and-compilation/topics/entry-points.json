@@ -1,20 +1,151 @@
 {
   "id": "csharp-01-entry-points",
   "slug": "entry-points",
-  "title": "Entry points: Main and top-level statements",
+  "title": "Where your program starts (Main and top-level statements)",
   "moduleId": "csharp-01-program-and-compilation",
   "order": 5,
-  "hook": "A process needs one entry point. You either write `static Main` or you put statements at the top of one file and the compiler synthesizes Main. Two files with top-level statements do not compile.",
+  "hook": "Every executable program needs exactly one starting point. In C# you either write a classic static Main method or put statements at the top of one file and let the compiler build Main for you.",
   "sections": [
     {
-      "heading": "Main versus top-level statements",
-      "prose": "`dotnet new console` emits top-level statements: executable lines with no class wrapper. The compiler generates a Program class and a Main-like entry point. You still get `args` as a `string[]` in scope, and you can `await` at the top level (that synthesizes an async Main — details in the async module). The classic form is `static void Main(string[] args)` or `static int Main` / `static Task<int> Main`. Both styles work in project-based and file-based apps. Only one file in a compilation may contain top-level statements. Worker hosts (generic host, Lambda function handler) often hide Main inside the framework; your “entry” is then a handler method, but the process still started at Main.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Top-level args versus explicit Main",
-          "code": "// Program.cs — top-level (default template)\nvar queue = args.Length > 0 ? args[0] : \"orders\";\nConsole.WriteLine($\"consuming {queue}\");\n\n// Equivalent explicit entry:\nnamespace Acme;\n\nclass Program\n{\n    static int Main(string[] args)\n    {\n        var queue = args.Length > 0 ? args[0] : \"orders\";\n        Console.WriteLine($\"consuming {queue}\");\n        return 0;\n    }\n}",
-          "explanation": "Return codes from Main become the process exit code. Top-level `return` of an int does the same. Do not put a second top-level file in the same project."
+          "type": "prose",
+          "text": "The entry point is the method the operating system calls when your process starts. In classic C# you write static void Main(string[] args) or static int Main to return an exit code. Modern templates use top-level statements: plain executable lines at the top of a single file. The compiler silently generates a Program class and a Main-like method. Both styles produce the same kind of executable — top-level statements are syntactic sugar, not a different runtime."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Main",
+              "longForm": "Main method",
+              "plainDefinition": "The static method the CLR calls first when your executable starts.",
+              "example": "static int Main(string[] args) { ... return 0; }"
+            },
+            {
+              "term": "top-level statements",
+              "longForm": "top-level statements",
+              "plainDefinition": "Executable C# lines written outside any class; the compiler synthesizes an entry point from them.",
+              "example": "Console.WriteLine(\"hello\"); as the entire Program.cs file body."
+            },
+            {
+              "term": "args",
+              "longForm": "command-line arguments",
+              "plainDefinition": "A string array of values passed to your program when it is launched.",
+              "example": "dotnet run -- queue-name passes \"queue-name\" into args[0]."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Only one file per compilation may contain top-level statements. If you copy Program.cs and leave top-level code in both, the build fails. Worker hosts (generic host, AWS Lambda handlers) often hide Main inside the framework — your \"entry\" becomes a handler method, but the process still started at Main under the hood. Understanding args, return codes, and async entry points prevents subtle bugs in command-line tools and services."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "One entry per executable",
+          "body": "Exactly one entry point per executable compilation. Two files with top-level statements will not compile together."
+        }
+      ]
+    },
+    {
+      "heading": "How entry points work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From dotnet run to your code",
+          "items": [
+            {
+              "title": "OS launches the process",
+              "body": "The runtime loader finds the assembly and locates the entry point metadata."
+            },
+            {
+              "title": "CLR calls Main (or synthesized Main)",
+              "body": "Top-level statements compile to a hidden static Main method in a generated Program class."
+            },
+            {
+              "title": "args arrives as string[]",
+              "body": "Command-line tokens are available in the args parameter or as a top-level args variable."
+            },
+            {
+              "title": "Return code becomes exit code",
+              "body": "return 0 from Main (or top-level return 0) tells the OS the program succeeded."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Entry point styles",
+            "source": "flowchart TD\n  A[Process starts] --> B{Entry style}\n  B -->|Classic| C[static Main string args]\n  B -->|Top-level| D[Compiler-generated Main]\n  C --> E[Your application code]\n  D --> E\n  E --> F[Exit code to OS]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Top-level statements (default template)",
+            "code": "// Program.cs — top-level style\nvar queue = args.Length > 0 ? args[0] : \"orders\";\nConsole.WriteLine($\"consuming {queue}\");",
+            "explanation": "args is in scope automatically. No class or Main wrapper needed. The compiler generates the entry point behind the scenes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Equivalent explicit Main",
+            "code": "namespace Acme;\n\nclass Program\n{\n    static int Main(string[] args)\n    {\n        var queue = args.Length > 0 ? args[0] : \"orders\";\n        Console.WriteLine($\"consuming {queue}\");\n        return 0;\n    }\n}",
+            "explanation": "Return codes from Main become the process exit code. Top-level return of an int does the same. Both styles are fully equivalent."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Async entry with await at top level",
+            "code": "using var client = new HttpClient();\nvar html = await client.GetStringAsync(\"https://example.com\");\nConsole.WriteLine(html.Length);\n\n// await at top level synthesizes async Task Main instead of void Main.",
+            "explanation": "Top-level await changes the generated signature to async Task Main. Useful for console tools that call APIs without blocking."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Process entry comparison",
+          "headers": ["Aspect", "C# entry point", "Node.js script"],
+          "rows": [
+            ["How process starts", "CLR calls static Main (or synthesized)", "Node executes the file you pass"],
+            ["Arguments", "string[] args", "process.argv (includes node path and script path)"],
+            ["Multiple entry files", "Only one top-level file allowed", "One file per node invocation"],
+            ["Exit code", "return int from Main", "process.exit(code)"],
+            ["Async at start", "await at top level → async Main", "Top-level await in ES modules"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Two Program.cs files both with top-level statements after a copy-paste. Looking for Main in a new template and concluding the app has no entry point. Forgetting that await at top-level changes the synthesized signature to async Main."
         }
       ]
     }
@@ -38,7 +169,7 @@
     {
       "language": "javascript",
       "concept": "process entry and argv",
-      "note": "Node runs the file you pass to `node`. C# always compiles to an entry method. `args` is argv without the runtime path prefix Node includes.",
+      "note": "Node runs the file you pass to node. C# always compiles to an entry method. args is argv without the runtime path prefix Node includes.",
       "futureTopicSlug": "javascript/runtime/process-argv"
     }
   ],
@@ -46,6 +177,10 @@
     {
       "title": "General structure of a C# program",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/program-structure/"
+    },
+    {
+      "title": "Top-level statements",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/program-structure/top-level-statements"
     }
   ],
   "scenarioTag": "sqs-consumer"

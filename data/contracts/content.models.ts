@@ -23,10 +23,84 @@ export interface CodeSnippet {
   explanation: string;
 }
 
+export interface GlossaryEntry {
+  term: string;
+  shortForm?: string;
+  longForm: string;
+  plainDefinition: string;
+  example?: string;
+}
+
+export interface MermaidDiagram {
+  type: 'mermaid';
+  title: string;
+  source: string;
+  caption?: string;
+}
+
+export interface StepItem {
+  title: string;
+  body: string;
+  snippet?: CodeSnippet;
+}
+
+export type CalloutVariant = 'tip' | 'remember' | 'warning';
+
+export interface ProseBlock {
+  type: 'prose';
+  text: string;
+}
+
+export interface SnippetBlock {
+  type: 'snippet';
+  snippet: CodeSnippet;
+}
+
+export interface GlossaryBlock {
+  type: 'glossary';
+  title?: string;
+  entries: GlossaryEntry[];
+}
+
+export interface DiagramBlock {
+  type: 'diagram';
+  diagram: MermaidDiagram;
+}
+
+export interface StepsBlock {
+  type: 'steps';
+  title: string;
+  items: StepItem[];
+}
+
+export interface CalloutBlock {
+  type: 'callout';
+  variant: CalloutVariant;
+  title: string;
+  body: string;
+}
+
+export interface ComparisonTableBlock {
+  type: 'comparisonTable';
+  title?: string;
+  headers: string[];
+  rows: string[][];
+}
+
+export type ContentBlock =
+  | ProseBlock
+  | SnippetBlock
+  | GlossaryBlock
+  | DiagramBlock
+  | StepsBlock
+  | CalloutBlock
+  | ComparisonTableBlock;
+
 export interface ContentSection {
   heading: string;
-  prose: string;
+  prose?: string;
   snippets?: CodeSnippet[];
+  blocks?: ContentBlock[];
 }
 
 export interface JsTsCorrelation {
@@ -84,11 +158,23 @@ export interface MindmapEdge {
   label?: string;
 }
 
+export interface ConceptCard {
+  id: string;
+  title: string;
+  summary: string;
+  example?: string;
+  topicSlug?: string;
+}
+
 export interface Mindmap {
   moduleId: string;
   title: string;
-  nodes: MindmapNode[];
-  edges: MindmapEdge[];
+  intro?: string;
+  overviewDiagram?: MermaidDiagram;
+  revisionDiagram?: MermaidDiagram;
+  conceptCards?: ConceptCard[];
+  nodes?: MindmapNode[];
+  edges?: MindmapEdge[];
 }
 
 export interface QuickOverviewRow {
@@ -156,4 +242,30 @@ export interface ContentIndex {
   title: string;
   stages: StageGroup[];
   modules: IndexModuleRef[];
+}
+
+/** Count code snippets in a topic (legacy snippets + block snippets). */
+export function countTopicSnippets(topic: Topic): number {
+  return topic.sections.reduce((total, section) => {
+    let count = section.snippets?.length ?? 0;
+    for (const block of section.blocks ?? []) {
+      if (block.type === 'snippet') {
+        count += 1;
+      }
+      if (block.type === 'steps') {
+        count += block.items.filter((item) => item.snippet).length;
+      }
+    }
+    return total + count;
+  }, 0);
+}
+
+/** Whether a topic includes at least one glossary block. */
+export function topicHasGlossary(topic: Topic): boolean {
+  return topic.sections.some((section) => section.blocks?.some((block) => block.type === 'glossary'));
+}
+
+/** Whether a topic includes at least one diagram block. */
+export function topicHasDiagram(topic: Topic): boolean {
+  return topic.sections.some((section) => section.blocks?.some((block) => block.type === 'diagram'));
 }

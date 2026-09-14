@@ -4,46 +4,160 @@
   "title": "Assemblies, metadata, and InternalsVisibleTo",
   "moduleId": "csharp-16-assemblies-attributes-reflection",
   "order": 1,
-  "hook": "Module 01 stopped at “Roslyn emits IL into a DLL.” Interviewers then ask who may see `internal` and how identity is stored. That is metadata, not a C# keyword trivia quiz.",
+  "hook": "A .NET assembly is a versioned unit packaging Intermediate Language (IL), metadata, and resources — not just a single class file. Metadata describes every type and member so the Common Language Runtime (CLR) can load, verify, and link code at run time.",
   "sections": [
     {
-      "heading": "What an assembly actually is",
-      "prose": "An assembly is the unit the CLR loads: IL, type metadata, and a manifest (name, version, culture, optional public key). A RabbitMQ client NuGet package is one or more assemblies plus a nuspec; it is not a folder of `.cs` files Node would `import`. Identity for binding is the simple name plus version and, when signed, the public key token. Culture matters for satellite resources, not for your typical SQS consumer. Two copies of the same simple name with different versions in one process is a bind failure unless you alias or unify — interviews still call this “DLL hell,” which is imprecise; it is loader policy. Native AOT still starts from assemblies, then closes the world: types that exist only via `Assembly.Load(byte[])` are gone unless you preserved them.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Inspect identity without inventing a plugin host",
-          "code": "var assembly = typeof(OrderSubmittedConsumer).Assembly;\nConsole.WriteLine(assembly.GetName().Name);\nConsole.WriteLine(assembly.GetName().Version);\nConsole.WriteLine(assembly.FullName);",
-          "explanation": "FullName is the bind identity string. Logging it in a worker boot is enough to prove which build is running; you do not need Assembly.LoadFrom for that."
+          "type": "prose",
+          "text": "An assembly (.dll or .exe) contains IL instructions, a manifest (name, version, culture), and rich metadata tables describing types, methods, fields, and attributes. Project references and NuGet packages resolve to assemblies. InternalsVisibleTo lets a friend test assembly access internal members without making them public."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Assembly",
+              "longForm": ".NET assembly",
+              "plainDefinition": "A deployment unit of IL plus metadata, usually a .dll or .exe file.",
+              "example": "MyApp.Domain.dll holds domain types and their metadata."
+            },
+            {
+              "term": "Metadata",
+              "longForm": "CLR metadata",
+              "plainDefinition": "Structured description of types and members stored inside the assembly.",
+              "example": "Reflection reads metadata to list public methods on a type."
+            },
+            {
+              "term": "InternalsVisibleTo",
+              "longForm": "InternalsVisibleTo attribute",
+              "plainDefinition": "Assembly-level attribute granting another assembly access to internal types.",
+              "example": "[InternalsVisibleTo(\"MyApp.Tests\")] on the production assembly."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "internal versus InternalsVisibleTo",
-      "prose": "Default accessibility for a non-nested type is `internal`: visible inside this assembly only. Module 04 taught `private`/`protected` on members; friend assemblies sit one level up. `[assembly: InternalsVisibleTo(\"Worker.Tests\")]` grants that named assembly access to every `internal` type and member. Friendship is not transitive. If Tests is a friend of Worker, a helper assembly that references Tests still cannot touch Worker internals. If Worker is strong-named, the attribute must include the friend's public key (not version, culture, or public key token). Unsigned Worker uses the simple name only. This is how you keep CSV parser helpers `internal` while tests assert slicing behavior — without promoting the helper to public API. Do not InternalsVisibleTo a production sibling just to avoid designing a contract; that couples two deployables through a back door.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Friend tests without widening public surface",
-          "code": "using System.Runtime.CompilerServices;\n\n[assembly: InternalsVisibleTo(\"Catalog.Tests\")]\n\ninternal static class RedisKeyFactory\n{\n    internal static string Attempt(string tenantId, string attemptId) =>\n        $\"attempt:{tenantId}:{attemptId}\";\n}",
-          "explanation": "Tests can call RedisKeyFactory. Production hosts that only reference the public package cannot. Signed product assemblies need the test public key in the attribute string."
+          "type": "prose",
+          "text": "Microservices share contracts via assembly references or NuGet packages — versioning and breaking changes are assembly-level concerns. Strong naming and binding redirects solve version mismatches at load time. Test projects use InternalsVisibleTo to test internal helpers without polluting public API surface."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Versus JavaScript modules",
+          "body": "import in Node resolves source files. In .NET, you reference an assembly that can contain hundreds of types with version metadata."
         }
       ]
     },
     {
-      "heading": "Metadata the loader already has",
-      "prose": "Every public and internal type is described in metadata whether you use reflection or not. Attributes, generic parameters, and method signatures are tables in the PE. That is why `typeof(T).Name` is cheap compared with `GetMethod` plus `Invoke`. Source generators (later in this module) read the same facts at compile time through Roslyn symbols instead of spinning up a runtime `Type`. When you explain a worker to an interviewer, separate three layers: C# source, assembly metadata, CLR execution. Confusing them is how people claim “C# is interpreted” or “internal is just a linter.”"
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Assembly loading",
+          "items": [
+            {
+              "title": "Build emits assembly",
+              "body": "Roslyn compiles project to IL + metadata in bin/."
+            },
+            {
+              "title": "Runtime resolves references",
+              "body": "CLR reads deps.json and loads dependent assemblies."
+            },
+            {
+              "title": "Type loader finds types",
+              "body": "Metadata maps type names to IL methods."
+            },
+            {
+              "title": "Just-In-Time compiler compiles methods",
+              "body": "JIT compiles IL to native code on first use."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Assembly contents",
+            "source": "flowchart TB\n  A[Assembly .dll] --> B[Manifest\\nname version]\n  A --> C[IL methods]\n  A --> D[Metadata tables\\ntypes members attrs]\n  A --> E[Resources optional]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "InternalsVisibleTo for tests",
+            "code": "// In MyApp.Domain.csproj or AssemblyInfo:\nusing System.Runtime.CompilerServices;\n\n[assembly: InternalsVisibleTo(\"MyApp.Domain.Tests\")]\n\ninternal sealed class PricingRules\n{\n    internal decimal ApplyDiscount(decimal price) => price * 0.9m;\n}",
+            "explanation": "Tests in the friend assembly can call internal members. Production API stays clean."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Inspect loaded assembly",
+            "code": "var assembly = typeof(Program).Assembly;\nConsole.WriteLine(assembly.FullName);\nforeach (var type in assembly.GetExportedTypes())\n    Console.WriteLine(type.FullName);",
+            "explanation": "GetExportedTypes returns public types defined in this assembly — metadata-driven."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Project reference",
+            "code": "<ItemGroup>\n  <ProjectReference Include=\"..\\MyApp.Domain\\MyApp.Domain.csproj\" />\n</ItemGroup>",
+            "explanation": "Build copies the referenced assembly output. Version comes from the referenced project's properties."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Modules vs assemblies",
+          "headers": ["Aspect", ".NET assembly", "ES module"],
+          "rows": [
+            ["Unit", "DLL with many types", "One file or bundle per import graph"],
+            ["Versioning", "Assembly version, NuGet", "package.json semver"],
+            ["Visibility", "public internal private", "export / no export"],
+            ["Test access", "InternalsVisibleTo", "Test imports same module or mock"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "InternalsVisibleTo with wrong assembly name — tests fail to access internals. Mixing copy-local DLLs with mismatched versions. Assuming one .cs file equals one assembly."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Assemblies are IL + metadata + manifest; NuGet packages ship those units, not TypeScript sources.",
-    "InternalsVisibleTo names a friend by simple name; signed assemblies also require the friend's public key.",
-    "Friendship is not transitive and does not replace a designed public contract between services."
+    "Assembly = IL + metadata + manifest; versioning is at assembly level.",
+    "InternalsVisibleTo exposes internals to friend assemblies like tests.",
+    "Project references and NuGet resolve assembly dependencies."
   ],
   "commonPitfalls": [
-    "Putting version or public key token in InternalsVisibleTo — the compiler wants name + public key for signed friends.",
-    "Making types public so tests compile instead of declaring a friend test assembly.",
-    "Assuming AssemblyC can see AssemblyA internals because it referenced friend AssemblyB."
+    "Wrong friend assembly name in InternalsVisibleTo.",
+    "Version mismatch at runtime — FileNotFoundException.",
+    "Making types public just for tests instead of InternalsVisibleTo."
   ],
   "relatedTopicIds": [
     "csharp-16-attributes",
@@ -55,21 +169,17 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "package.json exports vs assembly identity",
-      "note": "Node package exports hide files from importers. C# internal hides types from other assemblies; InternalsVisibleTo is an explicit exception, closer to a test-only export map than to `exports`.",
-      "futureTopicSlug": "javascript/modules/package-exports"
+      "concept": "npm packages vs NuGet",
+      "note": "npm ships source or bundled JS. NuGet ships compiled assemblies with metadata the CLR loads.",
+      "futureTopicSlug": "javascript/modules/packages"
     }
   ],
   "officialSources": [
-    {
-      "title": "Friend assemblies",
-      "url": "https://learn.microsoft.com/en-us/dotnet/standard/assembly/friend"
-    },
     {
       "title": "Assemblies in .NET",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/assembly/"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "redis-cache"
+  "scenarioTag": "redis-cache",
+  "animationHint": "flow"
 }

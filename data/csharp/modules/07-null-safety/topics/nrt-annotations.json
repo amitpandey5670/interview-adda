@@ -1,41 +1,176 @@
 {
   "id": "csharp-07-nrt-annotations",
   "slug": "nrt-annotations",
-  "title": "NRT annotations, #nullable, and compiler warnings",
+  "title": "NRT annotations, #nullable, and compiler warnings (nullable reference types)",
   "moduleId": "csharp-07-null-safety",
   "order": 2,
-  "hook": "Nullable reference types are a compiler conversation: you annotate intent, the compiler tracks not-null versus maybe-null, and it warns when the code disagrees. It does not rewrite IL to ban null.",
+  "hook": "Nullable reference types are a conversation between you and the compiler. You mark which references might be null; the compiler warns when your code disagrees. Nothing changes at run time.",
   "sections": [
     {
-      "heading": "Nullable context",
-      "prose": "SDK templates for modern .NET, including .NET 10, set <Nullable>enable</Nullable> in the project file. That turns on both the annotation context (string versus string?) and the warning context (CS8600-family diagnostics). Older libraries may still be nullable-oblivious: their string parameters are treated as neither annotated nor warned, which is why a Redis client or AWS SDK method can return string and still be null. File-level #nullable enable, disable, restore, and #nullable enable warnings let you migrate a large worker without boiling the ocean. Interviews want the project switch first, pragmas for islands, not a pile of !.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Annotate a cache lookup",
-          "code": "#nullable enable\nstring BuildKey(string tenantId, string userId) => $\"session:{tenantId}:{userId}\";\n\nstring? ReadSessionJson(IDatabase redis, string key)\n{\n    RedisValue value = redis.StringGet(key);\n    return value.HasValue ? value.ToString() : null;\n}\n\nint SessionLength(string? json) => json is not null ? json.Length : 0;",
-          "explanation": "BuildKey is non-nullable: a null tenantId is a warning. Redis miss is string?. Pattern matching updates null-state so json.Length is safe."
+          "type": "prose",
+          "text": "**Nullable reference types (NRT)** add `?` to reference types like `string` and `List<T>` so you can express intent: this variable should never be null, or it might be. The compiler tracks **null-state** — whether an expression is *not-null* or *maybe-null* — as it walks your method. When code and annotations disagree, you get warnings in the CS8600 family. These are diagnostics, not runtime checks."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "NRT",
+              "shortForm": "NRT",
+              "longForm": "Nullable reference types",
+              "plainDefinition": "A C# 8+ feature that annotates reference types with ? and enables compiler warnings about possible null misuse.",
+              "example": "`string name` means “should not be null”; `string? nickname` means “might be null.”"
+            },
+            {
+              "term": "Nullable context",
+              "longForm": "Nullable context",
+              "plainDefinition": "Project or file setting that turns annotation and warning contexts on or off.",
+              "example": "`<Nullable>enable</Nullable>` in the .csproj enables both contexts project-wide."
+            },
+            {
+              "term": "Null-state",
+              "longForm": "Null-state analysis",
+              "plainDefinition": "The compiler’s label for each expression: not-null (safe to dereference) or maybe-null (needs a check).",
+              "example": "After `if (x is not null)`, x’s null-state becomes not-null inside the block."
+            },
+            {
+              "term": "CS8602",
+              "longForm": "CS8602 warning",
+              "plainDefinition": "Dereference of a possibly null reference. Means you used `.Length`, `.Count`, etc. while the compiler still sees maybe-null.",
+              "example": "Fix with a null check, a corrected annotation, or a documented attribute — not `#pragma warning disable`."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What the warnings actually mean",
-      "prose": "Null-state analysis labels each expression not-null or maybe-null as it walks the method. Warning on a non-nullable variable means you assigned something maybe-null (CS8600 / CS8601). Warning on a nullable variable means you dereferenced it while it was still maybe-null (CS8602). Both say the same thing: the code does not match the annotation. Fixes Microsoft documents are: add a check, fix the ? or !, add an analysis attribute, initialize the field, or verify the project setting. Silencing with #pragma warning disable CS8602 is not a strategy; it is how an auth header parser ships an NRE to production."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Modern .NET project templates enable NRT by default. A warning-clean build means your *source code* matches your intent — it does not mean Redis, JSON deserializers, or third-party libraries cannot still hand you null at run time. Treat NRT as design-time documentation enforced by the compiler, then add runtime guards at process boundaries."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Enable order of operations",
+          "body": "1) Turn on `<Nullable>enable</Nullable>` in the project. 2) Fix warnings with real checks and correct `?` annotations. 3) Use `#nullable` pragmas only for legacy file islands. 4) Reach for `!` only when you can prove what the analyzer cannot see."
+        }
+      ]
     },
     {
-      "heading": "Initialization and records",
-      "prose": "Non-nullable reference fields must be assigned by every constructor path. Object initializers do not count unless the member is required (next topic). A common Redis options class with public string Connection = null!; is a smell: you told the compiler to stop looking. Prefer a constructor, a required property, or string? until the config binder has run. C# 14 field-backed properties still obey the same null-state rules on the backing storage — new syntax, same analysis."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Compiler null-state flow",
+          "items": [
+            {
+              "title": "Read the annotation",
+              "body": "`string` starts as not-null intent. `string?` starts as maybe-null. Unannotated code from older libraries is nullable-oblivious."
+            },
+            {
+              "title": "Track assignments",
+              "body": "Assigning a `string?` to a `string` triggers CS8600/CS8601. The compiler sees a maybe-null value going into a not-null slot."
+            },
+            {
+              "title": "Apply flow analysis",
+              "body": "`if (x is not null)`, `?.`, `??`, and `ThrowIfNull` update null-state so later dereferences are safe."
+            },
+            {
+              "title": "Warn on mismatch",
+              "body": "Dereferencing while maybe-null gives CS8602. The fix is always: change the annotation, add a check, or teach the analyzer with an attribute."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "NRT warning pipeline",
+            "source": "flowchart LR\n  A[Project Nullable enable] --> B[Annotate string vs string?]\n  B --> C[Flow analysis per method]\n  C --> D{Code matches annotation?}\n  D -->|yes| E[Clean build]\n  D -->|no| F[CS8600 family warnings]\n  F --> G[Fix: check / ? / attribute]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Project switch and file pragma",
+            "code": "// In .csproj:\n// <Nullable>enable</Nullable>\n\n#nullable enable\nstring BuildKey(string tenantId, string userId)\n    => $\"session:{tenantId}:{userId}\";\n\n#nullable disable\n// Legacy generated code island — no NRT warnings here\n#nullable restore",
+            "explanation": "Line comment: project-wide enable is the primary switch. Line 4: file-level `#nullable enable` for mixed migrations. Lines 8–9: disable/restore wraps legacy code without turning warnings off for the whole project."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Redis cache lookup with annotations",
+            "code": "string? ReadSessionJson(IDatabase redis, string key)\n{\n    RedisValue value = redis.StringGet(key);\n    return value.HasValue ? value.ToString() : null;\n}\n\nint SessionLength(string? json)\n    => json is not null ? json.Length : 0;",
+            "explanation": "Line 1: return type `string?` models a cache miss. Line 4: explicit null on miss. Line 7: `is not null` narrows null-state — no warning on `.Length`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Avoid null! initialization smell",
+            "code": "// Smell: silencing the compiler without proof\npublic sealed class BadOptions\n{\n    public string Connection = null!;\n}\n\n// Better: constructor or required property\npublic sealed class GoodOptions\n{\n    public required string Connection { get; init; }\n}",
+            "explanation": "Line 4: `null!` tells the compiler “trust me” with no guarantee. Lines 9–11: `required` forces callers to supply `Connection` in an object initializer — a real contract."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "NRT vs TypeScript strictNullChecks",
+          "headers": ["Feature", "C# NRT", "TypeScript strictNullChecks"],
+          "rows": [
+            ["Enable switch", "`<Nullable>enable</Nullable>` in .csproj", "`strictNullChecks: true` in tsconfig"],
+            ["Per-file control", "`#nullable enable/disable/restore`", "No direct pragma; split files or use `@ts-nocheck`"],
+            ["Run-time effect", "None on reference types", "None — types erased"],
+            ["Flow narrowing", "`is not null`, `ThrowIfNull`, attributes", "`if (x)`, type guards, assertion functions"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Trusting nullable-oblivious library returns",
+          "body": "Older Redis, AWS, or JSON APIs may return plain `string` without `?`. The compiler treats them as oblivious — not guaranteed non-null. Validate at the boundary anyway."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Sprinkling null! to green the build",
+          "body": "Every `null!` is a promise you must keep at run time. A project full of them is a map of future NullReferenceException pages."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "<Nullable>enable</Nullable> is the project-wide switch; #nullable is per file.",
+    "`<Nullable>enable</Nullable>` is the project-wide switch; `#nullable` is per-file.",
     "Warnings encode mismatched intent, not a runtime null ban.",
-    "if (x is not null) / is { } narrows null-state; the compiler is not psychic across helpers unless you annotate them."
+    "`if (x is not null)` narrows null-state; the compiler does not track across unannotated helpers."
   ],
   "commonPitfalls": [
-    "Leaving a library nullable-oblivious and trusting its string return as non-null.",
-    "Initializing with null! on every field to ‘make the build green.’",
-    "Dereferencing SQS Message.Body without a check because the AWS types were annotated loosely."
+    "Leaving a library nullable-oblivious and trusting its `string` return as non-null.",
+    "Initializing every field with `null!` to make the build green.",
+    "Dereferencing SQS Message.Body without a check because AWS types were annotated loosely."
   ],
   "relatedTopicIds": [
     "csharp-07-nullable-value-vs-reference",
@@ -48,7 +183,7 @@
     {
       "language": "typescript",
       "concept": "strictNullChecks and tsconfig",
-      "note": "strictNullChecks is the TS analogue of <Nullable>enable</Nullable>. Both are compiler modes, not runtime checks.",
+      "note": "TypeScript `strictNullChecks` is the closest analogue to `<Nullable>enable</Nullable>`. Both are compiler modes, not runtime checks.",
       "futureTopicSlug": "typescript/compiler/strict-null-checks"
     }
   ],

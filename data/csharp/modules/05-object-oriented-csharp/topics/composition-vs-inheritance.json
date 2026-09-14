@@ -1,36 +1,164 @@
 {
   "id": "csharp-05-composition-vs-inheritance",
   "slug": "composition-vs-inheritance",
-  "title": "Composition versus inheritance",
+  "title": "Composition versus inheritance (has-a vs is-a)",
   "moduleId": "csharp-05-object-oriented-csharp",
   "order": 1,
-  "hook": "A microservice host is a composition root: it owns collaborators, not a family tree. Inheritance is a scalpel for one is-a relationship with a virtual surface. C# forces the choice because you get only one base class.",
+  "hook": "When you build a service, you usually wire up collaborators instead of extending a giant base class. C# lets you inherit from only one class, so choosing composition early keeps your design flexible.",
   "sections": [
     {
-      "heading": "What composition looks like in production",
-      "prose": "An SQS consumer that grades attempts does not inherit from RedisCache and RabbitPublisher. It receives IAttemptStore, IBus, and IClock through a constructor (module 04) and calls them. That is composition: has-a, replaceable in tests, versioned independently. Inheritance couples your type to a constructor chain and a protected surface you must keep forever. Across service boundaries, composition is how you stay deployable."
-    },
-    {
-      "heading": "When inheritance still wins",
-      "prose": "Use a base class when many types share algorithm steps with variation points — a Template Method with protected abstract hooks — and you control all derived types in one assembly. A family of auth providers that only differ in how they parse a token can share validation and clock skew in a base, with sealed derived LtiProvider and OidcProvider. If the variation is a dependency (HTTP vs in-memory), inject it instead of subclassing.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Compose a worker; inherit only the parser family",
-          "code": "sealed class AttemptWorker(\n    IAttemptStore store,\n    IBus bus,\n    TokenParser parser)\n{\n    public async Task HandleAsync(string messageId, string body, CancellationToken ct)\n    {\n        var token = parser.Parse(body);\n        await store.SaveAsync(token.AttemptId, ct);\n        await bus.PublishAsync(token.AttemptId, ct);\n    }\n}\n\nabstract class TokenParser\n{\n    public AuthToken Parse(string raw) => ParseCore(raw);\n    protected abstract AuthToken ParseCore(string raw);\n}",
-          "explanation": "The worker is sealed and composed. TokenParser is a narrow hierarchy for parsing variation. Redis and the bus stay interfaces, not base classes."
+          "type": "prose",
+          "text": "**Composition** means your type *has* other objects — you store them in fields and call them through interfaces. **Inheritance** means your type *is a* specialized version of a base type — you extend a parent class and reuse its members. In a microservice worker, composition is the default: inject an `IAttemptStore`, an `IBus`, and a `IClock` rather than subclassing `BaseWorker`."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "composition",
+              "longForm": "composition",
+              "plainDefinition": "Building a type by combining other objects (has-a). Dependencies are injected or created inside the type.",
+              "example": "`AttemptWorker` holds an `IAttemptStore` and calls `store.SaveAsync(...)`."
+            },
+            {
+              "term": "inheritance",
+              "longForm": "inheritance",
+              "plainDefinition": "Deriving a new class from a base class (is-a). The derived type gets the base's accessible members.",
+              "example": "`class LtiHandler : AuthHandler` — LtiHandler is a kind of AuthHandler."
+            },
+            {
+              "term": "composition root",
+              "longForm": "composition root",
+              "plainDefinition": "The place in your application where all dependencies are wired together — usually the host or startup code.",
+              "example": "`builder.Services.AddSingleton<IAttemptStore, SqlAttemptStore>();`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Interview phrasing",
-      "prose": "Say: “I inherit for polymorphism I own; I compose for infrastructure I replace.” Follow with C#’s single base class and interfaces for extra capabilities (next topics). Do not recite the GoF book; point at a worker you have shipped."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Deep inheritance trees couple every derived type to a constructor chain and a protected surface you must keep forever. In production services, that makes versioning painful: changing the base class can break every child. Composition lets you swap implementations — swap Redis for SQL, swap RabbitMQ for an in-memory bus — without touching the worker's class hierarchy. C# reinforces this: you get **one** base class, so wasting it on infrastructure is expensive."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "The interview sentence",
+          "body": "Say: \"I inherit for polymorphism I own; I compose for infrastructure I replace.\" Then point at a real worker you have shipped, not a textbook diagram."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing composition or inheritance",
+          "items": [
+            {
+              "title": "Ask: is this a genuine is-a relationship?",
+              "body": "If `LtiHandler` truly is an `AuthHandler` with shared validation steps, inheritance may fit. If the worker just needs to call a store, that is has-a — use composition."
+            },
+            {
+              "title": "Prefer interfaces for replaceable dependencies",
+              "body": "Declare `IAttemptStore` and `IBus` as constructor parameters. The worker depends on contracts, not concrete types."
+            },
+            {
+              "title": "Keep hierarchies small and sealed",
+              "body": "If you do inherit, seal derived types when the set is closed. A sealed `LtiHandler` on an abstract `AuthHandler` is a common production pattern."
+            },
+            {
+              "title": "Wire everything at the composition root",
+              "body": "The host registers implementations. The worker never chooses between Redis and SQL — it just calls the interface."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Composition versus inheritance in a worker",
+            "source": "flowchart TD\n  subgraph compose [Composition — preferred]\n    W[AttemptWorker] -->|uses| S[IAttemptStore]\n    W -->|uses| B[IBus]\n    W -->|uses| P[TokenParser]\n  end\n  subgraph inherit [Inheritance — narrow use]\n    AH[abstract AuthHandler] --> LH[sealed LtiHandler]\n    AH --> OH[sealed OidcHandler]\n  end\n  W -.->|may call| LH"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Compose a worker with injected collaborators",
+            "code": "sealed class AttemptWorker(\n    IAttemptStore store,\n    IBus bus,\n    IClock clock)\n{\n    public async Task HandleAsync(string messageId, string body, CancellationToken ct)\n    {\n        var attempt = new Attempt(messageId, clock.UtcNow);\n        await store.SaveAsync(attempt, ct);\n        await bus.PublishAsync(attempt.Id, ct);\n    }\n}",
+            "explanation": "Line 1: primary constructor captures three interfaces — composition, not inheritance. Line 7: the worker creates domain data. Lines 8–9: it delegates to collaborators it does not own. You can swap `SqlAttemptStore` for `RedisAttemptStore` in tests without subclassing `AttemptWorker`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Inherit only for a narrow parser family",
+            "code": "abstract class TokenParser\n{\n    public AuthToken Parse(string raw)\n    {\n        if (string.IsNullOrWhiteSpace(raw))\n            throw new ArgumentException(\"Token required\");\n        return ParseCore(raw);\n    }\n    protected abstract AuthToken ParseCore(string raw);\n}\n\nsealed class LtiTokenParser : TokenParser\n{\n    protected override AuthToken ParseCore(string raw) =>\n        new AuthToken(raw, \"lti\");\n}",
+            "explanation": "Line 1: abstract base shares validation (Template Method). Line 8: `ParseCore` is the variation point. Line 11: `LtiTokenParser` is sealed — no further derivation. The worker composes a `TokenParser`; it does not inherit from one."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Anti-pattern: BaseService dumping ground",
+            "code": "// Avoid this pattern in services\nabstract class BaseService\n{\n    protected ILogger Logger { get; } = /* ... */;\n    protected HttpClient Http { get; } = /* ... */;\n    protected ICache Cache { get; } = /* ... */;\n    protected void LogAndCache(string key, object value) { /* ... */ }\n}\n\nclass GradingService : BaseService { /* inherits everything */ }",
+            "explanation": "Line 2: `BaseService` accumulates unrelated concerns. Line 9: `GradingService` is coupled to logging, HTTP, and caching even if it only needs one. Replace with constructor injection of the specific interfaces each service actually uses."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Composition vs inheritance across languages",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Default service style", "Constructor injection of interfaces", "Module imports or dependency injection libraries"],
+            ["Multiple parents", "One base class; many interfaces", "Prototypes or TS mixins fake multiple inheritance"],
+            ["Replaceability", "Swap implementation at composition root", "Same idea with DI containers or manual wiring"],
+            ["Base class limit", "Compiler enforces single inheritance", "extends one class; mixins are a workaround"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "BaseService anti-pattern",
+          "body": "A `BaseService` that grows logging, HTTP, caching, and database helpers becomes a dumping ground. Every derived service inherits baggage it does not need. Extract shared behavior into small, focused services or extension methods instead."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Subclassing to tweak one method",
+          "body": "If you subclass just to override one method, consider a strategy object or delegate instead. In C#, every subclass consumes your single base-class slot and adds a compatibility promise."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Composition is has-a via constructor injection; inheritance is is-a with one base.",
-    "Microservices stay composition-heavy; hierarchies stay small and in-process.",
-    "Interfaces (later topic) are how C# adds extra roles without a second base class."
+    "Composition is has-a via constructor injection; inheritance is is-a with one base class.",
+    "Microservices stay composition-heavy; class hierarchies stay small and in-process.",
+    "Interfaces are how C# adds extra capabilities without a second base class."
   ],
   "commonPitfalls": [
     "BaseService that becomes a dumping ground for logging, HTTP, and caching.",
@@ -45,13 +173,13 @@
     {
       "language": "javascript",
       "concept": "prototype chains versus composition",
-      "note": "JS historically piled behavior on prototypes. Modern JS/TS services compose modules the same way C# workers compose interfaces.",
+      "note": "JavaScript historically piled behavior on prototypes. Modern JS and TypeScript services compose modules the same way C# workers compose interfaces.",
       "futureTopicSlug": "javascript/objects/prototypes"
     },
     {
       "language": "typescript",
       "concept": "mixins",
-      "note": "TS mixins fake multiple inheritance. C# uses interfaces plus composition; there is no mixin keyword.",
+      "note": "TypeScript mixins fake multiple inheritance. C# uses interfaces plus composition; there is no mixin keyword.",
       "futureTopicSlug": "typescript/classes/mixins"
     }
   ],

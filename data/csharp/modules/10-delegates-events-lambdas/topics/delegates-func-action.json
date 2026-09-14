@@ -1,38 +1,168 @@
 {
   "id": "csharp-10-delegates-func-action",
   "slug": "delegates-func-action",
-  "title": "Delegates, Func, Action, multicast",
+  "title": "Delegates, Func, and Action (typed method references and multicast)",
   "moduleId": "csharp-10-delegates-events-lambdas",
   "order": 1,
-  "hook": "A RabbitMQ offload pipeline is a typed callback graph: ack, metrics, and poison routing are methods you bind, combine, and invoke — not strings you eval.",
+  "hook": "A delegate is a type that holds a reference to a method with a matching signature. When a message queue handler needs to ack, log metrics, and route poison messages, you bind those methods to delegates instead of calling them by name everywhere.",
   "sections": [
     {
-      "heading": "A delegate is a type, not a function pointer you invent at runtime",
-      "prose": "Microsoft’s programming guide defines a delegate as a type that represents references to methods with a particular parameter list and return type. You declare the shape once, then instantiate it against any accessible static or instance method that is compatible. Unlike JavaScript, the CLR stores the target object with the method for instance bindings. Delegate compatibility includes the return type; method-overload matching does not. That distinction is a common interview trap.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Named delegate versus Func on a queue handler",
-          "code": "public delegate void MessageHandler(string receiptHandle, ReadOnlyMemory<byte> body);\n\npublic sealed class RabbitOffload\n{\n    public MessageHandler? OnMessage { get; set; }\n\n    public void Dispatch(string handle, ReadOnlyMemory<byte> body)\n        => OnMessage?.Invoke(handle, body);\n}\n\nFunc<string, ReadOnlyMemory<byte>, bool> shouldAck =\n    static (handle, body) => body.Length > 0;",
-          "explanation": "The named delegate documents a domain callback. Func is enough when the shape is generic plumbing. static on the lambda proves this ack predicate captures nothing."
+          "type": "prose",
+          "text": "A **delegate** is a Common Language Runtime (CLR) type that represents a reference to a method with a particular parameter list and return type. You declare the shape once, then create instances that point at static or instance methods. Unlike JavaScript, where every function is already a value, a C# method becomes a value only when you assign it to a delegate. **Func** and **Action** are built-in generic delegate types for the most common shapes: Func returns a value; Action returns void."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "delegate",
+              "longForm": "delegate type",
+              "plainDefinition": "A sealed type that stores a method reference plus an optional target object for instance methods.",
+              "example": "Action<string> log = Console.WriteLine;"
+            },
+            {
+              "term": "Func",
+              "longForm": "Func delegate",
+              "plainDefinition": "A generic delegate whose last type parameter is the return type. Func<int, bool> takes an int and returns bool.",
+              "example": "Func<string, int> parse = int.Parse;"
+            },
+            {
+              "term": "Action",
+              "longForm": "Action delegate",
+              "plainDefinition": "A generic delegate that returns void (no return value). Action<string> takes one string argument.",
+              "example": "Action<string> notify = id => Console.WriteLine(id);"
+            },
+            {
+              "term": "multicast",
+              "longForm": "multicast delegate",
+              "plainDefinition": "A delegate whose invocation list contains more than one method. Combining with + or += calls each handler in order.",
+              "example": "processed += LogMetrics; processed += SendAck;"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "Func, Action, Predicate, and multicast",
-      "prose": "Action is void. Func returns TResult as its last type argument. Predicate<T> is a named Func<T,bool>. Combining two delegates with + or += allocates a new multicast delegate whose invocation list is the concatenation. Invoke walks that list left to right, synchronously. If a metrics handler throws, later ack handlers never run unless you iterate GetInvocationList() yourself. Combine and remove are not atomic; a worker thread that += while another invokes can drop a handler. Copy the field to a local before invoke — the classic null-safe raise.",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Multicast raise that isolates handler failures",
-          "code": "public void RaiseProcessed(string messageId)\n{\n    var handlers = Processed;\n    if (handlers is null) return;\n\n    foreach (var d in handlers.GetInvocationList())\n    {\n        try\n        {\n            ((Action<string>)d)(messageId);\n        }\n        catch (Exception ex)\n        {\n            Console.Error.WriteLine($\"handler failed for {messageId}: {ex.Message}\");\n        }\n    }\n}\n\npublic event Action<string>? Processed;",
-          "explanation": "GetInvocationList snapshots subscribers. Catching per entry is how a fan-out still completes when one listener is broken."
+          "type": "prose",
+          "text": "Delegates are how C# expresses callbacks, event handlers, and middleware pipelines. A RabbitMQ consumer that runs ack, metrics, and poison routing as separate methods stays testable because each step is a typed delegate, not a string you eval. The signature includes the **return type** — a common interview trap is assuming overload rules apply; they do not. Two methods that differ only by return type cannot share one delegate type."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to use a custom delegate type",
+          "body": "Prefer Func and Action for generic plumbing. Use a named delegate when the type name is part of your public contract — especially for domain events like MessageHandler or TryParseId with ref/out parameters."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From method to invocation",
+          "items": [
+            {
+              "title": "Declare or choose a delegate type",
+              "body": "Use Func/Action for common shapes, or declare a custom delegate that names the contract."
+            },
+            {
+              "title": "Bind a method group",
+              "body": "Assign a compatible static or instance method. The compiler stores the target object for instance methods."
+            },
+            {
+              "title": "Combine for multicast",
+              "body": "Use += or + to append handlers. Each combination allocates a new invocation list."
+            },
+            {
+              "title": "Invoke safely",
+              "body": "Copy the delegate field to a local variable before Invoke to avoid a race with unsubscription. Use GetInvocationList to isolate handler failures."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Multicast invocation flow",
+            "source": "flowchart LR\n  A[Delegate field] --> B[Copy to local]\n  B --> C{Has subscribers?}\n  C -->|no| D[No-op]\n  C -->|yes| E[Handler 1]\n  E --> F[Handler 2]\n  F --> G[Handler 3]\n  E -.->|throws| H[Later handlers skipped unless GetInvocationList]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Named delegate versus Func on a queue handler",
+            "code": "public delegate void MessageHandler(string receiptHandle, ReadOnlyMemory<byte> body);\n\npublic sealed class RabbitOffload\n{\n    public MessageHandler? OnMessage { get; set; }\n\n    public void Dispatch(string handle, ReadOnlyMemory<byte> body)\n        => OnMessage?.Invoke(handle, body);\n}\n\nFunc<string, ReadOnlyMemory<byte>, bool> shouldAck =\n    static (handle, body) => body.Length > 0;",
+            "explanation": "Line 1: a named delegate documents a domain callback. Line 10: Func is enough for generic plumbing. Line 11: static on the lambda proves the predicate captures nothing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Func versus Action and Predicate",
+            "code": "Func<int, int, int> add = (a, b) => a + b;\nAction<string> log = msg => Console.WriteLine(msg);\nPredicate<int> isEven = n => n % 2 == 0; // Predicate<T> is Func<T, bool>\n\nint sum = add(3, 4);       // 7\nlog(\"processed\");          // writes to console\nbool even = isEven(10);    // true",
+            "explanation": "Line 1: Func's last type argument is the return type. Line 2: Action returns void. Line 3: Predicate<T> is a named alias for Func<T, bool>."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Multicast raise that isolates handler failures",
+            "code": "public event Action<string>? Processed;\n\npublic void RaiseProcessed(string messageId)\n{\n    var handlers = Processed;\n    if (handlers is null) return;\n\n    foreach (var d in handlers.GetInvocationList())\n    {\n        try { ((Action<string>)d)(messageId); }\n        catch (Exception ex)\n        {\n            Console.Error.WriteLine($\"handler failed for {messageId}: {ex.Message}\");\n        }\n    }\n}",
+            "explanation": "Line 4: snapshot the field to a local before invoke. Line 7: GetInvocationList returns individual delegates so one failure does not abort the rest."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Delegates in C# vs JS/TS functions",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Functions as values", "Methods become values only when bound to a delegate", "Every function is already an object you can pass around"],
+            ["Type checking", "CLR validates signature at compile time and runtime", "JS has no compile-time checks; TS checks are erased at runtime"],
+            ["Multicast", "Built into delegate types with + and +=", "You build your own array of listeners"],
+            ["Return type in signature", "Part of delegate compatibility", "Not part of JS function identity; TS includes it in types"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Public delegate field instead of event",
+          "body": "A public delegate property lets any caller assign null and wipe every handler. Use the event keyword when outsiders should only += and -=."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming -= removes all matching handlers",
+          "body": "-= removes one matching entry from the end of the invocation list, not every equal handler. Loop carefully when cleaning up."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Delegate signature includes return type; overload resolution does not.",
+    "Delegate signature includes return type; overload resolution does not apply.",
     "Func/Action are the default; custom delegates name a contract.",
     "Multicast is synchronous; one throw stops the rest unless you walk GetInvocationList.",
     "Snapshot the delegate field to a local before invoke to avoid a race with unsubscription."
@@ -53,13 +183,13 @@
     {
       "language": "javascript",
       "concept": "First-class functions and .bind",
-      "note": "JS functions are values; C# methods become values only when bound to a delegate. JS has no multicast type — you compose arrays of functions yourself.",
+      "note": "JavaScript functions are values you pass freely. C# methods become values only when bound to a delegate. JavaScript has no built-in multicast type — you compose arrays of functions yourself.",
       "futureTopicSlug": "javascript/functions/first-class"
     },
     {
       "language": "typescript",
       "concept": "Function type aliases",
-      "note": "type Handler = (id: string) => void is erased at runtime. A C# delegate remains metadata the CLR checks.",
+      "note": "type Handler = (id: string) => void is erased at runtime. A C# delegate remains metadata the CLR checks when you invoke it.",
       "futureTopicSlug": "typescript/types/function-types"
     }
   ],

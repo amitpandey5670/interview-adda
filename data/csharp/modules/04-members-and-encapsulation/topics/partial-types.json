@@ -1,35 +1,169 @@
 {
   "id": "csharp-04-partial-types",
   "slug": "partial-types",
-  "title": "Partial types",
+  "title": "Partial types (splitting one type across files)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 10,
-  "hook": "partial splits one type across files so a generator can own a slice and you can own the rest. C# 14 extends that idea to partial constructors and partial events.",
+  "hook": "The `partial` keyword lets one type live in multiple files. Source generators write one part; you write another — without merge conflicts or duplicate type names.",
   "introducedIn": "C# 14",
   "sections": [
     {
-      "heading": "Partial classes and methods",
-      "prose": "partial class (and struct, interface, record) means every part shares the same type identity. Source generators emit one part; you write another. Partial methods used to be void, private, and erasable if unimplemented. Later C# versions allow richer partial methods with implementations required. Use partial to keep generated CSV mapping or protobuf stubs out of your git-owned logic — not as a substitute for composition."
-    },
-    {
-      "heading": "C# 14: partial constructors and events",
-      "prose": "C# 14 lets instance constructors and events be partial. There is exactly one defining declaration and one implementing declaration. Only the implementing constructor may have this() or base(). Only one part may declare a primary constructor. A partial event’s defining part looks field-like; the implementing part supplies add and remove. That is how a generator can declare the surface and your file can wire RabbitMQ subscription add/remove without colliding.",
-      "snippets": [
+      "heading": "What is a partial type?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Partial type with C# 14 constructor split",
-          "code": "// Worker.Generated.cs\npublic partial class CsvWorker\n{\n    public partial CsvWorker(string path);\n}\n\n// Worker.cs\npublic partial class CsvWorker\n{\n    private readonly string _path;\n    public partial CsvWorker(string path)\n    {\n        _path = path;\n    }\n}",
-          "explanation": "The generated file declares the constructor. Your file implements it. One primary constructor across all parts is the C# 14 rule."
+          "type": "prose",
+          "text": "A **partial type** is a class, struct, interface, or record split across multiple source files. Every part uses the `partial` keyword and shares the same type name and namespace. The compiler merges them into one type. This is the standard pattern for **source generators** — tools that emit code at compile time."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "partial",
+              "longForm": "partial type modifier",
+              "plainDefinition": "A keyword that marks one piece of a type definition. All parts compile into a single type.",
+              "example": "`public partial class CsvWorker { ... }` in two files."
+            },
+            {
+              "term": "source generator",
+              "longForm": "source generator",
+              "plainDefinition": "A compile-time tool that reads your code and emits additional C# files. Often uses `partial` types.",
+              "example": "A generator that creates CSV column-mapping code from attributes."
+            },
+            {
+              "term": "partial method",
+              "longForm": "partial method",
+              "plainDefinition": "A method split between a declaration (often in generated code) and an implementation (in your code).",
+              "example": "`partial void OnRowParsed(string row);` — you implement it; generator calls it."
+            },
+            {
+              "term": "partial constructor",
+              "longForm": "partial constructor (C# 14)",
+              "plainDefinition": "A constructor split between a defining declaration and an implementing body in different files.",
+              "example": "Generator declares `public partial CsvWorker(string path);` — you write the body."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "file-local plus partial",
-      "prose": "Generators often combine file types (previous access-modifiers topic) with partial public types. Consumers see one public worker; helpers stay file-local. Events as a programming model (delegates, add/remove, extension members) wait for module 10. You only need to know here that the declaration can be split."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Without `partial`, a source generator would have to rewrite your entire file on every build — wiping your hand-written logic. Partial types let the generator own its slice while you own yours. C# 14 extended `partial` to constructors and events, so generators can declare surfaces and you wire the implementation."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Combine with file-local types",
+          "body": "Generators often pair `file`-local helper types (access modifiers topic) with `partial` public types. Consumers see one public worker; helpers stay invisible outside the file."
+        }
+      ]
+    },
+    {
+      "heading": "How partial types work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Partial type rules",
+          "items": [
+            {
+              "title": "Every part must say `partial`",
+              "body": "All files declaring the same type use `partial class`, `partial struct`, etc."
+            },
+            {
+              "title": "One primary constructor across all parts",
+              "body": "C# 14: only one part may declare a primary constructor. Other parts use ordinary or partial constructors."
+            },
+            {
+              "title": "Partial constructor: one definer, one implementer",
+              "body": "The defining part declares the signature. The implementing part provides the body. Only the implementer may use `this()` or `base()`."
+            },
+            {
+              "title": "Partial events (C# 14)",
+              "body": "The defining part looks field-like. The implementing part supplies `add` and `remove` accessors."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Partial type file split",
+            "source": "flowchart LR\n  G[Worker.Generated.cs\\npartial declaration] --> M[Merged type\\nCsvWorker]\n  U[Worker.cs\\npartial implementation] --> M\n  M --> C[Single compiled type]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Partial constructor split (C# 14)",
+            "code": "// Worker.Generated.cs\npublic partial class CsvWorker\n{\n    public partial CsvWorker(string path);\n}\n\n// Worker.cs\npublic partial class CsvWorker\n{\n    private readonly string _path;\n    public partial CsvWorker(string path)\n    {\n        _path = path ?? throw new ArgumentNullException(nameof(path));\n    }\n}",
+            "explanation": "Line 3: generated file declares the constructor signature. Line 10: your file implements it with validation. One type, two files, no merge conflicts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Partial method — generator calls, you implement",
+            "code": "// Mapping.Generated.cs\npublic partial class RowMapper\n{\n    partial void OnMapped(string column, string value);\n\n    public void Map(Dictionary<string, string> row)\n    {\n        foreach (var (col, val) in row)\n            OnMapped(col, val);\n    }\n}\n\n// Mapping.cs\npublic partial class RowMapper\n{\n    partial void OnMapped(string column, string value)\n    {\n        Console.WriteLine($\"{column} = {value}\");\n    }\n}",
+            "explanation": "Line 4: generated code declares and calls `OnMapped`. Line 15: you provide the implementation. If you omit the body, the call is erased (for void partial methods without a body requirement)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Partial event (C# 14)",
+            "code": "// Events.Generated.cs\npublic partial class MessageBus\n{\n    public partial event Action<string>? MessageReceived;\n}\n\n// Events.cs\npublic partial class MessageBus\n{\n    private Action<string>? _messageReceived;\n    public partial event Action<string>? MessageReceived\n    {\n        add => _messageReceived += value;\n        remove => _messageReceived -= value;\n    }\n\n    public void Publish(string msg) => _messageReceived?.Invoke(msg);\n}",
+            "explanation": "Line 3: generated file declares the event surface. Line 9: your file wires `add`/`remove`. Delegates and events in depth are module 10."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Partial types in C# vs JS/TS",
+          "headers": ["Concept", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Split implementation", "`partial` — one runtime type, multiple files", "JS modules and composition — no language-level partial class"],
+            ["Declaration merging", "N/A — all parts must agree on `partial`", "TS interface merging is type-space only, not runtime"],
+            ["Code generation", "Source generators emit `partial` files at compile time", "Build tools generate JS/TS files — no `partial` keyword"],
+            ["Constructor split", "C# 14 partial constructors", "No equivalent — one constructor per class"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Two primary constructors in different parts",
+          "body": "C# 14 allows only one primary constructor across all partial parts. Putting `class Foo(int x)` in two files is a compile error."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Business logic in the generated file",
+          "body": "The next `dotnet build` will overwrite generated code. Keep your logic in the hand-written partial file."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "partial is one type, multiple files — the generator pattern.",
+    "`partial` is one type across multiple files — the generator pattern.",
     "C# 14: partial constructors and partial events, one implementer each.",
     "Only one part may use primary constructor syntax."
   ],
@@ -46,13 +180,13 @@
     {
       "language": "typescript",
       "concept": "declaration merging",
-      "note": "TS interface merging is a type-space feature. C# partial is one runtime type built from several syntactic parts.",
+      "note": "TypeScript interface merging is a type-space feature. C# `partial` is one runtime type built from several syntactic parts.",
       "futureTopicSlug": "typescript/types/declaration-merging"
     },
     {
       "language": "javascript",
       "concept": "no partial types",
-      "note": "JS classes are one declaration (or a runtime mixin). Splitting implementation is modules and composition, not a language-level partial type.",
+      "note": "JavaScript classes are one declaration (or a runtime mixin). Splitting implementation is modules and composition, not a language-level partial type.",
       "futureTopicSlug": "javascript/modules/composition"
     }
   ],

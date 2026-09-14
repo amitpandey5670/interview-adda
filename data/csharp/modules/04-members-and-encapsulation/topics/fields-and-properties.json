@@ -1,41 +1,175 @@
 {
   "id": "csharp-04-fields-and-properties",
   "slug": "fields-and-properties",
-  "title": "Fields and properties",
+  "title": "Fields and properties (state and accessors)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 2,
-  "hook": "Fields store state. Properties are methods in a costume: get, set, and init accessors that you can version without turning every caller into a field-access rewrite. C# 14’s field keyword is the backing store you no longer have to name.",
+  "hook": "Fields store data inside an object. Properties are the public door to that data — they look like fields but can validate, compute, or restrict when values change.",
   "introducedIn": "C# 14",
   "sections": [
     {
-      "heading": "Fields stay private",
-      "prose": "A field is storage. Public fields freeze the binary shape: you cannot add validation, lazy creation, or change-notification later without breaking callers. Constants are compile-time values; static readonly is a runtime one-time assignment. Instance fields plus a constructor (next topics) are how a cache entry or auth ticket holds data. Encapsulation here is not style — the CLR will refuse private access from other types."
-    },
-    {
-      "heading": "get, set, and init",
-      "prose": "get returns the value. set assigns after the object exists — fine for a worker’s retry counter, wrong for an auth token you want frozen after construction. init is a setter that is only legal during construction: a constructor body or an object initializer. Auto-properties ({ get; set; } or { get; init; }) still have a hidden backing field. Expression-bodied accessors are the same members with shorter syntax.",
-      "snippets": [
+      "heading": "What are fields and properties?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "C# 14 field-backed property with validation",
-          "code": "public sealed class RedisEntry\n{\n    public required string Key { get; init; }\n\n    public string Payload\n    {\n        get;\n        set => field = value ?? throw new ArgumentNullException(nameof(value));\n    }\n}",
-          "explanation": "field is the compiler-synthesized backing field. You write validation in set without declaring _payload. Key uses init plus required so callers must supply it in an initializer."
+          "type": "prose",
+          "text": "A **field** is raw storage inside a type — like a drawer in a cabinet. A **property** is a named accessor with `get` (read) and optionally `set` (write) or `init` (write only during construction). Properties let you change how data is stored later without breaking callers. In C# 14, the `field` keyword inside an accessor refers to a compiler-created backing field so you do not have to name `_payload` yourself."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "field",
+              "longForm": "field",
+              "plainDefinition": "A variable declared directly inside a type. Fields hold the actual stored data.",
+              "example": "`private readonly byte[] _hmacKey;` is a field."
+            },
+            {
+              "term": "property",
+              "longForm": "property",
+              "plainDefinition": "A member that exposes data through get/set/init accessors. Callers use it like a field, but you control access.",
+              "example": "`public string Name { get; set; }` is an auto-property."
+            },
+            {
+              "term": "init",
+              "longForm": "init accessor",
+              "plainDefinition": "A setter that only works during object construction — in a constructor or object initializer.",
+              "example": "`public string Key { get; init; }` can be set in `new Entry { Key = \"x\" }` but not later."
+            },
+            {
+              "term": "field keyword",
+              "longForm": "field keyword (C# 14)",
+              "plainDefinition": "A contextual keyword inside a property accessor that refers to the compiler-synthesized backing field.",
+              "example": "`set => field = value ?? throw new ArgumentNullException();`"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "The field keyword and name clashes",
-      "prose": "In C# 14, inside an accessor, the contextual keyword field means the synthesized backing field. You can body get, set, or both. Patterns that used to need a manual field — null-coalescing lazy init, trimming strings, raising PropertyChanged — collapse into the property. If the type already has a member named field, the keyword can change meaning; Microsoft documents @field or this.field as disambiguation, or you rename the old member. This is a real upgrade-time gotcha when moving a codebase to C# 14 / .NET 10."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Public fields freeze your API: once callers read `customer.Name` as a field, you cannot add validation, lazy loading, or change-notification without breaking them. Properties are the versionable surface. The CLR enforces `private` fields — this is not a comment or a convention like TypeScript `private`."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Keep fields private",
+          "body": "Expose data through properties. Use `const` for compile-time constants and `static readonly` for one-time runtime initialization. Instance fields plus a constructor are how a cache entry or auth ticket holds its data."
+        }
+      ]
+    },
+    {
+      "heading": "How get, set, and init work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Property accessor lifecycle",
+          "items": [
+            {
+              "title": "`get` reads the value",
+              "body": "Called when code reads the property. You can compute a value on the fly or return a stored field."
+            },
+            {
+              "title": "`set` mutates after construction",
+              "body": "Called when code assigns to the property after the object exists. Fine for a retry counter; wrong for a token you want frozen after creation."
+            },
+            {
+              "title": "`init` restricts to construction",
+              "body": "Legal only in a constructor body or object initializer. After construction, assignment is a compile error."
+            },
+            {
+              "title": "Auto-properties",
+              "body": "`{ get; set; }` or `{ get; init; }` still have a hidden backing field. Expression-bodied accessors (`=>`) are shorthand for the same thing."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Property accessor flow",
+            "source": "flowchart TD\n  R[Caller reads property] --> G[get accessor]\n  G --> F[Backing field or computed value]\n  W[Caller writes property] --> S{Accessor type?}\n  S -->|set| M[Mutate backing field]\n  S -->|init| C{During construction?}\n  C -->|yes| M\n  C -->|no| E[Compile error]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# 14 field-backed property with validation",
+            "code": "public sealed class RedisEntry\n{\n    public required string Key { get; init; }\n\n    public string Payload\n    {\n        get;\n        set => field = value\n            ?? throw new ArgumentNullException(nameof(value));\n    }\n}",
+            "explanation": "Line 3: `required` plus `init` forces callers to supply `Key` in an object initializer. Line 8: `field` is the compiler-synthesized backing store. Line 9: validation runs on every assignment without declaring `_payload` manually."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Expression-bodied and auto-properties",
+            "code": "public sealed class WorkerConfig\n{\n    public int MaxRetries { get; init; } = 3;\n    public string QueueName { get; init; } = \"default\";\n\n    public string DisplayName =>\n        $\"{QueueName} (retries={MaxRetries})\";\n}",
+            "explanation": "Lines 3–4: auto-properties with default values. Line 6: expression-bodied `get` computes a display string on every read — no backing field needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Avoiding the field keyword name clash",
+            "code": "public sealed class LegacyType\n{\n    public string field { get; set; } = \"member\";\n\n    public string Value\n    {\n        get => @field; // refers to the member above\n        set => field = value; // refers to backing field (C# 14)\n    }\n}",
+            "explanation": "Line 3: an existing member named `field`. Line 8: `@field` disambiguates to the member. Line 9: bare `field` refers to the synthesized backing field. Rename the old member if this confuses your team."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Accessors in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Getter/setter syntax", "`get` / `set` / `init` accessors on properties", "JS `get name()` / `set name(v)` on objects or classes"],
+            ["Construction-only write", "`init` accessor (compile-time enforced)", "No equivalent — use constructor assignment only by convention"],
+            ["Backing field", "Auto-property or C# 14 `field` keyword", "TS `constructor(public name: string)` creates a field automatically"],
+            ["Runtime enforcement", "CLR checks accessibility", "TS `private` is erased; JS `#field` is runtime but not metadata"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Public mutable fields on DTOs",
+          "body": "A public field cannot gain validation later without breaking every caller. Start with private fields and public properties, even on simple data-transfer objects."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "`init` is not thread-safe immutability",
+          "body": "`{ get; init; }` only restricts assignment to construction time. It does not add synchronization. Sharing a mutable class across threads still needs proper concurrency design (module 15)."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Properties are the versionable API; fields are implementation.",
-    "init is not immutable forever — it only restricts assignment to construction. with on records (module 05) copies into a new instance.",
-    "C# 14 field removes most manual backing fields; watch for identifier collisions."
+    "Properties are the versionable API; fields are implementation details kept private.",
+    "`init` restricts assignment to construction — it is not permanent immutability for the whole object lifetime.",
+    "C# 14 `field` removes most manual backing fields; watch for identifier collisions with existing members named `field`."
   ],
   "commonPitfalls": [
     "Public mutable fields on DTOs that later need validation.",
-    "Assuming { get; init; } makes a class safe to share across threads — it does not add synchronization."
+    "Assuming `{ get; init; }` makes a class safe to share across threads."
   ],
   "relatedTopicIds": [
     "csharp-04-constructors-and-required",
@@ -48,13 +182,13 @@
     {
       "language": "javascript",
       "concept": "get/set on objects",
-      "note": "JS getters/setters are similar in spirit but remain a prototype/object feature without CLR accessibility. There is no init accessor.",
+      "note": "JavaScript getters and setters are similar in spirit but remain a prototype feature without CLR accessibility. There is no `init` accessor.",
       "futureTopicSlug": "javascript/objects/accessors"
     },
     {
       "language": "typescript",
       "concept": "parameter properties",
-      "note": "TS constructor(public name: string) creates a field. C# primary constructors plus properties are explicit about backing storage and init versus set.",
+      "note": "TypeScript `constructor(public name: string)` creates a field. C# primary constructors plus explicit properties make backing storage and `init` versus `set` visible in the type definition.",
       "futureTopicSlug": "typescript/classes/parameter-properties"
     }
   ],

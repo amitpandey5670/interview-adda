@@ -1,51 +1,164 @@
 {
   "id": "csharp-17-span-memory",
   "slug": "span-memory",
-  "title": "Span and Memory, including C# 14 conversions",
+  "title": "Span and Memory (including C# 14 conversions)",
   "moduleId": "csharp-17-span-unsafe-interop",
   "order": 1,
-  "hook": "Span is how you point at existing memory without a new string. Memory is how that pointer survives an await. C# 14 finally treats those conversions as first-class in the language.",
+  "hook": "Span<T> is a stack-only view over contiguous memory — arrays, stackalloc buffers, or unmanaged pointers — without copying. Memory<T> is the heap-storable counterpart you can put in fields when Span cannot be stored on the heap.",
   "sections": [
     {
-      "heading": "ref struct versus a heap buffer ticket",
-      "prose": "`Span<T>` and `ReadOnlySpan<T>` are `ref struct` types. They can wrap an array, a stackalloc buffer, unmanaged memory, or a slice of another span. Because they may refer to the stack, the compiler forbids class fields, boxing, and capturing them into an async state machine. `Memory<T>` / `ReadOnlyMemory<T>` are structs that can live on the heap; they are a ticket to later produce a `Span` with `.Span`. Microsoft’s usage guidelines: synchronous APIs take `Span`/`ReadOnlySpan`; asynchronous APIs take `Memory`/`ReadOnlyMemory` and must not use that memory after the `Task` completes. If you own an `IMemoryOwner<T>`, you dispose or transfer ownership — not both. High-concurrency attempt-submit code that `Substring`s every payload field is paying GEN0 for data that already sat in a byte buffer.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Sync span, async memory",
-          "code": "static int CountCommas(ReadOnlySpan<char> line)\n{\n    var n = 0;\n    foreach (var c in line)\n    {\n        if (c == ',') n++;\n    }\n    return n;\n}\n\nstatic async Task<int> CountCommasAsync(ReadOnlyMemory<char> rented, CancellationToken ct)\n{\n    await Task.Yield();\n    ct.ThrowIfCancellationRequested();\n    return CountCommas(rented.Span);\n}",
-          "explanation": "The async method stores Memory, not Span. After await it takes .Span only in a synchronous burst. That is the guideline, not a style preference."
+          "type": "prose",
+          "text": "Span<T> and ReadOnlySpan<T> are ref struct types that reference a memory region with length. Slice without allocating a new array. Memory<T> wraps similar semantics but is a regular struct you can store in async fields. C# 14 improves span conversions and overload resolution for common parsing scenarios. Use spans for parsing, formatting, and protocol work without substring allocations."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Span",
+              "longForm": "Span<T>",
+              "plainDefinition": "Ref struct view over contiguous memory; cannot be stored on the heap.",
+              "example": "ReadOnlySpan<char> lineSpan = line.AsSpan();"
+            },
+            {
+              "term": "Memory",
+              "longForm": "Memory<T>",
+              "plainDefinition": "Heap-friendly buffer abstraction; use Memory<T> in async fields.",
+              "example": "Memory<byte> buffer = new byte[1024];"
+            },
+            {
+              "term": "ref struct",
+              "longForm": "ref struct type",
+              "plainDefinition": "Struct that must live on the stack; cannot be boxed or used as class fields.",
+              "example": "Span<int> cannot be a field on a heap class without Memory<T> wrapper."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "C# 14 implicit span conversions",
-      "prose": "C# 14 introduces first-class support for `Span<T>` and `ReadOnlySpan<T>` in the language: implicit conversions among `ReadOnlySpan<T>`, `Span<T>`, and `T[]`, better extension-method receivers, composition with other conversions, and generic type inference that used to fail. Before that, you wrote `.AsSpan()` everywhere and watched overload resolution pick the `string` API that allocates. Collection expressions (C# 12) already let you write `ReadOnlySpan<char> c = ['a', 'b'];`. C# 13 allowed `params ReadOnlySpan<T>` and `allows ref struct` so generic helpers can accept spans. C# 14 is the conversion story that makes those APIs feel like arrays. Set `introducedIn` in your notes: this is a C# 14 / .NET 10 talking point, not “spans were added last year.”",
-      "snippets": [
+      "heading": "Why does it matter?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Natural span parameters on .NET 10",
-          "code": "static void LogCacheKey(ReadOnlySpan<char> key) => Console.WriteLine(key.ToString());\n\nstring redisKey = \"attempt:t1:a9\";\nchar[] rented = redisKey.ToCharArray();\nLogCacheKey(redisKey.AsSpan());\nLogCacheKey(rented);",
-          "explanation": "On C# 14, array-to-span conversions are implicit in more overload and inference cases. You still use AsSpan on string because string is not T[]."
+          "type": "prose",
+          "text": "High-concurrency APIs parsing headers and tokens allocate less when they slice spans instead of Substring. Module 14 allocation traps — string concat and Substring — have span-based fixes. Interviewers ask Span versus string: Span is a window; string is an immutable heap object."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Span rules",
+          "body": "Span cannot be async method locals that cross await unless converted to Memory. Use Memory<T> or copy to array for fields."
         }
       ]
     },
     {
-      "heading": "C# 13: more places spans are legal",
-      "prose": "`ref` locals and `ref struct` locals may appear in `async` methods and iterators, but not across `await` or `yield return`. `ref struct` types may implement interfaces, yet converting a `ref struct` to the interface type would box and is forbidden. Generic type parameters can opt in with `allows ref struct`. Together these let library code take `Span<T>` where C# 12 forced `T[]` or `IEnumerable<T>`. Interviews that stop at “span cannot be in async” are stuck on C# 12 rules."
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Working with spans",
+          "items": [
+            {
+              "title": "Obtain span",
+              "body": "array.AsSpan(), stackalloc, or Memory.Span property."
+            },
+            {
+              "title": "Slice",
+              "body": "span.Slice(start, length) — no allocation."
+            },
+            {
+              "title": "Parse",
+              "body": "int.TryParse(span, out var n) avoids intermediate strings."
+            },
+            {
+              "title": "Pass to APIs",
+              "body": "Many BCL methods accept ReadOnlySpan<char> since .NET Core."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Span over backing memory",
+            "source": "flowchart LR\n  A[byte array or stackalloc] --> B[Span byte view]\n  B --> C[Slice offset length]\n  C --> D[Parse format consume\\nno new array]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Slice without Substring",
+            "code": "ReadOnlySpan<char> line = \"userId:42,schoolId:7\".AsSpan();\nvar userPart = line.Slice(0, line.IndexOf(','));\nint userId = int.Parse(userPart.Slice(\"userId:\".Length));",
+            "explanation": "No new string objects for each slice — reduces gen-0 pressure versus Substring chains."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Memory for async fields",
+            "code": "private Memory<byte> _rented = ArrayPool<byte>.Shared.Rent(4096);\n\npublic async Task<int> ReadChunkAsync(Stream stream, CancellationToken ct)\n{\n    var memory = _rented[..4096];\n    return await stream.ReadAsync(memory, ct);\n}",
+            "explanation": "Memory<byte> can live in a field and be used with ReadAsync. Span cannot be stored across awaits in the same way."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "TryParse on span",
+            "code": "ReadOnlySpan<char> token = headerSpan.Slice(7); // after \"Bearer \"\nif (!Guid.TryParse(token, out var guid))\n    return Results.Unauthorized();\n",
+            "explanation": "Guid.TryParse overloads accept ReadOnlySpan<char> — auth token parsing without extra strings."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Buffer views",
+          "headers": ["Concept", "C# Span/Memory", "JavaScript"],
+          "rows": [
+            ["View over bytes", "Span<byte>, Memory<byte>", "Uint8Array, Buffer.subarray"],
+            ["String slicing", "ReadOnlySpan<char> no alloc", "substring creates new string"],
+            ["Stack only", "ref struct Span", "TypedArray views on same buffer"],
+            ["Async storage", "Memory<T>", "Keep Buffer reference"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Storing Span in a class field — compile error. Using span after underlying array is returned to pool. Assuming span works across await without Memory conversion."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Span is a ref struct for synchronous views; Memory is the async-safe ticket to a span.",
-    "C# 14 adds implicit conversions among Span, ReadOnlySpan, and arrays.",
-    "C# 13 widened where ref structs may appear; it did not make Span awaitable."
+    "Span is a zero-copy view; Memory is the storable/async-friendly variant.",
+    "Prefer span slicing over Substring on hot paths.",
+    "ref struct cannot live on the heap or cross await as Span."
   ],
   "commonPitfalls": [
-    "Holding a Span across await — the compiler should stop you; a Memory field you keep after the Task completes is a silent use-after-free of a rented buffer.",
-    "Calling ToString() on a span in a hot loop, which allocates the string you were trying to avoid.",
-    "Using Memory when the method is fully synchronous — you lost readonly-ness and invited storage bugs."
+    "Span as instance field on a class.",
+    "Use-after-free when backing array goes back to pool.",
+    "Substring when TryParse on span exists."
   ],
-  "introducedIn": "C# 14",
   "relatedTopicIds": [
     "csharp-17-stackalloc-csv",
     "csharp-17-unsafe-pointers-fixed",
@@ -57,25 +170,17 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "TypedArray subarray vs copy",
-      "note": "`subarray` views the same ArrayBuffer; `slice` copies. Span is the view; ToArray/ToString is the copy. JS has no ref-struct rule because the GC model differs.",
-      "futureTopicSlug": "javascript/binary/typed-arrays"
+      "concept": "Buffer.subarray",
+      "note": "subarray shares underlying memory like Span.Slice. Unlike JS strings, C# spans over char buffers avoid new string allocations.",
+      "futureTopicSlug": "javascript/buffers/typed-arrays"
     }
   ],
   "officialSources": [
     {
       "title": "Memory<T> usage guidelines",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
-    },
-    {
-      "title": "What's new in C# 14 (implicit span conversions)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-14"
-    },
-    {
-      "title": "What's new in C# 13 (ref struct / params collections)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/whats-new/csharp-13"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "high-concurrency"
+  "scenarioTag": "high-concurrency",
+  "animationHint": "stack-heap"
 }

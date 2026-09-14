@@ -1,26 +1,183 @@
 {
   "id": "csharp-13-cancellation-tokens",
   "slug": "cancellation-tokens",
-  "title": "CancellationToken in consumers",
+  "title": "CancellationToken in consumers (cooperative shutdown)",
   "moduleId": "csharp-13-async-await",
   "order": 4,
-  "hook": "CancellationToken is a cooperative flag plus callbacks. SQS and RabbitMQ shutdown only works if every await observes the same token the host cancelled.",
+  "hook": "CancellationToken is a cooperative flag plus callbacks. Queue and HTTP shutdown only works if every await observes the same token the host cancelled.",
   "sections": [
     {
-      "heading": "Cooperative, not preemptive",
-      "prose": "CancellationToken is a struct view over a CancellationTokenSource. Cancel sets IsCancellationRequested and runs registered callbacks. It does not abort a thread. HttpClient, StackExchange.Redis, and AWS SDK calls that take a token will complete early or throw OperationCanceledException. A tight CPU loop must call ThrowIfCancellationRequested itself. For a RabbitMQ or SQS consumer, the generic host’s StoppingToken is the process lifetime. Pass it into the receive loop. When Kubernetes sends SIGTERM, you stop fetching, finish or nack the in-flight message according to policy, then exit before the grace period. Do not create a token source per message and forget to dispose it; use `await using` on linked sources.",
-      "snippets": [
+      "heading": "What is this?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "SQS loop with host token and per-message timeout",
-          "code": "public async Task RunAsync(string queueUrl, CancellationToken stoppingToken)\n{\n    while (!stoppingToken.IsCancellationRequested)\n    {\n        using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);\n        linked.CancelAfter(TimeSpan.FromSeconds(25));\n\n        try\n        {\n            var response = await _sqs.ReceiveMessageAsync(queueUrl, linked.Token);\n            foreach (var message in response.Messages)\n            {\n                await HandleAsync(message, stoppingToken);\n                await _sqs.DeleteMessageAsync(queueUrl, message.ReceiptHandle, stoppingToken);\n            }\n        }\n        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n        {\n            break;\n        }\n        catch (OperationCanceledException)\n        {\n            continue;\n        }\n    }\n}",
-          "explanation": "Linked tokens expire a hung receive without treating host shutdown and a 25-second timeout as the same condition."
+          "type": "prose",
+          "text": "CancellationToken is a lightweight struct that views a CancellationTokenSource. When Cancel is called, IsCancellationRequested becomes true and registered callbacks fire. It does not abort a thread — cancellation is cooperative. HttpClient, StackExchange.Redis, and AWS SDK calls that accept a token will complete early or throw OperationCanceledException. A tight CPU loop must call ThrowIfCancellationRequested itself."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CancellationToken",
+              "plainDefinition": "A struct that signals whether cancellation has been requested. Pass it into async methods.",
+              "example": "await httpClient.GetAsync(url, cancellationToken)",
+              "longForm": "CancellationToken"
+            },
+            {
+              "term": "CancellationTokenSource",
+              "plainDefinition": "The object that owns the cancellation state. Call Cancel() to signal all linked tokens.",
+              "example": "var cts = new CancellationTokenSource(); cts.CancelAfter(TimeSpan.FromSeconds(30));",
+              "longForm": "CancellationTokenSource"
+            },
+            {
+              "term": "Linked token source",
+              "plainDefinition": "Combines multiple tokens. Cancels when any parent token cancels.",
+              "example": "CancellationTokenSource.CreateLinkedTokenSource(hostToken, timeoutToken)",
+              "longForm": "Linked token source"
+            },
+            {
+              "term": "Cooperative cancellation",
+              "plainDefinition": "The operation must check the token. A library that never observes it will keep running.",
+              "example": "while (!token.IsCancellationRequested) { await ReceiveAsync(token); }",
+              "longForm": "Cooperative cancellation"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "What to ack when cancelled",
-      "prose": "If stoppingToken fires mid-handle, decide explicitly. Requeue (SQS: skip DeleteMessage, let visibility timeout expire; RabbitMQ: nack requeue true) when the work is idempotent. Drop or send to a DLQ when a partial side effect already committed. Never ignore the token in a Redis SET that is part of the same unit of work you will retry. Register callbacks for non-async resources (a raw socket abort) with token.Register, and dispose the registration. Passing CancellationToken.None in a public library method is a smell unless the operation truly cannot stop."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "For a queue consumer, the generic host's StoppingToken is the process lifetime. Pass it into the receive loop. When Kubernetes sends SIGTERM, you stop fetching, finish or nack the in-flight message according to policy, then exit before the grace period. Catching OperationCanceledException and treating it as a poison message during deploy is a common production bug. Link host lifetime tokens with per-operation timeouts so a hung receive does not block shutdown."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Ack vs nack on cancellation",
+          "body": "If stoppingToken fires mid-handle, requeue when work is idempotent. Drop or send to a dead-letter queue when a partial side effect already committed. Never ignore the token in a Redis SET that is part of the same unit of work you will retry."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Consumer shutdown with tokens",
+          "items": [
+            {
+              "title": "Host provides StoppingToken",
+              "body": "The generic host or Kubernetes signals shutdown via CancellationToken."
+            },
+            {
+              "title": "Pass token into receive loop",
+              "body": "Every ReceiveAsync, HTTP call, and Redis operation receives the same token."
+            },
+            {
+              "title": "Link with per-operation timeout",
+              "body": "CreateLinkedTokenSource combines host shutdown with a 25-second receive timeout."
+            },
+            {
+              "title": "Catch and distinguish",
+              "body": "OperationCanceledException when stoppingToken fired = graceful exit. Timeout alone = retry the receive."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Token linking for consumer shutdown",
+            "source": "flowchart TD\n  H[Host StoppingToken] --> L[CreateLinkedTokenSource]\n  T[CancelAfter 25s timeout] --> L\n  L --> R[ReceiveAsync with linked token]\n  R --> C{Which token fired?}\n  C -->|StoppingToken| S[Break loop — graceful shutdown]\n  C -->|Timeout only| G[Continue — retry receive]\n  C -->|Neither| P[Process message]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SQS loop with host token and per-message timeout",
+            "code": "public async Task RunAsync(string queueUrl, CancellationToken stoppingToken)\n{\n    while (!stoppingToken.IsCancellationRequested)\n    {\n        using var linked = CancellationTokenSource\n            .CreateLinkedTokenSource(stoppingToken);\n        linked.CancelAfter(TimeSpan.FromSeconds(25));\n\n        try\n        {\n            var response = await _sqs.ReceiveMessageAsync(queueUrl, linked.Token);\n            foreach (var message in response.Messages)\n            {\n                await HandleAsync(message, stoppingToken);\n                await _sqs.DeleteMessageAsync(queueUrl, message.ReceiptHandle, stoppingToken);\n            }\n        }\n        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n        {\n            break; // host shutdown — exit gracefully\n        }\n        catch (OperationCanceledException)\n        {\n            continue; // receive timeout — try again\n        }\n    }\n}",
+            "explanation": "Linked tokens expire a hung receive without treating host shutdown and a 25-second timeout as the same condition."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ThrowIfCancellationRequested in a CPU loop",
+            "code": "public async Task ProcessBatchAsync(\n    IReadOnlyList<Row> rows, CancellationToken cancellationToken)\n{\n    foreach (var row in rows)\n    {\n        cancellationToken.ThrowIfCancellationRequested();\n        await TransformAndSaveAsync(row, cancellationToken);\n    }\n}",
+            "explanation": "Async I/O methods observe the token automatically. CPU loops must check explicitly between iterations."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register callback for non-async resources",
+            "code": "await using var registration = cancellationToken.Register(() =>\n{\n    socket.Close(); // abort a raw socket on cancellation\n});\n\nawait ProcessWithSocketAsync(socket, cancellationToken);",
+            "explanation": "token.Register runs a callback when cancellation fires. Useful for resources that do not have built-in token support."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CancellationToken vs AbortController",
+          "headers": [
+            "Aspect",
+            "C# CancellationToken",
+            "JavaScript AbortController"
+          ],
+          "rows": [
+            [
+              "Signal type",
+              "CancellationToken struct",
+              "AbortSignal on controller"
+            ],
+            [
+              "Propagation",
+              "Pass token to every async call",
+              "Pass signal to fetch and friends"
+            ],
+            [
+              "Linking",
+              "CreateLinkedTokenSource",
+              "No built-in link — manual composition"
+            ],
+            [
+              "CPU loop check",
+              "ThrowIfCancellationRequested()",
+              "Poll signal.aborted manually"
+            ],
+            [
+              "Timeout",
+              "CancelAfter on TokenSource",
+              "setTimeout + controller.abort()"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Catching Exception and nacking cancellation as a poison message during deploy. Forgetting to pass the token into nested Redis and HTTP calls. Leaking CancellationTokenSource instances in a high-throughput loop. Passing CancellationToken.None in a public library method unless the operation truly cannot stop."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [

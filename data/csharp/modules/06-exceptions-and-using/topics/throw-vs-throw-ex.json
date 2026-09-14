@@ -1,36 +1,170 @@
 {
   "id": "csharp-06-throw-vs-throw-ex",
   "slug": "throw-vs-throw-ex",
-  "title": "throw versus throw ex",
+  "title": "throw versus throw ex (preserving the stack trace)",
   "moduleId": "csharp-06-exceptions-and-using",
   "order": 4,
-  "hook": "throw; rethrows and keeps the stack. throw ex; looks like the same idea and destroys the evidence. Wrapping is a third move: new exception with InnerException at a boundary.",
+  "hook": "throw; rethrows and keeps the original stack trace. throw ex; looks similar but destroys the evidence. Wrapping with InnerException is a third move — add context once at a boundary.",
   "sections": [
     {
-      "heading": "The classic bug",
-      "prose": "Inside catch (Exception ex), throw ex; starts a new throw site. StackTrace now begins in your catch, and the original frames from Redis or SkiaSharp are gone or harder to see. throw; without an identifier rethrows the current exception and preserves the stack. That is the answer interviewers want in the first ten seconds. If you already left the catch, ExceptionDispatchInfo.Capture(ex).Throw() is how libraries rethrow without resetting — useful when you store an exception and throw later."
-    },
-    {
-      "heading": "Wrapping with context",
-      "prose": "When the caller should see a domain type, wrap: throw new TokenValidationException(\"LTI nonce reuse\", ex);. InnerException keeps the root. Wrap once at the boundary, not at every layer, or you nest noise. Do not wrap solely to log; log and throw; or log and wrap once. CSV import helpers that catch, wrap as FormatException, and throw; (or wrap) give the worker a type to send to a DLQ reason string.",
-      "snippets": [
+      "heading": "What is the difference?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Preserve stack or wrap once",
-          "code": "AuthToken Parse(string raw)\n{\n    try\n    {\n        return ParseCore(raw);\n    }\n    catch (JsonException ex)\n    {\n        throw new InvalidOperationException(\"auth token JSON invalid\", ex);\n    }\n}\n\nvoid RethrowTransient(Exception ex)\n{\n    if (ex is TimeoutException)\n        throw; // IL would require this inside catch — see note\n}",
-          "explanation": "Parse wraps JSON failures with InnerException. throw; belongs physically inside a catch. The second method is a reminder: you cannot throw; outside catch; use ExceptionDispatchInfo if you delayed the throw."
+          "type": "prose",
+          "text": "Inside a catch block, **throw;** (no identifier) rethrows the current exception and **preserves StackTrace**. **throw ex;** starts a new throw site — StackTrace now begins in your catch, and the original frames from Redis, SkiaSharp, or the database driver are lost or harder to read. A third pattern wraps: **throw new DomainException(\"context\", ex);** where **InnerException** keeps the root cause. Wrap once at a semantic boundary, not at every layer."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "throw;",
+              "longForm": "bare rethrow",
+              "plainDefinition": "Rethrows the exception currently being handled. Preserves the original stack trace.",
+              "example": "catch (IOException ex) { Log(ex); throw; }"
+            },
+            {
+              "term": "throw ex;",
+              "longForm": "throw with identifier",
+              "plainDefinition": "Throws the caught variable as a new throw. Resets StackTrace to the current location — the classic bug.",
+              "example": "catch (Exception ex) { throw ex; } // loses original frames"
+            },
+            {
+              "term": "InnerException",
+              "longForm": "InnerException property",
+              "plainDefinition": "Links a wrapping exception to its root cause. Walk ex.InnerException to see the chain.",
+              "example": "new InvalidOperationException(\"token invalid\", jsonEx)"
+            },
+            {
+              "term": "ExceptionDispatchInfo",
+              "longForm": "ExceptionDispatchInfo",
+              "plainDefinition": "Captures an exception and rethrows it later without resetting the stack — for delayed rethrow outside catch.",
+              "example": "ExceptionDispatchInfo.Capture(ex).Throw();"
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "C# 14 and filters",
-      "prose": "when filters (previous topic) often remove the need to catch-and-rethrow just to inspect a property. Prefer catch (SqlException ex) when (ex.Number == 1205) over catch, inspect, throw;. Unobserved tasks that fault later are not fixed by throw versus throw ex — module 13."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Production debugging depends on StackTrace pointing at the real failure site. throw ex; in a worker turns a one-line Redis timeout into \"failed in CatchAllHandler line 42\" with no Redis frames. Interviewers ask this in the first ten seconds because it separates people who copy-paste catch blocks from people who understand CLR behavior."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Log and throw; — do not wrap just to log",
+          "body": "If you only need logging, log inside catch and throw;. Wrapping adds noise unless the caller needs a domain-level type like TokenValidationException."
+        }
+      ]
+    },
+    {
+      "heading": "How rethrow and wrap work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Three moves",
+          "items": [
+            {
+              "title": "throw; inside catch",
+              "body": "Use when you logged or cleaned up but cannot recover. StackTrace stays intact."
+            },
+            {
+              "title": "throw new OuterException(msg, inner)",
+              "body": "Use at a boundary when the caller should see a domain type. InnerException preserves the root."
+            },
+            {
+              "title": "ExceptionDispatchInfo for delayed throw",
+              "body": "When you store an exception and throw later outside a catch block, Capture().Throw() preserves the stack."
+            },
+            {
+              "title": "Never throw ex;",
+              "body": "There is no legitimate production use. If you see it in a code review, replace with throw;."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Stack trace preservation",
+            "source": "flowchart LR\n  A[Failure in ParseCore] --> B{catch block}\n  B -->|throw;| C[StackTrace includes ParseCore]\n  B -->|throw ex;| D[StackTrace starts at catch line]\n  B -->|wrap with InnerException| E[Outer stack + InnerException chain]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Preserve stack or wrap once",
+            "code": "AuthToken Parse(string raw)\n{\n    try\n    {\n        return ParseCore(raw);\n    }\n    catch (JsonException ex)\n    {\n        throw new InvalidOperationException(\"auth token JSON invalid\", ex);\n    }\n}\n\ncatch (TimeoutException ex)\n{\n    Log(ex);\n    throw; // preserves StackTrace — not throw ex;\n}",
+            "explanation": "Line 8: wrap JSON failures once with InnerException so callers see InvalidOperationException. Line 14: after logging, throw; keeps the original timeout frames. throw ex; would erase them."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Walking the InnerException chain",
+            "code": "void DumpChain(Exception ex)\n{\n    for (var current = ex; current is not null; current = current.InnerException)\n    {\n        Console.WriteLine(current.GetType().Name + \": \" + current.Message);\n    }\n}\n\n// InvalidOperationException: auth token JSON invalid\n// JsonException: '{' is an invalid start of a value",
+            "explanation": "Line 3: loop from outer to inner. Line 11: the outer message is domain-friendly; the inner message has the parser detail."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ExceptionDispatchInfo for delayed rethrow",
+            "code": "Exception? _fault;\n\nvoid OnBackgroundError(Exception ex) => _fault = ex;\n\nvoid PropagateIfFaulted()\n{\n    if (_fault is not null)\n        ExceptionDispatchInfo.Capture(_fault).Throw();\n}",
+            "explanation": "Line 7: throw; only works physically inside catch. ExceptionDispatchInfo.Capture preserves the stack when you must throw later from a different method."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Rethrow and wrap in C# vs JS/TS",
+          "headers": ["Pattern", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Rethrow", "throw; preserves stack; throw ex; resets it", "throw e typically keeps the same Error object and stack"],
+            ["Wrap root cause", "new Exception(msg, innerEx) — InnerException property", "new Error(msg, { cause: inner }) — Error.cause (modern)"],
+            ["Delayed rethrow", "ExceptionDispatchInfo.Capture(ex).Throw()", "Re-throw the same Error object — stack usually preserved"],
+            ["Interview trap", "throw ex; is a well-known C# bug", "Less common — no separate stack-reset rule"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "catch (Exception ex) { throw ex; }",
+          "body": "This pattern appears in old tutorials and production workers. Replace every instance with throw;. Your on-call engineer will thank you."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Wrapping at every layer",
+          "body": "Five nested InvalidOperationException wrappers make logs unreadable. Wrap once at the API boundary; inner layers log and throw;."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "throw; preserves StackTrace. throw ex; resets it.",
     "Wrap with InnerException at a semantic boundary, once.",
-    "ExceptionDispatchInfo for delayed rethrow."
+    "ExceptionDispatchInfo for delayed rethrow outside catch."
   ],
   "commonPitfalls": [
     "catch (Exception ex) { throw ex; } in production workers.",
@@ -45,13 +179,13 @@
     {
       "language": "javascript",
       "concept": "throw e in catch",
-      "note": "JS throw e typically keeps the error object; there is no separate throw versus throw e stack-reset rule like C#’s throw ex. Error.cause is the modern wrap.",
+      "note": "JavaScript throw e typically keeps the error object; there is no separate throw versus throw e stack-reset rule like C#'s throw ex. Error.cause is the modern wrap.",
       "futureTopicSlug": "javascript/errors/rethrow"
     },
     {
       "language": "typescript",
       "concept": "Error cause option",
-      "note": "new Error(msg, { cause }) is the JS/TS wrap. C# uses InnerException on Exception constructors.",
+      "note": "new Error(msg, { cause }) is the JavaScript/TypeScript wrap. C# uses InnerException on Exception constructors.",
       "futureTopicSlug": "typescript/errors/cause"
     }
   ],

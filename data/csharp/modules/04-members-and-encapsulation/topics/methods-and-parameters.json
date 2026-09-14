@@ -1,40 +1,174 @@
 {
   "id": "csharp-04-methods-and-parameters",
   "slug": "methods-and-parameters",
-  "title": "Methods and parameters",
+  "title": "Methods and parameters (operations and arguments)",
   "moduleId": "csharp-04-members-and-encapsulation",
   "order": 3,
-  "hook": "A method is a named operation with a signature the compiler overloads on. Ordinary parameters come first: value copy for structs, reference copy for classes. Optional arguments, named arguments, and params collections are how you keep call sites readable in workers and importers.",
+  "hook": "A method is a named operation on a type. Parameters are how callers pass data in. Learn ordinary parameters first — value copy for structs, reference copy for classes — before `ref`, `in`, and `out`.",
   "sections": [
     {
-      "heading": "Signatures and overloading",
-      "prose": "The compiler distinguishes methods by name plus parameter types (and ref-kind, covered next). Return type is not part of the overload identity. Optional parameters must follow required ones; they bake the default into the caller’s IL, so changing a default is a binary breaking change for already-compiled callers — prefer overloads at public library boundaries. Named arguments document intent at SQS handler entry points where three strings in a row are a review hazard."
-    },
-    {
-      "heading": "Ordinary parameter passing",
-      "prose": "For a class, the callee receives a copy of the reference and can mutate the object unless the type is designed immutable. For a struct, the callee receives a copy of the data; mutating the parameter does not mutate the caller’s variable. That is why a large mutable struct as a parameter is both a correctness and a performance smell. Pass interfaces and classes when you want shared identity; pass small values when you want snapshots.",
-      "snippets": [
+      "heading": "What is a method?",
+      "blocks": [
         {
-          "language": "csharp",
-          "label": "Overload, optional, and params collections",
-          "code": "public static class CsvBatch\n{\n    public static IReadOnlyList<string> Split(string row, char delimiter = ',') =>\n        row.Split(delimiter);\n\n    public static void Emit(params IEnumerable<string> cells)\n    {\n        foreach (var cell in cells)\n        {\n            Console.WriteLine(cell);\n        }\n    }\n}\n\nCsvBatch.Emit(\"attemptId\", \"userId\", \"score\");\nCsvBatch.Emit([\"attemptId\", \"userId\", \"score\"]);",
-          "explanation": "C# 13 params collections allow params IEnumerable<string>, not only arrays. Collection expressions at the call site stay readable for a CSV import header line."
+          "type": "prose",
+          "text": "A **method** is a named block of code with a **signature**: its name, parameter types, and return type. The compiler uses the signature to pick the right overload when you call the method. Methods live on classes, structs, and static types. They are how a CSV importer splits rows, an SQS handler processes messages, or a cache service looks up keys."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "method",
+              "longForm": "method",
+              "plainDefinition": "A named operation defined on a type. It can take parameters and return a value.",
+              "example": "`public int Add(int a, int b) => a + b;`"
+            },
+            {
+              "term": "overload",
+              "longForm": "method overload",
+              "plainDefinition": "Two or more methods with the same name but different parameter types. The compiler picks the best match at the call site.",
+              "example": "`Split(string)` and `Split(string, char)` are overloads."
+            },
+            {
+              "term": "params",
+              "longForm": "params collection",
+              "plainDefinition": "A modifier on the last parameter that lets callers pass a comma-separated list. The compiler wraps it into a collection.",
+              "example": "`void Log(params string[] messages)` — call with `Log(\"a\", \"b\")`."
+            },
+            {
+              "term": "optional parameter",
+              "longForm": "optional parameter",
+              "plainDefinition": "A parameter with a default value. Callers can omit it and the default is used.",
+              "example": "`char delimiter = ','` — callers can write `Split(row)` without the second argument."
+            }
+          ]
         }
       ]
     },
     {
-      "heading": "params collections",
-      "prose": "Historically params meant a trailing array. Starting with C# 13, params can target other collection types the compiler knows how to populate (including span-backed and interface types such as IEnumerable<T> depending on the target). Callers still write a comma-separated argument list. Use params for log scopes and header lists; do not use it as an excuse to skip a named type when the list has structure (column mappings belong in a DTO, not a params blob)."
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Method design shapes every public API. Overloads let you offer simple and advanced versions. Optional and named arguments keep call sites readable when a method has many parameters. `params` collections (C# 13) accept more than just arrays — but use them for short lists, not as a substitute for a well-named data type."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Return type is not part of overload identity",
+          "body": "You cannot overload solely by return type. The compiler distinguishes methods by name plus parameter types (and `ref`/`in`/`out` kind). Two methods `int Parse(string)` and `bool Parse(string)` will not compile."
+        }
+      ]
+    },
+    {
+      "heading": "How parameter passing works",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Ordinary parameter passing",
+          "items": [
+            {
+              "title": "Class parameter",
+              "body": "The callee receives a copy of the reference. Both caller and callee point at the same heap object. Mutations through the parameter are visible to the caller."
+            },
+            {
+              "title": "Struct parameter",
+              "body": "The callee receives a copy of the data. Mutating the parameter does not change the caller's variable."
+            },
+            {
+              "title": "Optional parameters",
+              "body": "Defaults are baked into the caller's compiled code. Changing a default in the method definition does not update already-compiled callers — prefer overloads at public library boundaries."
+            },
+            {
+              "title": "Named arguments",
+              "body": "Callers can write `Process(queueUrl: url, maxRetries: 5)` to document intent without reordering parameters."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Parameter passing by type kind",
+            "source": "flowchart TD\n  C[Caller] -->|class arg| R[Copy reference]\n  R --> H[Same heap object]\n  C -->|struct arg| V[Copy all fields]\n  V --> L[Independent local copy]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Overload, optional, and named arguments",
+            "code": "public static class CsvBatch\n{\n    public static IReadOnlyList<string> Split(string row, char delimiter = ',')\n        => row.Split(delimiter);\n\n    public static IReadOnlyList<string> Split(string row, char delimiter, bool trim)\n        => trim\n            ? row.Split(delimiter).Select(s => s.Trim()).ToArray()\n            : row.Split(delimiter);\n}\n\nvar cells = CsvBatch.Split(\"a,b,c\");\nvar trimmed = CsvBatch.Split(row: \" a , b \", delimiter: ',', trim: true);",
+            "explanation": "Line 3: optional `delimiter` with default `','`. Line 6: a second overload adds `trim`. Line 12: named arguments make the three-parameter call self-documenting."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "params collections (C# 13)",
+            "code": "public static class Logger\n{\n    public static void Scope(params IEnumerable<string> tags)\n    {\n        foreach (var tag in tags)\n            Console.WriteLine($\"[tag] {tag}\");\n    }\n}\n\nLogger.Scope(\"attemptId\", \"userId\", \"score\");\nLogger.Scope([\"attemptId\", \"userId\", \"score\"]);",
+            "explanation": "Line 3: `params IEnumerable<string>` accepts a comma-separated list or a collection expression. C# 13 extended `params` beyond arrays."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Struct copy vs class alias in a method",
+            "code": "struct Counter { public int Value; }\n\nclass ScoreBoard { public int Total; }\n\nstatic void BumpStruct(Counter c) { c.Value++; }\nstatic void BumpClass(ScoreBoard s) { s.Total++; }\n\nvar counter = new Counter();\nBumpStruct(counter); // counter.Value is still 0\n\nvar board = new ScoreBoard();\nBumpClass(board); // board.Total is now 1",
+            "explanation": "Line 7: `BumpStruct` receives a copy — the caller's `counter` is unchanged. Line 11: `BumpClass` receives a reference copy — mutation is visible to the caller."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Methods in C# vs JS/TS",
+          "headers": ["Feature", "C#", "JavaScript / TypeScript"],
+          "rows": [
+            ["Overloading", "Real distinct methods in metadata", "TS overload signatures are a type-checker fiction over one implementation"],
+            ["Rest parameters", "`params` is a compiler rewrite into a collection", "JS `...args` is a real array at runtime"],
+            ["Default arguments", "Baked into caller IL — binary breaking to change", "JS defaults are evaluated at call time in the callee"],
+            ["Named arguments", "Supported at call site", "JS/TS use object destructuring or positional only"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Ambiguous overloads with null",
+          "body": "Passing `null` to an overloaded method can fail to compile because the compiler cannot pick a best match. Cast explicitly or use a named overload."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "`params object[]` erases typing",
+          "body": "A public API that takes `params object[]` forces callers to lose type safety. Prefer generics or a named collection type when the list has structure."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Overload on parameter types, not return types.",
     "Optional-argument defaults are caller-side constants; changing them does not update old assemblies.",
-    "Ordinary parameters copy the reference or the struct; ref/in/out are the next topic."
+    "Ordinary parameters copy the reference (class) or the struct data; `ref`/`in`/`out` are the next topic."
   ],
   "commonPitfalls": [
     "Ambiguous overloads with null and optional parameters.",
-    "params object[] that erases useful typing at a public API."
+    "`params object[]` that erases useful typing at a public API."
   ],
   "relatedTopicIds": [
     "csharp-04-ref-in-out",
@@ -45,13 +179,13 @@
     {
       "language": "javascript",
       "concept": "rest parameters",
-      "note": "JS rest (...args) is a real array at runtime. C# params is a compiler rewrite into a collection argument. JS has no overload resolution.",
+      "note": "JavaScript rest (`...args`) is a real array at runtime. C# `params` is a compiler rewrite into a collection argument. JavaScript has no overload resolution.",
       "futureTopicSlug": "javascript/functions/rest-parameters"
     },
     {
       "language": "typescript",
       "concept": "overload signatures",
-      "note": "TS overloads are a type-checker fiction over one implementation. C# overloads are distinct methods in metadata.",
+      "note": "TypeScript overloads are a type-checker fiction over one implementation. C# overloads are distinct methods in metadata.",
       "futureTopicSlug": "typescript/functions/overloads"
     }
   ],
