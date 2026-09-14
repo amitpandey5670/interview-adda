@@ -12,13 +12,13 @@
       "sixtySeconds": "C# keeps real types in the assembly. TypeScript erases them. CLR versus V8. Same AWS event, different process and type enforcement."
     },
     {
-      "question": "Walk through source to CPU for a typical worker.",
-      "answer": "You write .cs files. The Roslyn compiler emits IL into a .dll assembly with metadata. At run time the CLR's Just-In-Time (JIT) compiler turns each method into native machine code (with tiered optimization). Alternatively, Native Ahead-of-Time (AOT) compiles everything to a native binary before deployment. This is fundamentally different from running node file.js.",
+      "question": "Walk through source to CPU for a typical worker, including tiered JIT.",
+      "answer": "You write .cs files. Roslyn emits IL into a .dll assembly with metadata. At run time the CLR's Just-In-Time (JIT) compiler turns each method into native machine code — tiered JIT starts with a quick compile and recompiles hot methods at higher optimization tiers. Alternatively, ReadyToRun precompiles some IL, or Native AOT compiles everything to a native binary before deployment.",
       "followUps": [
         "When would you disable PublishAot?",
-        "Is a .NET assembly the same as an ES module?"
+        "How does Tiered PGO change optimization?"
       ],
-      "sixtySeconds": "Source → IL assembly → JIT at run time, or AOT to native binary. An assembly is a versioned metadata unit, not a JavaScript import graph."
+      "sixtySeconds": "Source to IL at build. Tiered JIT quick then optimized. R2R or AOT for cold start. Warm up before benchmarking."
     },
     {
       "question": "How do you choose the C# language version?",
@@ -39,13 +39,49 @@
       "sixtySeconds": "One entry per executable: top-level statements or explicit Main. The compiler generates the rest. args is the command-line argument array."
     },
     {
-      "question": "What is a file-based app in .NET 10?",
-      "answer": "A single .cs file you run with dotnet run file.cs — no .csproj on disk. C# 14 #: directives configure packages, properties, and SDK inline (like a virtual project file). Use for quick scripts and spikes. Convert to a real project with dotnet project convert when it grows. Native AOT publish is on by default; disable it if you need reflection.",
+      "question": "What is a file-based app in .NET 10, and how do ReadyToRun and Native AOT apply?",
+      "answer": "A single .cs file you run with dotnet run file.cs — no .csproj on disk. C# 14 #: directives configure packages, properties, and SDK inline. Publish defaults toward Native AOT for native output; use PublishAot=false for reflection-heavy scripts. ReadyToRun is a middle ground — precompiled IL, faster startup, still allows most reflection.",
       "followUps": [
         "Is this a C# 11 feature?",
-        "Why might you set PublishAot=false?"
+        "When is R2R better than full AOT?"
       ],
-      "sixtySeconds": "C# 14 / .NET 10: dotnet run file.cs, #: directives for inline config, convert to project when it outgrows one file."
+      "sixtySeconds": "C# 14 / .NET 10: dotnet run file.cs, #: directives. AOT default on publish. R2R middle ground. Convert when it grows."
+    },
+    {
+      "question": "Explain using versus assembly references to someone from a Node background.",
+      "answer": "JavaScript import loads and binds a module. C# using only shortens type names at compile time — the assembly must already be referenced via ProjectReference or PackageReference. The CLR loads assemblies from references at runtime; usings are erased and have no runtime effect. Namespaces organize types inside an assembly, not deployment units.",
+      "followUps": [
+        "What is a file-scoped namespace?",
+        "When do global usings cause CS0104?"
+      ],
+      "sixtySeconds": "Reference loads assembly. using shortens names only. Namespace is organizational. Not like npm import."
+    },
+    {
+      "question": "Your Lambda cold start is slow — JIT, ReadyToRun, or Native AOT?",
+      "answer": "Measure cold start separately from steady state — tiered JIT pays first-compile cost on first invocation. ReadyToRun embeds precompiled native code for much IL — good when reflection is needed. Native AOT gives smallest cold start and size but requires trim-safe dependencies. Benchmark after warm-up for steady-state throughput, not first call.",
+      "followUps": [
+        "What breaks with Native AOT reflection?",
+        "What is DOTNET_ReadyToRun?"
+      ],
+      "sixtySeconds": "Cold start: AOT best, R2R middle, JIT slowest first call. Steady state: tiered JIT catches up. Measure both."
+    },
+    {
+      "question": "What is the Common Type System (CTS) and why does it matter in interviews?",
+      "answer": "The Common Type System (CTS) defines how types are represented and verified across all .NET languages. C# int maps to System.Int32 with known size and behavior. The Common Language Runtime (CLR) uses CTS metadata to enforce casts, virtual dispatch, and garbage collection rules at run time — unlike TypeScript where types vanish after compile. When you reference a NuGet package, you are loading assemblies whose types obey the same CTS contract.",
+      "followUps": [
+        "How does value type boxing relate to CTS?",
+        "Can F# and C# share the same assembly types?"
+      ],
+      "sixtySeconds": "CTS is the shared type contract for .NET. C# types become CLR metadata. Enables cross-language interop and runtime enforcement — not erased like TS."
+    },
+    {
+      "question": "You see CS0104 ambiguous reference after adding global usings — what happened?",
+      "answer": "Two namespaces you imported define the same short type name — for example Timer from System.Threading and System.Timers after implicit usings. Global usings and file-scoped namespaces do not resolve ambiguity; they only shorten names. Fix with a using alias, fully qualified name, or remove the conflicting global using. This is compile-time only — no runtime effect.",
+      "followUps": [
+        "What is a file-scoped namespace?",
+        "Do using directives affect which assemblies load?"
+      ],
+      "sixtySeconds": "CS0104 means two imported namespaces expose the same name. Alias or qualify. Usings never load assemblies — references do."
     }
   ]
 }

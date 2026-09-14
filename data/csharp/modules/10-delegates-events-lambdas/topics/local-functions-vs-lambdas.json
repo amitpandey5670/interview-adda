@@ -153,18 +153,54 @@
           "body": "Local functions cannot be declared inside expression-bodied properties or methods. Use a block body for the containing member."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: local functions that are never passed as delegates compile to nested methods with zero delegate allocation — use BenchmarkDotNet on a SkiaSharp pixel-walk helper called millions of times per frame. When you see unexpected closure classes in a heap dump, check whether a local function was converted to Func in a loop. Iterator validation bugs appear as ArgumentException on first MoveNext instead of at call time — split validation (outer) from yield (local function)."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Validation outer, iterator local — fail fast",
+            "code": "public IEnumerable<PixelRow> ReadRows(SKBitmap bitmap)\n{\n    ArgumentNullException.ThrowIfNull(bitmap);\n    if (bitmap.Width <= 0) throw new ArgumentOutOfRangeException(nameof(bitmap));\n\n    return IterateRows(bitmap);\n\n    static IEnumerable<PixelRow> IterateRows(SKBitmap bmp)\n    {\n        for (var y = 0; y < bmp.Height; y++)\n            yield return new PixelRow(y, bmp.GetPixelSpan(y));\n    }\n}",
+            "explanation": "Lines 3–4: validate before returning the iterator. Line 8: static local function holds yield return — exceptions from bad args throw at ReadRows call, not on first enumeration."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Form", "Allocation", "Best for"],
+          "rows": [
+            ["Local function (not as delegate)", "No delegate alloc", "yield, recursion, validation split"],
+            ["Local function passed as delegate", "Delegate + possible closure", "When API requires Func/Action"],
+            ["Lambda", "Always delegate (+ closure if capturing)", "LINQ, events, short callbacks"],
+            ["static local / static lambda", "No display class", "Hot paths inside iterators"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying local functions and lambdas are identical — local functions support yield return, attributes, and avoid delegate allocation until converted. Putting yield return in the validating outer method and not knowing exceptions defer to first MoveNext. Claiming lambdas are always faster because they are shorter syntax."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Local functions: named, attributes, yield, recursion, optional delegate conversion.",
-    "Put argument validation in the outer method; put yield/async state machine in the local function.",
-    "static local function = no capture, same idea as static lambda.",
-    "Lambdas win at APIs that demand a delegate type."
+    "Local functions are named nested methods; they avoid delegate allocation until explicitly converted to Func/Action.",
+    "Put argument validation in the outer method; put yield return and async state machines in the local function.",
+    "static local function matches static lambda — compiler-enforced no capture on hot iterator paths.",
+    "60s: Local function for yield, recursion, validation split. Lambda when API needs a delegate. static avoids closure. Converting local to delegate in a loop reintroduces allocation.",
+    "Follow-up: can a local function be declared inside an expression-bodied property?"
   ],
   "commonPitfalls": [
-    "Writing yield return in the same method that validates arguments, so exceptions appear late.",
-    "Converting a local function to a delegate in a loop and losing the allocation win.",
-    "Declaring a local function inside an expression-bodied property — illegal."
+    "Saying local functions always allocate like lambdas gets you rejected — only delegate conversion allocates.",
+    "Writing yield return in the same method that validates arguments — exceptions appear on first MoveNext.",
+    "Strong answer: 'Validate outer, iterate inner with static local. Lambdas for LINQ callbacks. Profile with BenchmarkDotNet if you pass locals as delegates in a loop.'"
   ],
   "relatedTopicIds": [
     "csharp-10-lambdas-and-closures",
@@ -177,6 +213,12 @@
       "concept": "Nested function declarations versus arrows",
       "note": "JavaScript nested function foo() {} is hoisted in its scope and can recurse by name. C# local functions are also in scope throughout the containing member, unlike const fn = () => that is temporal-dead before initialization.",
       "futureTopicSlug": "javascript/functions/nested-declarations"
+    },
+    {
+      "language": "typescript",
+      "concept": "Generator functions versus inline callbacks",
+      "note": "TypeScript generator function* is the JS analogue of yield return in a C# local function. Arrow callbacks map to C# lambdas passed to LINQ. C# splits the two: local function for iterators, lambda for delegate parameters.",
+      "futureTopicSlug": "typescript/iterators/generators"
     }
   ],
   "officialSources": [

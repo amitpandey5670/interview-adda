@@ -118,6 +118,15 @@
             "code": "dotnet build -c Release\n# ApiCompat or custom tool:\ndotnet-apicompat --baseline artifacts/MyLib.1.0.0.dll --current bin/Release/net10.0/MyLib.dll",
             "explanation": "Pipeline step blocks merge when binary compatibility breaks without approval."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "PublicApiAnalyzers shipped baseline",
+            "code": "<Project Sdk=\"Microsoft.NET.Sdk\">\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <GenerateDocumentationFile>true</GenerateDocumentationFile>\n  </PropertyGroup>\n  <ItemGroup>\n    <PackageReference Include=\"Microsoft.CodeAnalysis.PublicApiAnalyzers\" Version=\"*\" PrivateAssets=\"All\" />\n  </ItemGroup>\n</Project>\n<!-- PublicAPI.Shipped.txt and PublicAPI.Unshipped.txt in repo -->",
+            "explanation": "Analyzers diff public surface against checked-in baseline files — CI fails on unapproved API changes."
+          }
         }
       ]
     },
@@ -147,17 +156,47 @@
           "body": "Making everything public for convenience. Forgetting to update PublicAPI files so CI always fails. Changing public record positional parameter order — breaking for callers."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: PublicApiAnalyzers and Microsoft.DotNet.ApiCompat.Tooling compare current public surface to Shipped.txt baseline in CI — failed PR means semver violation. internal by default keeps experiments out of the contract. Adding a public method is usually additive (minor bump); removing or changing signatures is major. Pair with nullable warnings as errors in library csproj. For NuGet consumers, binding redirects and package validation catch accidental breaks before publish."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Change", "Breaking?", "Version bump"],
+          "rows": [
+            ["New public method", "Usually no", "Minor or patch"],
+            ["Remove public member", "Yes", "Major"],
+            ["Change record parameter order", "Yes", "Major"],
+            ["internal experiment", "No public impact", "None"],
+            ["InternalsVisibleTo test friend", "No consumer impact", "None"],
+            ["Add required parameter", "Yes", "Major"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Making helpers public 'for tests' instead of InternalsVisibleTo. Not knowing positional record parameter reorder breaks binary compatibility. Skipping baseline update and disabling the analyzer instead of intentional major bump. Claiming semver is only package.json — .NET public API is the assembly contract."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Public API is a published contract — guard it in CI.",
-    "Default new code to internal; expose deliberately.",
-    "ApiCompat and PublicApiAnalyzers catch accidental breaks."
+    "Public API is a published contract — default to internal and guard surface with PublicApiAnalyzers or ApiCompat in CI.",
+    "Breaking changes require major semver and baseline update; additive members are usually safe minor changes.",
+    "In production, library CI should fail PRs that change Shipped.txt without reviewer approval and version bump.",
+    "60s: Public API is contract. internal by default. CI diffs against baseline. Major for removals and signature breaks. InternalsVisibleTo for tests, not public helpers.",
+    "Follow-up: is adding a default parameter value a breaking change?"
   ],
   "commonPitfalls": [
-    "Public types that should be internal.",
-    "Breaking record or interface changes without major version bump.",
-    "No baseline file in repo."
+    "Public types that should be internal gets you rejected — pollutes contract and blocks refactoring.",
+    "Changing positional record parameter order without major bump.",
+    "Strong answer: 'PublicApiAnalyzers in CI. internal default. Facade pattern for stable surface. Major bump plus baseline update for breaks.'"
   ],
   "relatedTopicIds": [
     "csharp-16-assemblies-and-metadata",
@@ -171,6 +210,12 @@
       "concept": "API Extractor",
       "note": "api-extractor rolls up .d.ts and detects breaking changes in exported types — parallel to .NET PublicApiAnalyzers.",
       "futureTopicSlug": "typescript/tooling/api-extractor"
+    },
+    {
+      "language": "javascript",
+      "concept": "package.json exports field",
+      "note": "The exports map defines the public npm surface like assembly public types — changing export paths is a breaking change for consumers.",
+      "futureTopicSlug": "javascript/modules/package-exports"
     }
   ],
   "officialSources": [

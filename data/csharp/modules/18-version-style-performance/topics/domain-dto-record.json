@@ -136,17 +136,54 @@
           "body": "EF entities returned from minimal APIs. Triple mapping domain→DTO→view. class DTO for million-row import when struct suffices. Giant DTOs cached in Redis."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: domain Order.Ship() enforces invariants; OrderDto crosses HTTP and Redis without behavior; EF OrderEntity stays in the repository. On million-row CSV import, record struct rows avoid heap allocation per line — BenchmarkDotNet class vs record struct on a parse loop. Redis memory audit: giant DTO graphs cached per user blow instance RAM — slim wire shapes at the boundary."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Domain vs DTO vs record struct import row",
+            "code": "// Domain — behavior inside\npublic sealed class Order\n{\n    public void Ship() { /* validate lines */ }\n}\n\n// DTO — wire + Redis, no behavior\npublic sealed record OrderDto(string Id, decimal Total);\n\n// Import hot path — stack-friendly row\npublic readonly record struct CsvRow(string Sku, decimal Amount);",
+            "explanation": "Line 2: domain enforces rules. Line 7: record DTO at API edge. Line 10: record struct for bulk parse — allocation-aware per module 17."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Layer", "Role", "Allocation note"],
+          "rows": [
+            ["Domain class", "Behavior + invariants", "Long-lived, few instances"],
+            ["record DTO", "JSON/Redis shape", "One per request — keep small"],
+            ["EF entity", "Persistence mapping", "Never return from minimal API"],
+            ["record struct row", "CSV/import hot path", "Stack or inline — millions of rows"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Returning EF entities from minimal APIs. Triple mapping domain→DTO→view on every request. class DTO for million-row import when record struct suffices. Caching giant object graphs in Redis without measuring payload size."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Domain has behavior; DTOs cross boundaries; records suit immutable DTOs.",
-    "Map at the edge once; avoid mapping chains on hot paths.",
-    "record struct can reduce allocations for bulk import rows."
+    "Domain enforces rules; DTO is wire shape at boundary; EF entity stays in repository.",
+    "Map once per request at the edge — avoid domain→DTO→view chains on hot paths.",
+    "record struct rows reduce allocations on million-row CSV import — pair with span parse.",
+    "60s: Domain behavior inside. DTO at HTTP/Redis edge. EF never in API. record struct for bulk import. Map once. Slim Redis payloads.",
+    "Follow-up: when is exposing an EF entity from a minimal API acceptable?"
   ],
   "commonPitfalls": [
-    "Leaking persistence models to HTTP.",
-    "Allocating new DTO on every cache hit when reference could be reused safely.",
-    "Ignoring DTO size in Redis memory."
+    "Leaking EF entities to HTTP gets you rejected — map at repository boundary.",
+    "Triple mapping chains on hot paths when one DTO at the edge suffices.",
+    "Strong answer: 'Order.Ship in domain. OrderDto for JSON. CsvRow record struct for import. Map once. Profile Redis DTO size.'"
   ],
   "relatedTopicIds": [
     "csharp-17-stackalloc-csv",
@@ -161,6 +198,12 @@
       "concept": "Zod parse at boundary",
       "note": "Zod validates wire shape like DTO plus validation attributes in C#. Domain logic stays separate from transport types.",
       "futureTopicSlug": "typescript/validation/zod"
+    },
+    {
+      "language": "javascript",
+      "concept": "Plain objects at API edge",
+      "note": "Express handlers parse JSON into plain objects — like record DTOs without methods. Domain logic in separate modules mirrors C# domain class vs DTO split. No ORM entity on the wire.",
+      "futureTopicSlug": "javascript/api/dto-patterns"
     }
   ],
   "officialSources": [

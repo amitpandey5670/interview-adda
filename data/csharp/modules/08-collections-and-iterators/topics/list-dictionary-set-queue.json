@@ -80,7 +80,7 @@
             },
             {
               "title": "Dictionary<TKey, TValue> — key lookup",
-              "body": "Requires hash and equality on TKey. TryGetValue is the safe lookup pattern. Duplicate keys throw on Add; the indexer overwrites silently."
+              "body": "Requires hash and equality on TKey via IEqualityComparer<TKey>. TryGetValue is the safe lookup pattern. When Count exceeds the load factor (~72% of bucket count), Dictionary doubles its bucket array and rehashes every entry — a gen-0 GC spike if you grow a huge map in one loop. Duplicate keys throw on Add; the indexer overwrites silently."
             },
             {
               "title": "HashSet<T> — uniqueness",
@@ -131,6 +131,24 @@
             "code": "var headers = new Dictionary<string, string>(\n    StringComparer.OrdinalIgnoreCase);\n\nheaders[\"Content-Type\"] = \"application/json\";\nheaders.TryGetValue(\"content-type\", out string? value);\n// value is \"application/json\" — case ignored",
             "explanation": "string keys should pick a comparer: Ordinal for IDs, OrdinalIgnoreCase for HTTP headers. Without a comparer, case-sensitive matching surprises you in production."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Dictionary resize and capacity hint",
+            "code": "var cache = new Dictionary<string, string>(capacity: 10_000);\nfor (int i = 0; i < 10_000; i++)\n    cache[$\"key-{i}\"] = $\"value-{i}\";\n// Without capacity hint: ~13 resizes, each rehashes all entries\n// dotnet-counters: watch gen-0-gc-count spike during bulk insert",
+            "explanation": "Dictionary grows by doubling bucket count when load factor is exceeded. Pre-sizing with the expected count avoids repeated resize-and-rehash cycles that show up as GC pressure in production."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom IEqualityComparer for struct keys",
+            "code": "readonly record struct TenantId(string Value);\n\nclass TenantIdComparer : IEqualityComparer<TenantId>\n{\n    public bool Equals(TenantId x, TenantId y) =>\n        x.Value.Equals(y.Value, StringComparison.Ordinal);\n    public int GetHashCode(TenantId obj) =>\n        obj.Value.GetHashCode(StringComparison.Ordinal);\n}\n\nvar tenants = new Dictionary<TenantId, string>(new TenantIdComparer());",
+            "explanation": "Struct keys do not get automatic equality. If GetHashCode and Equals disagree — or you change the hash after insert — lookups silently fail. Always pass the same comparer to Dictionary and HashSet."
+          }
         }
       ]
     },
@@ -139,14 +157,15 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "C# collections versus JS built-ins",
-          "headers": ["C# type", "JavaScript equivalent", "Key difference"],
+          "title": "C# collections versus JS Map and Set",
+          "headers": ["C# type", "JS equivalent", "Runtime behavior difference"],
           "rows": [
-            ["List<T>", "Array", "C# List is generic; JS Array holds any type"],
-            ["Dictionary<K,V>", "Map", "JS object keys are always strings; Dictionary allows struct keys"],
-            ["HashSet<T>", "Set", "Both enforce uniqueness with fast Contains"],
-            ["Queue<T>", "Array as queue", "C# Queue has Enqueue/Dequeue; JS uses push/shift"],
-            ["ConcurrentDictionary", "No built-in", "C# has thread-safe collections in System.Collections.Concurrent"]
+            ["List<T>", "Array", "C# List is generic with known T; JS Array is dynamically typed and grows with push()"],
+            ["Dictionary<K,V>", "Map", "Map uses SameValueZero equality; Dictionary uses IEqualityComparer — struct keys need a custom comparer"],
+            ["HashSet<T>", "Set", "Both O(1) average Contains; JS Set uses reference or primitive equality, not configurable"],
+            ["{} object literal", "Not Dictionary", "JS object keys coerce to strings; Dictionary<K,V> keeps Guid, int, or struct keys natively"],
+            ["Queue<T>", "Array push/shift", "C# Queue is a dedicated FIFO type; JS shift() is O(n) on Array"],
+            ["ConcurrentDictionary", "No built-in", "C# has thread-safe maps in System.Collections.Concurrent; Node shares one thread"]
           ]
         }
       ]
@@ -161,46 +180,81 @@
           "body": "Using List.Contains in a hot loop instead of HashSet — O(n) per check versus O(1). Forgetting a StringComparer and treating JWT issuer URLs as case-sensitive when they were mixed case. Sharing a List across SQS handler tasks without synchronization — two threads calling Add corrupts the backing array."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Dictionary<TKey,TValue> stores entries in a bucket array; each bucket is a singly-linked chain of Entry structs. Lookup computes bucketIndex = hashCode & (bucketCount - 1) using the IEqualityComparer, then walks the chain calling Equals. List<T> holds a T[] _items array and int _size; when _size == _items.Length, it allocates a new array at roughly double capacity and copies. HashSet<T> is literally a Dictionary<T,T> with dummy values. How to prove it in production: dotnet-counters monitor System.Runtime --counters gen-0-gc-count,gc-heap-size while bulk-loading a Dictionary without a capacity hint — you will see gen-0 spikes on each resize."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Collection", "Average complexity", "When not to use"],
+          "rows": [
+            ["List<T>", "Add O(1) amortized, Insert(0) O(n)", "Frequent insert-at-front or thread-shared writes"],
+            ["Dictionary<K,V>", "TryGetValue O(1) average", "Ordered iteration requirement — use SortedDictionary"],
+            ["HashSet<T>", "Contains O(1) average", "Need key-value pairs — use Dictionary"],
+            ["Queue<T>", "Enqueue/Dequeue O(1)", "Multi-producer async pipe — use Channel<T>"],
+            ["SortedDictionary", "O(log n) lookup", "Pure speed when order does not matter"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"Dictionary is always O(1)\" without mentioning hash collisions, comparer choice, or resize cost. Saying \"I'd scan the List to find duplicates\" on a 100k-item collection — that is O(n²). Strong answer: HashSet for membership, pre-size Dictionary with expected count, pick StringComparer.OrdinalIgnoreCase for HTTP keys, and name ConcurrentDictionary only when multiple threads write."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Match the type to the question: append, lookup, membership, FIFO.",
-    "Generic collections avoid boxing and the legacy ArrayList object store.",
-    "In-process Dictionary is not Redis; in-process Queue is not SQS."
+    "List, Dictionary, HashSet, and Queue each answer one access pattern — append, key lookup, membership, FIFO.",
+    "Dictionary resizes by doubling buckets and rehashing; pre-size with expected count to avoid GC spikes.",
+    "Pass IEqualityComparer for string keys (Ordinal vs OrdinalIgnoreCase) and for custom struct keys.",
+    "60s: Append → List. Key lookup → Dictionary with capacity hint and comparer. Uniqueness → HashSet. FIFO → Queue. None are thread-safe or distributed — Channel for async pipes, Redis for cross-process.",
+    "Follow-up: what happens if GetHashCode changes after an item is inserted? (lookup breaks — keys must be immutable)"
   ],
   "commonPitfalls": [
-    "Using List.Contains in a hot loop instead of HashSet.",
-    "Forgetting a StringComparer and treating JWT issuer URLs as ordinal when they were mixed case.",
-    "Sharing a List across SQS handler tasks without synchronization."
+    "Saying Dictionary is always O(1) — ignores resize, collision chains, and bad hash distributions.",
+    "Strong answer: pre-size Dictionary, use HashSet for membership checks, pick IEqualityComparer explicitly for string and struct keys.",
+    "Using List.Contains in a hot loop instead of HashSet — O(n) per check versus O(1).",
+    "Sharing a List across SQS handler tasks without synchronization — corrupts the backing array."
   ],
   "relatedTopicIds": [
     "csharp-08-arrays-and-span-preview",
     "csharp-08-when-not-to-invent",
+    "csharp-08-frozen-and-immutable-collections",
     "csharp-09-why-generics",
     "csharp-05-equality-and-hashing"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Array, Map, Set",
-      "note": "JS Array is like List<T>, Map is like Dictionary, Set is like HashSet. JS objects-as-maps coerce keys to strings; Dictionary does not.",
+      "concept": "Map and Set versus object literals",
+      "note": "JS Map uses reference equality for objects and SameValueZero for primitives. C# Dictionary uses IEqualityComparer — you must supply one for struct keys. JS {} coerces all keys to strings; Dictionary keeps Guid and int keys natively.",
       "futureTopicSlug": "javascript/collections/map-set"
     },
     {
       "language": "typescript",
-      "concept": "Record<K, V> vs Map",
-      "note": "Record is an object type. Dictionary<TKey,TValue> is a real hash table that allows struct keys.",
+      "concept": "Record<K,V> vs Map<K,V>",
+      "note": "Record<string,T> is a typed object — keys are strings at run time. Dictionary<TKey,TValue> is a real hash table with configurable equality, closer to JS Map than to Record.",
       "futureTopicSlug": "typescript/types/record-map"
     }
   ],
   "officialSources": [
     {
-      "title": "Collections (fundamentals / generics intro)",
-      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics"
-    },
-    {
       "title": "Collections in .NET",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/collections/"
+    },
+    {
+      "title": "Dictionary<TKey,TValue>",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.dictionary-2"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "animationHint": "compare",

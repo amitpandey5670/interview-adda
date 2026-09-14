@@ -118,6 +118,15 @@
             "code": "await using var conn = new NpgsqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable for native DB handles — no direct V8 equivalent",
             "explanation": "CLR apps often pair GC with explicit Dispose for unmanaged resources. JS relies on GC plus addon-specific cleanup."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Side-by-side diagnostics",
+            "code": "# .NET\ndotnet-counters monitor -p <pid> System.Runtime[gc-heap-size,alloc-rate]\n# Node\nnode --expose-gc -e \"console.log(process.memoryUsage())\"\n# V8 has no server-GC or LOH knob from app code",
+            "explanation": "CLR exposes rich GC metrics via EventCounters. V8 tuning is coarser — mainly heap size flags and engine-internal heuristics."
+          }
         }
       ]
     },
@@ -148,21 +157,52 @@
           "body": "Claiming JavaScript has no GC. Assuming CLR LOH rules apply to V8 buffers. Ignoring IDisposable because 'GC will handle it' for native wrappers."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Both V8 and the CLR are generational tracing collectors exploiting the weak generational hypothesis. V8 runs per-isolate with young/old generations, incremental marking, and concurrent sweeping — tuning is mostly --max-old-space-size. The CLR adds explicit SOH/LOH/POH segments, server versus workstation GC modes, DATAS heap adaptation, and IDisposable for native interop. Async in both runtimes allocates (Promise reactions vs state machines) but frees threads differently. How to prove it in production: dotnet-counters for CLR alloc-rate and gc-heap-size; Node process.memoryUsage() and --expose-gc for V8 — compare under the same workload shape."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Dimension", "CLR", "V8 / Node"],
+          "rows": [
+            ["Generations", "0, 1, 2 + LOH + POH", "Young + old (engine-internal)"],
+            ["Service tuning", "Server GC, DATAS, heap hard limits", "--max-old-space-size, opaque heuristics"],
+            ["Large objects", "Explicit ~85 KB LOH threshold", "No equivalent segment; different heuristics"],
+            ["Native cleanup", "IDisposable / IAsyncDisposable required", "Addon .destroy() or delayed finalization"],
+            ["Diagnostics", "dotnet-counters, dotnet-gcdump", "process.memoryUsage, heap snapshots"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming 'JavaScript has no GC' or 'CLR LOH rules apply to Node Buffers'. Strong answer: both generational tracing GCs; CLR adds explicit heap segments, server GC, and deterministic native disposal."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Both V8 and CLR use generational tracing GC.",
-    "CLR adds server GC, LOH, and explicit native disposal patterns.",
-    "Node tuning is heap size; .NET tuning includes GC mode and container limits."
+    "Both V8 and CLR use generational tracing garbage collection — neither uses reference counting for cycles.",
+    "CLR adds server GC, LOH/POH segments, DATAS, and IDisposable; V8 tuning is coarser from application code.",
+    "When migrating Node services to .NET, map --max-old-space-size to GCHeapHardLimitPercent and add using for native wrappers.",
+    "60s: Both tracing generational GCs. CLR has server GC, LOH, POH, Dispose. V8 per-isolate, heap size flag. Both async allocate. CLR diagnostics richer.",
+    "Follow-up: how does server GC pause behavior differ from V8 incremental marking?"
   ],
   "commonPitfalls": [
-    "Treating V8 and CLR heaps as identical.",
-    "Forgetting native resources need Dispose in .NET.",
-    "Overstating async as 'no allocations' in either runtime."
+    "Claiming JavaScript has no GC — gets you rejected because V8 is a full generational tracing collector.",
+    "Strong answer: compare generations, tuning knobs, native disposal, and diagnostics — not 'one has GC, one does not'.",
+    "Assuming CLR LOH rules apply to V8 TypedArrays and Buffers.",
+    "Ignoring IDisposable in .NET because 'GC handles everything' — native memory is outside the managed heap."
   ],
   "relatedTopicIds": [
     "csharp-14-generations-soh-loh",
     "csharp-14-gc-modes-microservices",
+    "csharp-14-array-pool-and-memory-pool",
     "csharp-13-promises-vs-tasks",
     "csharp-01-csharp-vs-js-ts"
   ],
@@ -188,6 +228,10 @@
     {
       "title": "V8 garbage collection",
       "url": "https://v8.dev/blog/trash-talk"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "animationHint": "compare"

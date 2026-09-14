@@ -1,0 +1,292 @@
+{
+  "id": "csharp-13-task-completion-source",
+  "slug": "task-completion-source",
+  "title": "TaskCompletionSource and manual task completion (bridging callbacks to await)",
+  "moduleId": "csharp-13-async-await",
+  "order": 8,
+  "hook": "Not every async API returns a Task. TaskCompletionSource lets you create a Task you complete yourself — the bridge between callback-based SDKs and await.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "TaskCompletionSource<T> (or the non-generic TaskCompletionSource) is a factory for a Task whose completion you control manually. Call SetResult, SetException, or SetCanceled when your callback fires, a timer expires, or a message arrives on a socket. The returned Task is awaitable like any other. This is how you wrap legacy event-based APIs, coordinate multiple async signals, or implement timeout-with-fallback patterns without blocking."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TaskCompletionSource",
+              "plainDefinition": "A class that creates a Task and lets you complete it later with result, exception, or cancellation.",
+              "example": "var tcs = new TaskCompletionSource<string>(); tcs.SetResult(\"done\");",
+              "longForm": "TaskCompletionSource"
+            },
+            {
+              "term": "SetResult",
+              "plainDefinition": "Transitions the Task to RanToCompletion with the given result. Can only be called once.",
+              "example": "tcs.SetResult(responseBody);",
+              "longForm": "SetResult"
+            },
+            {
+              "term": "TrySetResult",
+              "plainDefinition": "Like SetResult but returns false if the Task was already completed — safe for racing callbacks.",
+              "example": "if (!tcs.TrySetResult(data)) { /* already completed */ }",
+              "longForm": "TrySetResult"
+            },
+            {
+              "term": "Manual reset event pattern",
+              "plainDefinition": "Using TCS to signal one waiter when an external event occurs — cleaner than polling.",
+              "example": "await tcs.Task; // resumes when callback calls SetResult",
+              "longForm": "Manual reset event pattern"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS SDK v2 callbacks, raw WebSocket events, and third-party libraries that only expose Action<T> completion handlers cannot be awaited directly. TaskCompletionSource is the standard .NET bridge. In production you also use it for single-flight deduplication (ConcurrentDictionary<string, TaskCompletionSource<T>>), racing a Redis timeout against a slow HTTP call, or signaling that a background worker finished initialization before the host accepts traffic."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Prefer TrySet over Set",
+          "body": "Racing callbacks (timeout vs success) will call completion twice. TrySetResult and TrySetException return false on the loser instead of throwing InvalidOperationException."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Bridging a callback API to await",
+          "items": [
+            {
+              "title": "Create TaskCompletionSource",
+              "body": "var tcs = new TaskCompletionSource<HttpResponseMessage>();"
+            },
+            {
+              "title": "Register the callback",
+              "body": "Pass a lambda to the legacy API that calls tcs.TrySetResult or TrySetException."
+            },
+            {
+              "title": "Return or await tcs.Task",
+              "body": "Callers await the Task property — it completes when the callback fires."
+            },
+            {
+              "title": "Handle timeout or cancellation",
+              "body": "Link a CancellationTokenRegistration or CancelAfter to call TrySetCanceled."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "TaskCompletionSource lifecycle",
+            "source": "stateDiagram-v2\n  [*] --> Pending: new TCS\n  Pending --> Completed: TrySetResult\n  Pending --> Faulted: TrySetException\n  Pending --> Canceled: TrySetCanceled\n  Completed --> [*]\n  Faulted --> [*]\n  Canceled --> [*]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Wrap a callback-based HTTP client",
+            "code": "public static Task<string> GetLegacyAsync(string url)\n{\n    var tcs = new TaskCompletionSource<string>(\n        TaskCreationOptions.RunContinuationsAsynchronously);\n\n    LegacyHttpClient.Get(url, onSuccess: body =>\n    {\n        tcs.TrySetResult(body);\n    }, onError: ex =>\n    {\n        tcs.TrySetException(ex);\n    });\n\n    return tcs.Task;\n}\n\n// Caller:\nvar body = await GetLegacyAsync(\"https://api.example.com/data\");",
+            "explanation": "RunContinuationsAsynchronously prevents the callback thread from running continuations inline — important when the callback fires on a UI or I/O thread you do not want to block."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Race HTTP against a timeout with TCS",
+            "code": "public async Task<string> GetWithTimeoutAsync(\n    string url, TimeSpan timeout, CancellationToken cancellationToken)\n{\n    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);\n    cts.CancelAfter(timeout);\n\n    var tcs = new TaskCompletionSource<string>(\n        TaskCreationOptions.RunContinuationsAsynchronously, cts.Token);\n\n    _ = FetchAndCompleteAsync(url, tcs, cts.Token);\n    return await tcs.Task;\n}\n\nstatic async Task FetchAndCompleteAsync(\n    string url, TaskCompletionSource<string> tcs, CancellationToken token)\n{\n    try\n    {\n        var data = await http.GetStringAsync(url, token);\n        tcs.TrySetResult(data);\n    }\n    catch (Exception ex)\n    {\n        tcs.TrySetException(ex);\n    }\n}",
+            "explanation": "The TCS Task completes with result, exception, or cancellation. TrySet methods handle the race between timeout and success safely."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Single-flight cache load per key",
+            "code": "private readonly ConcurrentDictionary<string, Task<string>> _inFlight = new();\n\npublic Task<string> GetOrLoadAsync(string key, CancellationToken cancellationToken)\n{\n    return _inFlight.GetOrAdd(key, static (k, state) =>\n    {\n        var tcs = new TaskCompletionSource<string>(\n            TaskCreationOptions.RunContinuationsAsynchronously);\n        _ = LoadAndCompleteAsync(k, tcs, state.Token);\n        return tcs.Task;\n    }, (this, cancellationToken));\n}\n\nasync Task LoadAndCompleteAsync(\n    string key, TaskCompletionSource<string> tcs, CancellationToken token)\n{\n    try\n    {\n        var value = await _redis.StringGetAsync(key);\n        tcs.TrySetResult(value.ToString()!);\n    }\n    finally\n    {\n        _inFlight.TryRemove(key, out _);\n    }\n}",
+            "explanation": "Multiple concurrent callers for the same key share one TCS-backed Task. Only the first load runs; others await the same completion."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode: SetResult twice throws",
+            "code": "// WRONG — second call throws InvalidOperationException\nvar tcs = new TaskCompletionSource<int>();\ntcs.SetResult(1);\ntcs.SetResult(2); // throws!\n\n// RIGHT — racing callbacks use TrySet\nvoid OnTimeout() => tcs.TrySetCanceled();\nvoid OnSuccess(int n) => tcs.TrySetResult(n);\n// Only the first caller wins; the other returns false",
+            "explanation": "SetResult and SetException throw if the Task is already completed. Production code with racing signals must use TrySet variants."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Manual promise completion vs TaskCompletionSource",
+          "headers": [
+            "Aspect",
+            "C# TaskCompletionSource",
+            "JavaScript Promise constructor"
+          ],
+          "rows": [
+            [
+              "Create deferred task",
+              "new TaskCompletionSource<T>()",
+              "new Promise((resolve, reject) => ...)"
+            ],
+            [
+              "Complete with value",
+              "TrySetResult(value)",
+              "resolve(value)"
+            ],
+            [
+              "Complete with error",
+              "TrySetException(ex)",
+              "reject(error)"
+            ],
+            [
+              "Cancel support",
+              "TrySetCanceled() with CancellationToken",
+              "No built-in cancel — use AbortSignal separately"
+            ],
+            [
+              "Double completion",
+              "TrySet returns false",
+              "resolve after resolve is silently ignored"
+            ],
+            [
+              "Continuation scheduling",
+              "RunContinuationsAsynchronously option",
+              "Microtasks always async on same thread"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling SetResult twice when timeout and success race — use TrySet. Forgetting RunContinuationsAsynchronously and blocking the callback thread with heavy continuations. Leaking TCS instances in a dictionary without TryRemove on completion. Creating a new TCS per call when Task.FromResult would suffice for already-complete values."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: TaskCompletionSource is the implementation detail behind many framework APIs — ManualResetEventSlim's async variants, Channel readers, and HttpClient's internal completion sources. Under load, a leaked TCS in an in-flight dictionary shows up as growing gen-2 heap and Tasks that never complete. Use dotnet-counters to watch thread-pool queue length when continuations run synchronously on callback threads (missing RunContinuationsAsynchronously). BenchmarkDotNet comparing Task.FromResult vs new TCS for sync-complete paths shows when TCS is unnecessary overhead."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Approach",
+            "When to use",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "TaskCompletionSource",
+              "Callback APIs, racing signals, single-flight",
+              "Leak or double-complete if mishandled"
+            ],
+            [
+              "Task.FromResult",
+              "Value already known synchronously",
+              "No async coordination needed"
+            ],
+            [
+              "async/await native API",
+              "Library returns Task directly",
+              "Simplest — prefer when available"
+            ],
+            [
+              "Channel<T>",
+              "Many producers/consumers streaming",
+              "More ceremony than one-shot TCS"
+            ],
+            [
+              "ManualResetEventSlim",
+              "Simple one-shot signal, no result",
+              "Blocking Wait() variant starves pool"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'I use TaskCompletionSource everywhere' without distinguishing it from Task.FromResult. Calling SetResult in a timeout handler without TrySet and crashing on the success path that already completed. Not mentioning RunContinuationsAsynchronously when wrapping UI-thread callbacks. Confusing TCS with Task.Run — TCS does not queue work to the pool; it only signals completion."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "TaskCompletionSource creates a Task you complete manually — the bridge from callbacks to await.",
+    "Use TrySetResult/TrySetException when timeout and success race; Set throws on double completion.",
+    "In production, pair TCS with ConcurrentDictionary for single-flight per-key deduplication under Redis cache stampede.",
+    "60s: TaskCompletionSource wraps callback APIs into awaitable Tasks. Use TrySet for racing completions. RunContinuationsAsynchronously keeps callback threads free. Task.FromResult is enough when the value is already known.",
+    "Follow-up: how does IValueTaskSource relate to TCS for zero-allocation hot paths?"
+  ],
+  "commonPitfalls": [
+    "Saying 'TCS is just Task.Run' gets you rejected — TCS signals completion; it does not schedule work.",
+    "Calling SetResult twice in a timeout race instead of TrySetResult — production crash on the losing path.",
+    "Strong answer: 'I use TCS to bridge legacy callbacks and for single-flight deduplication; sync-complete paths use Task.FromResult or ValueTask instead.'"
+  ],
+  "relatedTopicIds": [
+    "csharp-13-task-async-await",
+    "csharp-13-sync-over-async-deadlocks",
+    "csharp-13-cancellation-tokens",
+    "csharp-15-high-concurrency-scenario"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "new Promise((resolve, reject) => ...)",
+      "note": "The Promise constructor executor is the JS equivalent of TaskCompletionSource: you hold resolve/reject and call them when an external event fires. C# adds explicit cancellation via TrySetCanceled and RunContinuationsAsynchronously for thread control.",
+      "futureTopicSlug": "javascript/async/promises"
+    },
+    {
+      "language": "typescript",
+      "concept": "Deferred<T> utility type",
+      "note": "Many TS codebases wrap { promise, resolve, reject } in a Deferred helper — identical pattern to TCS. C# TCS is built into the BCL with TrySet safety and TaskCreationOptions.",
+      "futureTopicSlug": "typescript/patterns/deferred"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TaskCompletionSource class",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.taskcompletionsource"
+    },
+    {
+      "title": "Task asynchronous programming model",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/task-asynchronous-programming-model"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

@@ -178,18 +178,56 @@
           "body": "Using Select when you meant SelectMany, then wondering why the type is IEnumerable<List<T>>. Calling GroupBy then mutating the source before enumerating the groups. Running N+1 dictionary lookups inside a Select that should have been a Join or a ToDictionary first. Using == instead of equals in a join clause."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Each LINQ operator in a deferred chain allocates an iterator object and captures lambdas as delegates — GroupBy and OrderBy also buffer the entire source before yielding, doubling memory pressure on large attempt lists. SelectMany flattens with an nested iterator; a common hot-path fix is to flatten once with ToList before GroupBy when the source is already materialized. For Count on ICollection sources, prefer **TryGetNonEnumeratedCount** (extension in .NET 6+) before falling back to enumeration — it avoids walking a List twice when you also foreach the same query. When CPU-bound aggregation on in-memory data exceeds one core, **Parallel LINQ (PLINQ)** via AsParallel() partitions the source — but adds ordering nondeterminism and overhead on small collections; pointer only, not default. How to prove it in production: dotMemory showing GroupByIterator retaining full buffer; BenchmarkDotNet List.Count versus query.Count() with TryGetNonEnumeratedCount."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Operator", "Memory behavior", "Senior tip"],
+          "rows": [
+            ["Where / Select", "Stream; one iterator + delegate each", "Fold filters into one Where on hot paths"],
+            ["SelectMany", "Nested iterator per outer element", "Prefer flat list input when already materialized"],
+            ["GroupBy / OrderBy", "Buffer entire source first", "Snapshot with ToList if source is live/mutating"],
+            ["Join", "Hash inner join; builds lookup", "ToDictionary once beats N+1 in Select"],
+            ["AsParallel (PLINQ)", "Partition for CPU-bound in-memory work", "Only when measured; small seqs lose"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "TryGetNonEnumeratedCount before double enumeration",
+            "code": "IEnumerable<Attempt> query = attempts.Where(a => a.Score >= 50);\n\nif (query.TryGetNonEnumeratedCount(out int count))\n{\n    // List<T>, array, or other ICollection — no full enumeration for Count\n    Console.WriteLine(count);\n}\nelse\n{\n    count = query.Count(); // walks the deferred chain\n}\n\nforeach (var a in query) { Report(a); } // second pass if deferred",
+            "explanation": "TryGetNonEnumeratedCount avoids a full walk when the underlying source already knows Count. On a pure deferred chain it returns false — then materialize once with ToList if you need both count and iteration."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing Select with SelectMany — nested IEnumerable versus flat sequence. Saying GroupBy streams like Where — it buffers everything first. Running Count then foreach on the same deferred query without ToList or TryGetNonEnumeratedCount. Recommending PLINQ by default — it helps measured CPU-bound in-memory workloads, not every LINQ chain. Strong answer: operator semantics, buffering vs streaming, snapshot before multiple use, PLINQ as measured opt-in."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "SelectMany flattens; Select of a collection does not.",
-    "GroupBy and OrderBy buffer; Where and Select stream.",
-    "Join is inner; GroupJoin plus DefaultIfEmpty is left outer.",
-    "join requires equals, not an arbitrary predicate."
+    "SelectMany flattens; Select of a collection yields nested IEnumerable.",
+    "GroupBy and OrderBy defer but buffer the entire source before first yield.",
+    "TryGetNonEnumeratedCount avoids full enumeration for Count on ICollection-backed sequences.",
+    "60s: SelectMany flattens. GroupBy buffers. Join uses equals. On hot paths snapshot with ToList before Count plus foreach. TryGetNonEnumeratedCount when source knows count. PLINQ AsParallel only when measured CPU-bound.",
+    "Follow-up: when would AsParallel help versus hurt on an in-memory attempt report?"
   ],
   "commonPitfalls": [
-    "Using Select when you meant SelectMany, then wondering why the type is IEnumerable<List<T>>.",
-    "Calling GroupBy then mutating the source before you enumerate the groups.",
-    "N+1 dictionary lookups inside a Select that should have been a Join or a ToDictionary first."
+    "Using Select when you meant SelectMany — rejected when the type is IEnumerable<List<T>> instead of flat T.",
+    "Strong answer: SelectMany maps one-to-many and concatenates; two from clauses are SelectMany.",
+    "Calling GroupBy then mutating the source before enumerating groups — buffered snapshot may be stale or inconsistent.",
+    "Count then foreach on deferred IEnumerable without ToList — two full passes; use TryGetNonEnumeratedCount or snapshot."
   ],
   "relatedTopicIds": [
     "csharp-12-query-vs-method-syntax",
@@ -202,6 +240,12 @@
       "concept": "flatMap, Object.groupBy",
       "note": "array.flatMap is SelectMany. Object.groupBy is eager. JS has no join operator in the language; you build maps. LINQ Join is typed and deferred.",
       "futureTopicSlug": "javascript/arrays/flatmap"
+    },
+    {
+      "language": "typescript",
+      "concept": "Array flatMap versus map",
+      "note": "flatMap is the SelectMany analogue and is eager on arrays. TypeScript has no TryGetNonEnumeratedCount — you check .length on arrays directly before iterating.",
+      "futureTopicSlug": "typescript/arrays/flatmap"
     }
   ],
   "officialSources": [

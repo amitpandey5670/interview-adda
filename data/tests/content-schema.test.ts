@@ -6,12 +6,15 @@ import {
   countTopicSnippets,
   topicHasDiagram,
   topicHasGlossary,
+  topicHasSeniorSection,
+  topicHasSixtySecondTakeaway,
   type ContentIndex,
   type InterviewPage,
   type Mindmap,
   type ModuleDoc,
   type OverviewPage,
   type QuickOverview,
+  type Stage,
   type Topic,
 } from '../contracts/content.models.ts';
 
@@ -56,6 +59,14 @@ function listModuleFolders(): string[] {
 
 function isUpgradedMindmap(mindmap: Mindmap): boolean {
   return Boolean(mindmap.overviewDiagram && (mindmap.conceptCards?.length ?? 0) >= 4);
+}
+
+function isSeniorStage(stage: Stage): boolean {
+  return stage === 'intermediate' || stage === 'advanced';
+}
+
+function requiresSeniorDepth(stage: Stage, upgradedModule: boolean): boolean {
+  return upgradedModule && isSeniorStage(stage);
 }
 
 describe('C# content schemas', () => {
@@ -136,18 +147,29 @@ describe('C# content schemas', () => {
       expect(topicFiles.length).toBe(moduleDoc.topics.length);
 
       const upgradedModule = isUpgradedMindmap(mindmap);
+      const seniorModule = requiresSeniorDepth(moduleDoc.stage, upgradedModule);
 
       for (const file of topicFiles) {
         const topic = loadJson(path.join(folder, 'topics', file)) as Topic;
         expect(topic.moduleId).toBe(moduleDoc.id);
         expect(slugs.has(topic.slug)).toBe(true);
-        expect(countTopicSnippets(topic)).toBeGreaterThanOrEqual(upgradedModule ? 3 : 1);
+        expect(countTopicSnippets(topic)).toBeGreaterThanOrEqual(
+          seniorModule ? 4 : upgradedModule ? 3 : 1,
+        );
         expect(topic.officialSources.length).toBeGreaterThanOrEqual(1);
 
         if (upgradedModule) {
           expect(topic.sections.length, `${topic.id} sections`).toBeGreaterThanOrEqual(4);
           expect(topicHasGlossary(topic), `${topic.id} glossary`).toBe(true);
           expect(topicHasDiagram(topic), `${topic.id} diagram`).toBe(true);
+        }
+
+        if (seniorModule) {
+          expect(topic.sections.length, `${topic.id} senior sections`).toBeGreaterThanOrEqual(6);
+          expect(topicHasSeniorSection(topic), `${topic.id} senior section`).toBe(true);
+          expect(topic.interviewTakeaways.length, `${topic.id} takeaways`).toBeGreaterThanOrEqual(5);
+          expect(topicHasSixtySecondTakeaway(topic), `${topic.id} 60s takeaway`).toBe(true);
+          expect(topic.jsTsCorrelations.length, `${topic.id} correlations`).toBeGreaterThanOrEqual(2);
         }
 
         topics.push(topic);

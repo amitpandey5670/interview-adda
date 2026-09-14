@@ -147,17 +147,55 @@
           "body": "Mutating a struct from a list indexer and expecting the list to change — you mutated a copy. Boxing value types in hot loops (non-generic collections, `object` keys) then blaming GC without measuring. Thinking `string` is a value type because `==` compares content — it is a reference type with value-like equality."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: `nint` and `nuint` (C# 9+) are native-sized integer value types — they copy like any other struct and are useful for pointer-sized indices and interop without casting to `IntPtr`. On 64-bit runtimes, `nint` is 8 bytes; assignment copies the value, not a heap object. Measure boxing with dotnet-counters (`GC Allocation Rate`) when legacy APIs take `object`. In module 14 you will map stack versus heap; here the language rule is copy versus alias, not storage location."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "nint as a value type for native-sized indices",
+            "code": "nint rowCount = rows.Length;   // value type — copies on assignment\nnint copy = rowCount;\ncopy += 1;\n// rowCount unchanged\n\n// Useful for interop and pointer-sized math:\nnint offset = (nint)buffer.Length;\nIntPtr handle = (IntPtr)offset;",
+            "explanation": "Line 1: `nint` is a struct (value type). Line 2–4: assignment copies; incrementing `copy` does not change `rowCount`. Lines 7–8: `nint` bridges to `IntPtr` without treating the index as a reference type."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Type", "Assignment semantics", "Senior note"],
+          "rows": [
+            ["int, bool, decimal", "Copy fields", "Built-in value types"],
+            ["nint / nuint", "Copy fields; native bit-width", "Not a reference — do not confuse with IntPtr boxing"],
+            ["struct / record struct", "Copy all fields", "List indexer returns a copy"],
+            ["class, string, array", "Copy reference", "Mutations visible through all aliases"],
+            ["object holding int", "Boxing — heap allocation", "Prefer generics to avoid GC pressure"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying all structs live on the stack. Claiming `string` is a value type because == compares content. Not knowing that `nint` is a value type. Explaining boxing without mentioning that it allocates on the heap."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Value assignment copies data; reference assignment aliases an object.",
-    "Boxing is wrapping a value type as a reference (`object` or interface).",
-    "Do not equate value type with \"stack\" in a senior interview; point at module 14 for GC."
+    "Boxing wraps a value type on the heap — measure with GC counters in hot paths.",
+    "`nint`/`nuint` are native-sized value types; they copy like int, not like a class.",
+    "60s: Copy vs alias is the rule. nint is a struct. string is a reference type with value equality. Boxing allocates. Stack/heap is module 14.",
+    "Follow-up: why does mutating a struct from list[i] not update the list?"
   ],
   "commonPitfalls": [
-    "Mutating a struct you got from a list indexer and expecting the list to change — you mutated a copy.",
-    "Boxing in hot loops (non-generic collections, `object` keys) then blaming GC without measuring.",
-    "Thinking `string` is a value type because `==` compares content."
+    "Saying structs always live on the stack gets you rejected — location is a CLR detail.",
+    "Thinking nint is a reference type because it relates to pointers.",
+    "Strong answer: 'Assignment copies values or aliases references. nint copies like int. Boxing allocates. Stack versus heap is implementation.'"
   ],
   "relatedTopicIds": [
     "csharp-03-built-in-types",

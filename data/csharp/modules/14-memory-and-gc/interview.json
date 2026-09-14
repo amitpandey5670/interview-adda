@@ -4,7 +4,7 @@
   "items": [
     {
       "question": "Where does a struct field of a class instance live?",
-      "answer": "On the heap, inside the object’s layout. The struct is not independently allocated. A local struct with no capture lives on the stack (or in registers). Boxing copies it into a heap object. Interviews fail people who say ‘structs always on the stack.’",
+      "answer": "On the heap, inside the object's layout. The struct is not independently allocated. A local struct with no capture lives on the stack (or in registers). Boxing copies it into a heap object. Interviews fail people who say 'structs always on the stack.'",
       "followUps": [
         "What happens when that struct is an async method local across an await?",
         "How does a large struct as a method argument hurt?"
@@ -13,30 +13,84 @@
     },
     {
       "question": "Why can a 90 KB byte[] cause longer pauses than a thousand small objects?",
-      "answer": "It lands on the LOH. LOH is collected with generation 2 and historically is not compacted every time, so free lists fragment. Small objects die in gen 0. A CSV import that allocates one giant buffer per request is a gen-2 tax. Prefer ArrayPool, streaming, or chunks under the threshold unless you need a single contiguous buffer.",
+      "answer": "It lands on the LOH. LOH is collected with generation 2 and is not compacted by default, so free lists fragment. Small objects die in gen 0. A CSV import that allocates one giant buffer per request is a gen-2 tax. Prefer ArrayPool, streaming, or chunks under the threshold unless you need a single contiguous buffer.",
       "followUps": [
         "What is GCSettings.LargeObjectHeapCompactionMode?",
-        "Does a 85,000-character string go to the LOH?"
+        "How does ArrayPool change the LOH story?"
       ],
       "sixtySeconds": "LOH is ~85KB+. Collected with gen 2. Fragmentation and full GCs are the cost. Pool or stream instead."
+    },
+    {
+      "question": "Your CSV import service shows rising gen-2 GC counts but flat live object count. What do you investigate?",
+      "answer": "LOH fragmentation or promotion storms. Check if each row allocates a new large buffer (LOH). Switch to ArrayPool<byte>.Shared with Rent/Return in finally. Verify with dotnet-counters: alloc-rate should drop and gen-2-gc-count should stabilize. If poh-size is rising, audit long-lived GCHandle pins.",
+      "followUps": [
+        "What does clearArray: true do on ArrayPool.Return?",
+        "When is stackalloc better than ArrayPool?"
+      ],
+      "sixtySeconds": "Flat live count + rising gen 2 = LOH churn or fragmentation. Pool buffers. Measure alloc-rate before and after."
     },
     {
       "question": "Why is a finalizer the wrong way to free a SkiaSharp bitmap?",
       "answer": "Finalizers run later on a dedicated thread, not when the using block exits. Native memory and GDI-like handles stay leased until GC notices the wrapper is dead, which can be after many requests. IDisposable/IAsyncDisposable plus using releases native resources deterministically. A finalizer is only a safety net if someone forgets Dispose, and it keeps the object alive a cycle longer.",
       "followUps": [
         "What does GC.SuppressFinalize do in the dispose pattern?",
-        "When do you need IAsyncDisposable instead of Dispose?"
+        "How do you spot a native leak when managed heap is flat?"
       ],
       "sixtySeconds": "Dispose now. Finalizers delay native cleanup and extend object lifetime. SkiaSharp types belong in using."
     },
     {
       "question": "What GC knobs would you actually change for a containerized API?",
-      "answer": "Server GC is the usual default for ASP.NET Core. Set a heap hard limit so the process respects cgroup memory. DATAS (dynamic adaptation to application sizes) in modern .NET shrinks heaps under light load. Do not sprinkle GC.Collect. Measure gen-2 frequency and pause times with EventCounters or dotnet-counters before changing latency versus throughput modes.",
+      "answer": "Server GC is the usual default for ASP.NET Core. Set a heap hard limit so the process respects cgroup memory. DATAS (Dynamic Adaptation To Application Sizes) in modern .NET shrinks heaps under light load. Do not sprinkle GC.Collect. Measure gen-2 frequency and pause times with EventCounters or dotnet-counters before changing latency versus throughput modes.",
       "followUps": [
         "Workstation GC in a 4-core container: when would you choose it?",
         "What does GCHeapHardLimitPercent do?"
       ],
       "sixtySeconds": "Server GC plus container heap limits. DATAS for variable load. Never Collect in the request path."
+    },
+    {
+      "question": "A Redis cache service allocates 200 MB/sec at peak. Where do you start?",
+      "answer": "Measure with dotnet-counters alloc-rate and time-in-gc under realistic load. Profile the hot path for string concat in loops, LINQ ToList per call, closure capture, and boxing through non-generic APIs. Fix the top allocator first. Do not change GC mode until alloc-rate drops — tuning GC on a leaky hot path wastes time.",
+      "followUps": [
+        "How does async state machine allocation compare to a sync method?",
+        "When does ValueTask help on cache-hit paths?"
+      ],
+      "sixtySeconds": "dotnet-counters alloc-rate first. Fix string concat, ToList, closures, boxing on hot path. GC mode second."
+    },
+    {
+      "question": "When do you pin a managed object and what changed in .NET 5?",
+      "answer": "Pin when native code needs a stable address — P/Invoke, fixed blocks, or GCHandleType.Pinned. Before .NET 5, pins blocked SOH compaction. .NET 5 introduced the Pinned Object Heap (POH) so pins are segregated. Still pin for the shortest duration and Free the handle in finally. Long-lived pins inflate poh-size and pause times.",
+      "followUps": [
+        "How does WeakReference differ from a strong cache?",
+        "What is ConditionalWeakTable used for?"
+      ],
+      "sixtySeconds": "Pin for interop. POH since .NET 5. Free in finally. WeakReference for caches that yield to GC."
+    },
+    {
+      "question": "Compare V8 and CLR garbage collection for a senior backend engineer moving from Node to .NET.",
+      "answer": "Both are generational tracing collectors. V8 runs per-isolate with young/old generations; tuning is mainly --max-old-space-size. CLR adds explicit SOH/LOH/POH segments, server versus workstation GC, DATAS heap adaptation, and IDisposable for native interop. Async in both allocates (Promise reactions vs state machines). CLR diagnostics are richer: dotnet-counters, dotnet-gcdump. Map Node heap limits to GCHeapHardLimitPercent.",
+      "followUps": [
+        "Does V8 have an LOH equivalent?",
+        "How do you compare alloc-rate across both runtimes?"
+      ],
+      "sixtySeconds": "Both generational tracing. CLR adds server GC, LOH/POH, Dispose, richer diagnostics. V8 tuning is coarser."
+    },
+    {
+      "question": "Your production app has a memory leak — managed heap grows every hour but gen-2 count is stable. Diagnose.",
+      "answer": "Likely a hidden root, not a GC tuning issue. Check static caches, event handlers holding delegates, undisposed GCHandles, and finalizable objects queued but not collected. Use dotnet-gcdump to see which types dominate and what roots them. If managed heap is flat but process RSS grows, suspect undisposed native wrappers (SkiaSharp, sockets) — check Dispose coverage.",
+      "followUps": [
+        "How do static fields act as GC roots?",
+        "What does the finalizer queue do to object lifetime?"
+      ],
+      "sixtySeconds": "Growing heap = hidden root or undisposed native wrapper. gcdump for types and roots. RSS without managed growth = missing Dispose."
+    },
+    {
+      "question": "Server GC vs workstation GC — when would you switch?",
+      "answer": "Server GC: one heap per logical processor, parallel collection, best for multi-core ASP.NET throughput. Workstation GC: single heap, background/concurrent collection, shorter individual pauses — best for desktop UI or very small containers where throughput matters less. Switch only after measuring time-in-gc and throughput with dotnet-counters. Never switch to workstation on a 16-core API without data showing pause sensitivity matters more than throughput.",
+      "followUps": [
+        "How does DATAS interact with server GC?",
+        "What is the impact of GC.Collect(2, forced) in a request handler?"
+      ],
+      "sixtySeconds": "Server GC for APIs. Workstation for UI or tiny pods. Measure pauses and throughput. DATAS for variable load. Never forced Collect."
     }
   ]
 }

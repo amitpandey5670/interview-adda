@@ -124,6 +124,15 @@
             "code": "public sealed class Session\n{\n    public AuthStamp Stamp; // inline inside Session object on heap\n}\n\nvar session = new Session { Stamp = new AuthStamp(42, 7) };\n// session ref on stack; Session + Stamp bytes on heap",
             "explanation": "The Session object is on the heap. AuthStamp is stored inline inside that object's layout — not as a separate allocation."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "stackalloc and ref struct on the stack",
+            "code": "Span<char> FormatId(int id)\n{\n    Span<char> buffer = stackalloc char[16];\n    id.TryFormat(buffer, out int written);\n    return buffer[..written]; // copy if escaping scope\n}",
+            "explanation": "stackalloc allocates in the current stack frame — no GC object. ref struct types like Span cannot be stored on the heap without pinning or boxing."
+          }
         }
       ]
     },
@@ -153,17 +162,46 @@
           "body": "Saying structs never go on the heap — boxing, async, and closures disprove that. Keeping a large byte[] in a long-lived singleton field for convenience. Ignoring that await extends the lifetime of locals onto the state machine object."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The JIT lays out value-type locals in stack frames or registers when escape analysis proves they never outlive the frame. Boxing, async state machines, lambda display classes, and class fields defeat that and promote data to the heap. ref struct types (Span<T>, ReadOnlySpan<T>) are stack-only by language rule. How to prove it in production: dotnet-gcdump or a profiler's allocation view shows boxing and closure classes; dotnet-counters tracks heap size growth when structs unexpectedly promote."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Memory win", "Cost / risk"],
+          "rows": [
+            ["stackalloc + Span", "Zero GC allocation for small buffers", "Must not return Span past frame; stack overflow if huge"],
+            ["readonly struct", "Inline copy semantics, fewer heap fields", "Large structs copy on every pass-by-value"],
+            ["class for hot DTO", "Stable heap reference, polymorphism", "Extra allocation + GC pressure per instance"],
+            ["record struct", "Value semantics with less boilerplate", "Still boxes if cast to object or captured"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'structs are always on the stack' without naming boxing, async state machines, or class fields. Strong answer: value types are inline in their container; the container may be a stack frame, a heap object, or a boxed wrapper."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Value types are inline; they are on the stack only when their container is a stack frame.",
-    "Async, lambdas, and boxing are the usual reasons a struct becomes a heap field.",
-    "Stack slots are garbage-collection roots for whatever they still reference."
+    "Value types store data inline; reference types are heap objects accessed through a reference.",
+    "Boxing, async/await, closures, and class fields are when structs leave the stack — not 'never'.",
+    "In Redis-heavy APIs, prefer stackalloc/Span for short-lived formatting buffers instead of new byte[].",
+    "60s: Locals can live in stack frames; heap objects need GC. Structs inline in their container. Boxing and async promote to heap. Stack slots are GC roots.",
+    "Follow-up: how does ref struct differ from struct, and when does the JIT elide a struct allocation?"
   ],
   "commonPitfalls": [
-    "Saying structs never go on the heap.",
+    "Saying structs never go on the heap — saying that gets you rejected because boxing, async, and closures all promote structs.",
+    "Strong answer: name the container — stack frame, heap object field, boxed wrapper, or state machine field.",
     "Keeping a large byte[] in a field of a long-lived singleton for convenience.",
-    "Ignoring that await extends the lifetime of locals to the state machine."
+    "Returning a stackalloc Span from a method without copying — use-after-free on the stack."
   ],
   "relatedTopicIds": [
     "csharp-14-generations-soh-loh",
@@ -179,12 +217,22 @@
       "concept": "Primitives versus objects in V8",
       "note": "JavaScript numbers are not C# value types. Objects and closures always live in the JavaScript heap. There is no programmer-controlled stack struct for a record of two ints.",
       "futureTopicSlug": "javascript/runtime/memory-model"
+    },
+    {
+      "language": "typescript",
+      "concept": "Stack versus heap visibility",
+      "note": "TypeScript has no stackalloc or ref struct. Every object literal and closure allocates on the V8 heap. C# lets you keep small buffers on the stack when escape analysis allows.",
+      "futureTopicSlug": "typescript/runtime/memory"
     }
   ],
   "officialSources": [
     {
       "title": "Fundamentals of garbage collection",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+    },
+    {
+      "title": "dotnet-gcdump diagnostic tool",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump"
     }
   ],
   "animationHint": "stack-heap",

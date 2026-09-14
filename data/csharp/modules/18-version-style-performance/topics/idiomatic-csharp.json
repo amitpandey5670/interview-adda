@@ -136,17 +136,55 @@
           "body": "Java-style GetUser/setUser instead of User property. public fields on DTOs. God classes with 2000 lines. Blocking async (.Result) in ASP.NET handlers."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: idiomatic claims need measurement — run BenchmarkDotNet on the hot path before switching to ValueTask, stackalloc, or record struct rows. A baseline MethodImpl + MemoryDiagnoser run comparing string.Split versus span walk on a CSV fixture gives numbers for code review. dotnet-counters gen-0 on staging after adopting IAsyncEnumerable paging validates that idiomatic streaming actually reduced allocations."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "BenchmarkDotNet — prove idiomatic span parse wins",
+            "code": "using BenchmarkDotNet.Attributes;\nusing BenchmarkDotNet.Running;\n\n[MemoryDiagnoser]\npublic class CsvParseBench\n{\n    private readonly string _line = \"sku,widget,42.50,US\";\n\n    [Benchmark(Baseline = true)]\n    public decimal SplitParse() =>\n        decimal.Parse(_line.Split(',')[2]);\n\n    [Benchmark]\n    public decimal SpanParse()\n    {\n        var span = _line.AsSpan();\n        var third = span.Split(',')[2].Trim();\n        return decimal.Parse(third);\n    }\n}\n// dotnet run -c Release --filter *CsvParseBench*",
+            "explanation": "MemoryDiagnoser shows gen-0 delta between Split (allocates string[]) and span walk — idiomatic choice backed by data, not preference."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Idiom", "Benefit", "Prove with"],
+          "rows": [
+            ["async all the way", "Thread-pool health", "No .Result in grep; load test"],
+            ["switch expressions", "Exhaustive branches", "CS8509 on new enum member"],
+            ["record DTO", "Immutable wire shape", "Redis payload size audit"],
+            ["span parse", "Lower gen-0", "BenchmarkDotNet MemoryDiagnoser"],
+            ["sealed + inject", "Clear composition", "ApiCompat public surface"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming ValueTask or span is faster without BenchmarkDotNet numbers. Sync I/O inside async-named methods. Deep inheritance instead of sealed service + interfaces. Clever one-liners that hide failure modes. Not reading BCL patterns before inventing your own container."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Idiomatic = async I/O, sealed classes, records, patterns, guard clauses.",
-    "Match BCL naming and composition patterns.",
-    "Readability and failure modes beat clever one-liners."
+    "Idiomatic C# = async I/O, sealed services, records, switch expressions, guard clauses — match BCL style.",
+    "Performance idioms (span, ValueTask, record struct) require BenchmarkDotNet or dotnet-counters proof.",
+    "In production, MemoryDiagnoser on Split vs span parse quantifies gen-0 before approving hot-path refactors.",
+    "60s: Read like BCL. async for I/O. sealed default. patterns over nested if. BenchmarkDotNet before micro-optimizations. Guard clauses early return.",
+    "Follow-up: when is ConfigureAwait(false) idiomatic in library code?"
   ],
   "commonPitfalls": [
-    "Sync I/O in async-named methods.",
-    "Deep inheritance instead of composition.",
-    "Non-descriptive abbreviations in public APIs."
+    "Claiming span/ValueTask is faster without BenchmarkDotNet gets you rejected — measure first.",
+    "Sync I/O in async-named methods — blocks thread pool under load.",
+    "Strong answer: 'Idiomatic is readable BCL-style code. Perf idioms need MemoryDiagnoser proof. IAsyncEnumerable for streaming. Result for expected misses.'"
   ],
   "relatedTopicIds": [
     "csharp-18-domain-dto-record",
@@ -161,12 +199,22 @@
       "concept": "Clean TypeScript habits",
       "note": "Early return, readonly data, async handlers — same readability goals as idiomatic C# services.",
       "futureTopicSlug": "typescript/style"
+    },
+    {
+      "language": "javascript",
+      "concept": "Performance measurement culture",
+      "note": "Node uses clinic.js or benchmark suites before claiming async patterns win. C# idiomatic perf claims map to BenchmarkDotNet + MemoryDiagnoser — same discipline, different tool.",
+      "futureTopicSlug": "javascript/performance/benchmarking"
     }
   ],
   "officialSources": [
     {
       "title": "C# coding conventions",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions"
+    },
+    {
+      "title": "BenchmarkDotNet",
+      "url": "https://benchmarkdotnet.org/articles/overview.html"
     }
   ],
   "scenarioTag": "redis-cache",

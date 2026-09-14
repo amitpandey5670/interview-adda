@@ -269,3 +269,13 @@ export function topicHasGlossary(topic: Topic): boolean {
 export function topicHasDiagram(topic: Topic): boolean {
   return topic.sections.some((section) => section.blocks?.some((block) => block.type === 'diagram'));
 }
+
+/** Whether a topic includes the senior interview depth section. */
+export function topicHasSeniorSection(topic: Topic): boolean {
+  return topic.sections.some((section) => /senior interview depth/i.test(section.heading));
+}
+
+/** Whether interview takeaways include a 60-second script bullet. */
+export function topicHasSixtySecondTakeaway(topic: Topic): boolean {
+  return topic.interviewTakeaways.some((item) => /60\s*s:/i.test(item) || /60-second/i.test(item));
+}

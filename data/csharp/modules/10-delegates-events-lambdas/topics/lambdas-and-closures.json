@@ -159,18 +159,54 @@
           "body": "EF Core and other IQueryable providers need expression trees. A block-bodied lambda becomes a delegate and will fail or run client-side unexpectedly."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: a closure leak shows up as gen-0 allocations and retained request objects in a dotnet-gcdump after a traffic spike — look for display class types holding HttpContext or byte[] from a capturing cache factory. Expression trees fail at runtime with 'could not be translated' when you pass a block-bodied lambda to IQueryable; inspect EF Core logs for client evaluation warnings. BenchmarkDotNet comparing static vs capturing lambdas on a hot Select path quantifies closure allocation cost."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Expression tree for IQueryable versus delegate for in-memory",
+            "code": "IQueryable<Attempt> query = db.Attempts;\n\n// Expression tree — EF translates to SQL\nExpression<Func<Attempt, bool>> activeFilter = a => a.Status == AttemptStatus.Active;\nvar active = query.Where(activeFilter);\n\n// Statement lambda — NOT an expression tree; use only on IEnumerable\nFunc<Attempt, bool> inMemory = a =>\n{\n    var cutoff = DateTime.UtcNow.AddDays(-7);\n    return a.SubmittedAt > cutoff;\n};\nvar recent = db.Attempts.AsEnumerable().Where(inMemory);",
+            "explanation": "Line 4: Expression<Func<...>> builds a tree EF Core walks. Line 8: block-bodied lambda is a delegate only — never pass this to IQueryable.Where expecting SQL translation."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Target", "Compiles to", "When to use"],
+          "rows": [
+            ["Func/Action delegate", "IL method + optional closure class", "LINQ to Objects, callbacks, events"],
+            ["Expression<TDelegate>", "Expression tree AST", "IQueryable providers (EF Core, NHibernate)"],
+            ["static lambda", "IL method, no display class", "Hot paths — prove zero capture"],
+            ["Capturing lambda", "Display class + delegate", "Convenient but extends captured object lifetime"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying all lambdas become expression trees — only when the target type is Expression<TDelegate> and the body is a single expression. Not knowing closure display classes allocate and pin captured objects. Using a capturing lambda on a static event without unsubscribing and calling it a 'minor style issue'. Expecting EF to translate a block-bodied lambda with local variables."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Lambdas convert to delegates or to Expression<T>; statement bodies cannot be trees.",
-    "Capture allocates a closure class; capturing this extends object lifetime.",
-    "static lambdas (C# 9) are the compiler-enforced no-capture form.",
-    "C# 14: parameter modifiers without repeating types; params still needs types."
+    "A lambda converts to a delegate (IL + optional closure) or to Expression<T> (AST for query providers) — never both from one syntax.",
+    "Capturing allocates a display class; static lambda is the compiler-enforced no-capture form on hot paths.",
+    "In production, EF 'client evaluation' warnings mean your lambda became a delegate, not a translatable expression tree.",
+    "60s: Lambdas target delegates or Expression<T>. Statement bodies cannot be trees. Capture = display class. static = no capture. IQueryable needs Expression<Func<...>> with expression body.",
+    "Follow-up: what does the compiler emit for a lambda that captures three locals — one display class or three?"
   ],
   "commonPitfalls": [
-    "Subscribing a capturing lambda to a static event and never unsubscribing.",
-    "Mutating a captured int from parallel attempt-submit tasks.",
-    "Expecting a statement lambda to be translated by an IQueryable provider."
+    "Saying every lambda is an expression tree gets you rejected — only Expression<TDelegate> targets with expression bodies.",
+    "Subscribing a capturing lambda to a static event and never unsubscribing — pins the subscriber until process exit.",
+    "Strong answer: 'Delegate for runtime invoke. Expression tree for IQueryable translation. static on hot paths. Profile closure allocations with BenchmarkDotNet if Select runs millions of times.'"
   ],
   "relatedTopicIds": [
     "csharp-10-delegates-func-action",
@@ -185,12 +221,22 @@
       "concept": "Closures and lexical this vs arrow functions",
       "note": "JavaScript arrows capture lexical this. C# lambdas capture this only if you reference instance members; static forbids it. JavaScript has no static lambda equivalent.",
       "futureTopicSlug": "javascript/functions/closures-this"
+    },
+    {
+      "language": "typescript",
+      "concept": "Expression trees vs runtime functions",
+      "note": "TypeScript has no built-in expression-tree layer — ORMs use string builders or metadata. C# Expression<T> lets EF walk the AST at runtime and emit SQL. JS/TS arrow functions always compile to callable JS, never to a translatable query AST.",
+      "futureTopicSlug": "typescript/types/function-types"
     }
   ],
   "officialSources": [
     {
       "title": "Lambda expressions",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/lambda-expressions"
+    },
+    {
+      "title": "Expression trees",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/expression-trees/"
     }
   ],
   "animationHint": "stack-heap",

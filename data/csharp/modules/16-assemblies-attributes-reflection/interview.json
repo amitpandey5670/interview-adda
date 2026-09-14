@@ -12,6 +12,15 @@
       "sixtySeconds": "Assembly is IL plus metadata plus version. Not one class per file. NuGet ships assemblies."
     },
     {
+      "question": "Explain AssemblyLoadContext and when you use a collectible ALC.",
+      "answer": "Default ALC loads shared runtime and app assemblies — not unloadable. Custom collectible ALC loads plugin DLLs in isolation; Unload() reclaims plugin metadata when no references remain. Use for hot-reload plugins or script engines. Loading plugins into Default ALC means you cannot unload without restarting the process.",
+      "followUps": [
+        "What prevents collectible ALC unload?",
+        "How does LoadFromAssemblyPath differ from default loading?"
+      ],
+      "sixtySeconds": "Default ALC for app. Collectible ALC for plugins. Unload when refs gone. Not Default for hot swap."
+    },
+    {
       "question": "When is reflection the wrong tool?",
       "answer": "Per-message dispatch by string method name on a hot SQS path — slow, not refactor-safe, breaks trimming. Reflection is fine once at startup for DI registration or scanning handlers. Prefer source generators or switch on typed discriminators for hot paths. Native AOT requires DynamicallyAccessedMembers roots if you must reflect.",
       "followUps": [
@@ -19,6 +28,15 @@
         "What is Activator.CreateInstance cost?"
       ],
       "sixtySeconds": "Reflection at startup OK. Per request bad. Generators and switches for hot paths."
+    },
+    {
+      "question": "What is DynamicallyAccessedMembers and why does Native AOT care?",
+      "answer": "Trimming and Native AOT remove metadata for types not proven reachable. DynamicallyAccessedMembers annotates reflection entry points so the analyzer preserves required members. Without roots, publish succeeds but runtime throws MissingMethodException. Prefer source-generated serializers over annotated reflection on hot paths.",
+      "followUps": [
+        "Difference between RequiresUnreferencedCode and DynamicallyAccessedMembers?",
+        "How does JsonSerializerContext avoid the problem?"
+      ],
+      "sixtySeconds": "Trim removes unreferenced metadata. DynamicallyAccessedMembers roots types. Generators better than roots on hot path."
     },
     {
       "question": "How do you prevent breaking changes in a shared NuGet library?",
@@ -37,6 +55,24 @@
         "How do source generators read attributes?"
       ],
       "sixtySeconds": "Compiler: Obsolete, Conditional, nullable. Framework attributes read at runtime or by generators."
+    },
+    {
+      "question": "How do source generators differ from reflection for JSON on an SQS consumer?",
+      "answer": "Reflection serializer inspects properties per message — CPU and allocation cost, trim-unsafe. JsonSerializerContext generator emits typed serialization at compile time — no per-message reflection, Native AOT friendly. Measure CPU with dotnet-trace before and after on representative message volume.",
+      "followUps": [
+        "What is IIncrementalGenerator?",
+        "Can you edit generated .g.cs files?"
+      ],
+      "sixtySeconds": "Generator emits code at build. Zero per-message reflection. JsonSerializerContext for SQS hot path."
+    },
+    {
+      "question": "Your plugin host leaks memory after unloading plugins — what do you check?",
+      "answer": "Collectible ALC only unloads when no Assembly, Type, or delegate references remain from Default ALC. Static events, cached delegates, or ThreadStatic holding plugin types pin the ALC. Use weak references or isolate plugin interfaces loaded only in the collectible context. dotnet-gcdump shows rooted plugin types after Unload().",
+      "followUps": [
+        "Can you unload Default ALC?",
+        "What does InternalsVisibleTo affect in plugin loading?"
+      ],
+      "sixtySeconds": "Collectible ALC needs zero refs from outside. Static caches pin plugins. gcdump for roots."
     }
   ]
 }

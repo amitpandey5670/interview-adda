@@ -11,7 +11,7 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Generation 0 is a nursery for brand-new allocations. Objects that survive a collection are promoted to generation 1, then generation 2. The SOH is collected frequently and compacted. The LOH stores large arrays and strings; it is collected with generation 2 and historically fragments because it is not compacted every collection."
+          "text": "Generation 0 is a nursery for brand-new allocations. Objects that survive a collection are promoted to generation 1, then generation 2. The SOH is collected frequently and compacted. The LOH stores large arrays and strings at or above roughly 85,000 bytes; it is collected with generation 2. Since .NET 4.5.1 LOH can be compacted on demand; .NET 5+ added the Pinned Object Heap (POH) so short-lived pinned buffers no longer fragment the SOH."
         },
         {
           "type": "glossary",
@@ -36,6 +36,13 @@
               "longForm": "Generation promotion",
               "plainDefinition": "Moving a surviving object to an older generation.",
               "example": "A singleton cache entry promoted to gen 2 stays until a full collection."
+            },
+            {
+              "term": "POH",
+              "shortForm": "POH",
+              "longForm": "Pinned Object Heap",
+              "plainDefinition": "Dedicated heap segment for pinned objects so they do not block SOH compaction.",
+              "example": "A GCHandle.Alloc with Pinned type places the object on the POH in .NET 5+."
             }
           ]
         }
@@ -78,6 +85,10 @@
             {
               "title": "Large allocation",
               "body": "Size at threshold skips nursery semantics and lands on LOH."
+            },
+            {
+              "title": "Pinned allocation",
+              "body": "Pinned objects go to POH (.NET 5+) instead of blocking SOH compaction."
             }
           ]
         },
@@ -86,7 +97,7 @@
           "diagram": {
             "type": "mermaid",
             "title": "Generations and heaps",
-            "source": "flowchart TD\n  A[new object] --> B[Gen 0 SOH]\n  B -->|survives| C[Gen 1 SOH]\n  C -->|survives| D[Gen 2 SOH]\n  E[large array 85KB+] --> F[LOH]\n  F -->|collected with| D"
+            "source": "flowchart TD\n  A[new object] --> B[Gen 0 SOH]\n  B -->|survives| C[Gen 1 SOH]\n  C -->|survives| D[Gen 2 SOH]\n  E[large array 85KB+] --> F[LOH]\n  G[pinned object] --> H[POH]\n  F -->|collected with| D\n  F -->|compact on demand| I[Defragment LOH]"
           }
         }
       ]
@@ -119,6 +130,15 @@
             "label": "Check LOH compaction mode",
             "code": "using System.Runtime;\n\nvar mode = GCSettings.LargeObjectHeapCompactionMode;\n// Default or CompactOnce — affects fragmentation after gen-2 GC",
             "explanation": "Modern .NET can compact LOH on demand or when a heap hard limit is hit."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Trigger LOH compaction once",
+            "code": "GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;\nGC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);\n// Demo only — production: fix allocation pattern instead",
+            "explanation": "CompactOnce defragments LOH on the next full GC. Use after a burst of large transient buffers, not in request handlers."
           }
         }
       ]
@@ -164,22 +184,53 @@
           "body": "Assuming every new byte[] is gen 0 — large arrays skip to LOH. Holding references to gen-2 caches that pin old graphs alive. Ignoring LOH fragmentation in long-running imports."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The LOH threshold is roughly 85,000 bytes for single-dimensional arrays. LOH objects start in generation 2 and are not compacted by default — free-list fragmentation is the production risk. Since .NET 4.5.1 you can set GCLargeObjectHeapCompactionMode.CompactOnce; container heap hard limits can trigger compaction automatically. .NET 5 introduced the Pinned Object Heap (POH) so interop pinning no longer creates immovable holes in the SOH. How to prove it in production: dotnet-counters shows gc-heap-size and loh-size; a gen-2 spike after CSV imports with flat live object count signals LOH fragmentation."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Heap", "Collection", "Compaction", "When to worry"],
+          "rows": [
+            ["SOH (gen 0–2)", "Frequent gen 0/1; gen 2 less often", "Always compacted", "High alloc rate, promotion storms"],
+            ["LOH (~85 KB+)", "Only with gen 2", "On demand (CompactOnce) or hard limit", "Per-request large buffers, fragmentation"],
+            ["POH (pinned)", "With gen 2", "Not compacted", "Long-lived pins still fragment POH"],
+            ["ArrayPool rent", "Reuses existing arrays", "N/A — avoids new LOH alloc", "Forgot Return, wrong size assumptions"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming LOH is never compacted (wrong since .NET 4.5.1) or that every byte[] is gen 0. Strong answer: size threshold, gen-2 collection, optional compaction, POH for pins, ArrayPool for reuse."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Gen 0 is a nursery; promotion means the object lived through a collection.",
-    "LOH is ~85 KB+; collected with gen 2; fragmentation is the risk.",
-    "Pool or stream large buffers instead of per-request LOH allocations."
+    "Gen 0 is a nursery; promotion means the object survived a collection and moved to an older generation.",
+    "LOH is ~85 KB+; collected with gen 2; fragmentation is the risk unless you compact or pool.",
+    "For CSV imports and image buffers, rent from ArrayPool or stream chunks instead of per-request LOH allocations.",
+    "60s: SOH has gens 0–2 and compacts. LOH is 85 KB+, gen 2 only, fragments unless CompactOnce. POH holds pins since .NET 5. Pool large buffers.",
+    "Follow-up: what triggers LOH compaction in a container with GCHeapHardLimitPercent?"
   ],
   "commonPitfalls": [
-    "Treating a 100 KB buffer like a cheap gen-0 allocation.",
+    "Treating a 100 KB buffer like a cheap gen-0 allocation — that answer ignores the LOH threshold.",
+    "Strong answer: name the ~85 KB threshold, gen-2 collection cost, and ArrayPool or streaming alternative.",
     "Never returning rented arrays to ArrayPool.",
-    "Assuming LOH is compacted every GC."
+    "Assuming LOH is never compacted — CompactOnce and heap hard limits can defragment."
   ],
   "relatedTopicIds": [
     "csharp-14-stack-heap-layout",
     "csharp-14-roots-mark-compact",
-    "csharp-14-gc-modes-microservices"
+    "csharp-14-gc-modes-microservices",
+    "csharp-14-array-pool-and-memory-pool",
+    "csharp-14-pinned-heap-and-weak-references"
   ],
   "jsTsCorrelations": [
     {
@@ -187,12 +238,22 @@
       "concept": "V8 generational GC",
       "note": "V8 is generational too, but you do not tune an LOH threshold the same way. Large TypedArrays still live in the JS heap.",
       "futureTopicSlug": "javascript/runtime/gc"
+    },
+    {
+      "language": "typescript",
+      "concept": "Buffer and ArrayBuffer sizing",
+      "note": "Node Buffer.alloc creates heap objects with no separate LOH segment. In C# a 90 KB byte[] has explicit LOH semantics and gen-2 collection behavior you can reason about.",
+      "futureTopicSlug": "typescript/runtime/buffers"
     }
   ],
   "officialSources": [
     {
       "title": "Fundamentals of garbage collection",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+    },
+    {
+      "title": "Large object heap",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/large-object-heap"
     }
   ],
   "scenarioTag": "csv-import"

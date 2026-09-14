@@ -124,6 +124,15 @@
             "code": "interface IAuditable\n{\n    DateTimeOffset CreatedAt { get; }\n}\n\nabstract class Entity(string id) : IAuditable\n{\n    public string Id { get; } = id;\n    public DateTimeOffset CreatedAt { get; } = DateTimeOffset.UtcNow;\n}\n\nsealed class Order(string id, decimal total) : Entity(id)\n{\n    public decimal Total { get; } = total;\n}",
             "explanation": "Line 6: one base class (`Entity`) plus one interface (`IAuditable`). Line 12: `Order` inherits from `Entity` and automatically implements `IAuditable` through the base. You can list multiple interfaces but only one class."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Initialization order with primary constructors",
+            "code": "abstract class AuthHandler(string issuer)\n{\n    protected string Issuer { get; } = issuer;\n    protected virtual void OnCreated() { /* must stay non-virtual or empty */ }\n\n    // Primary ctor body runs AFTER field initializers in derived type\n    // but BEFORE derived ctor body — virtual calls here are still unsafe.\n}\n\nsealed class LtiHandler(string issuer, string clientId) : AuthHandler(issuer)\n{\n    public string ClientId { get; } = clientId;\n    // Order: LtiHandler field inits → AuthHandler(issuer) body → LtiHandler ctor body\n}",
+            "explanation": "Primary constructors still follow CLR initialization order: derived field initializers, base constructor, derived constructor body. Calling virtual methods from the base primary constructor body hits the same trap as a classic base constructor."
+          }
         }
       ]
     },
@@ -160,16 +169,47 @@
           "body": "If you do not intend anyone to subclass your worker or DTO, mark it `sealed`. An unsealed public class is an open invitation for external inheritance you did not design for."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Single inheritance means every object carries one base-class slice in memory plus interface mapping tables for each implemented interface. Constructor chaining is not syntactic sugar — the CLR guarantees base fields are valid before derived constructor bodies run, but derived field initializers run before the base constructor, which is why virtual calls from the base constructor are unsafe. Sealed derived types (`sealed class LtiHandler`) close the hierarchy and signal that no further override slots exist — the JIT can treat calls to sealed types as direct calls. Abstract bases share algorithm steps without allowing `new Base()`. How to prove it in production: stack trace showing Derived.ctor called from Base.ctor during a virtual call, or a code review rule banning virtual calls in base constructors on auth handler hierarchies."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "When to use", "Interview trap"],
+          "rows": [
+            ["abstract base + sealed leaves", "Closed provider set (LtiHandler, OidcHandler)", "Leaving leaves unsealed invites unplanned overrides"],
+            ["One base + many interfaces", "Shared base behavior plus capability contracts", "Stuffing everything into one deep base instead"],
+            ["Primary constructor chaining", "Concise ctor forwarding with `: Base(args)`", "Assuming primary ctors change virtual-call safety — they do not"],
+            ["sealed class", "Workers, DTOs, handlers with no extension point", "Over-sealing test doubles — use interfaces instead"],
+            ["Virtual call in base ctor", "Template Method temptation", "Derived override reads uninitialized derived fields"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying C# supports multiple inheritance of classes — it does not; only one base class plus interfaces. Claiming constructors are inherited — they are not; every derived type must chain to a base constructor. Dismissing sealed as pessimism — in services, sealed communicates a closed design and helps devirtualization. Strong answer: one base, many interfaces; base ctor before derived body; never virtual from base ctor; seal leaf types in closed hierarchies."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "One base class; constructors chain with base(...).",
-    "Constructors and finalizers are not inherited.",
-    "sealed is a design statement, not pessimism."
+    "One base class; constructors chain with base(...); constructors and finalizers are not inherited.",
+    "Initialization order: derived field inits → base constructor → derived constructor body.",
+    "sealed closes derivation and helps JIT devirtualization on hot handler paths.",
+    "60s: C# allows one base class and many interfaces. Constructors chain with base(...). Base ctor runs before derived body but after derived field inits — so virtual calls from base ctor are unsafe. Seal leaf types in closed hierarchies like auth providers.",
+    "Follow-up: why is sealed not just pessimism in a microservice with no planned subclasses?"
   ],
   "commonPitfalls": [
-    "Forgetting that the base constructor runs before the derived body when reading instance virtual methods from a base ctor.",
-    "Public unsealed classes with no planned derived types."
+    "Saying constructors are inherited — that gets rejected; every derived type must explicitly chain to a base constructor.",
+    "Strong answer: base(...) or implicit parameterless base; order is derived field inits, base ctor, derived body.",
+    "Calling virtual methods from a base constructor — derived override runs before derived field initializers complete.",
+    "Public unsealed classes with no planned derived types — external teams may subclass APIs you did not design for extension."
   ],
   "relatedTopicIds": [
     "csharp-05-composition-vs-inheritance",

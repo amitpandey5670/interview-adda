@@ -147,17 +147,55 @@
           "body": "Returning default! on miss and calling it a hit. Making Result a mutable class with ten properties copied from an exception hierarchy. Using exceptions for Redis misses in a hot high-concurrency path. Using T? on an unconstrained T as a miss signal — it means different things for struct versus class."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A closed generic Result<T> at an API boundary is where generics meet production I/O: T is SessionDto or TokenClaims at the call site, but the wrapper carries Hit, Miss, or Fault — not overloaded null semantics. Unconstrained T? is a poor miss signal because default(T) is null for classes and zero for structs. Prefer TryGet with MaybeNullWhen(false) when you only need hit/miss; add Fault when deserialize errors must not masquerade as misses. Keep the type a small readonly struct — generic sharing applies to reference-type T arguments in the wrapper's methods, but each closed CacheResult<SessionDto> is still a distinct constructed type in metadata. How to prove it in production: log metrics tagged by outcome (hit/miss/fault) instead of counting null returns; Redis GET latency dashboards split by fault rate after bad deploys."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["API shape", "Pros", "Cons"],
+          "rows": [
+            ["T? Get<T>(key)", "Simple signature", "Null overloads miss, empty, and fault"],
+            ["TryGet<T> + MaybeNullWhen", "Mirrors Dictionary; fast path", "No third state for deserialize fault"],
+            ["CacheResult<T> struct", "Hit / Miss / Fault explicit", "Slightly more caller code"],
+            ["Exceptions on miss", "Familiar to juniors", "Slow on hot Redis paths at scale"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Closed generic Result at the Redis boundary",
+            "code": "CacheResult<SessionDto> r = ReadSession(redis, key);\n\nswitch (r)\n{\n    case { Hit: true }:\n        UseSession(r.Value!);\n        break;\n    case { Error: not null }:\n        Metrics.Fault(r.Error); // bad JSON — not a miss\n        break;\n    default:\n        Metrics.Miss();         // true cache miss\n        RefreshFromDatabase();\n        break;\n}",
+            "explanation": "Pattern matching on a closed generic Result makes the three outcomes explicit in metrics and logs — the production proof interviewers want instead of null counting."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Returning null for Redis miss, empty value, and JsonException — collapses three operational stories. Pulling a heavyweight Result NuGet library to look senior — a twenty-line readonly struct is enough. Using exceptions for expected cache misses on a 999-concurrency path. Strong answer: TryGet for two states, CacheResult<T> for three, MaybeNullWhen, metrics by outcome."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "A generic Result/TryGet separates miss, hit, and fault at cache and deserialize boundaries.",
-    "Unconstrained T? is a poor miss signal; attributes or a wrapper are clearer.",
-    "Keep the type small; do not hide ThrowIfNull for broken arguments inside Result."
+    "Unconstrained T? is a poor miss signal; MaybeNullWhen or a wrapper is clearer across struct and class.",
+    "Keep the type a small readonly struct; closed generic T is SessionDto at the call site.",
+    "60s: Do not return null from Get<T> for Redis — miss, empty, and fault collapse. Use TryGet with MaybeNullWhen for hit/miss. CacheResult<T> adds Fault. Log metrics by outcome, not null rate.",
+    "Follow-up: when is TryGet enough versus needing a third Fault state?"
   ],
   "commonPitfalls": [
-    "Returning default! on miss and calling it a hit.",
+    "Returning default! on miss and calling it a hit — reviewers reject conflating miss with default(T).",
+    "Strong answer: explicit Miss factory; Found(T) requires non-null T on hit.",
     "Making Result a mutable class with ten properties copied from an exception hierarchy.",
-    "Using exceptions for Redis misses in a hot 999-concurrency path."
+    "Using exceptions for Redis misses in a hot high-concurrency path — expected misses are not exceptional."
   ],
   "relatedTopicIds": [
     "csharp-09-generic-types-and-methods",
@@ -172,6 +210,12 @@
       "concept": "discriminated unions",
       "note": "{ ok: true, value: T } | { ok: false, error: string } is the TypeScript shape of CacheResult<T>. TypeScript erases it; C# keeps a real struct at run time.",
       "futureTopicSlug": "typescript/types/discriminated-unions"
+    },
+    {
+      "language": "javascript",
+      "concept": "null as miss signal",
+      "note": "JS functions often return null for miss and throw for fault — same ambiguity as T? Get in C#. Discriminated objects { hit, value, error } mirror CacheResult<T> but without compile-time enforcement.",
+      "futureTopicSlug": "javascript/errors/null-vs-undefined"
     }
   ],
   "officialSources": [

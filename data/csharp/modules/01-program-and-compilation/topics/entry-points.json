@@ -118,6 +118,15 @@
             "code": "using var client = new HttpClient();\nvar html = await client.GetStringAsync(\"https://example.com\");\nConsole.WriteLine(html.Length);\n\n// await at top level synthesizes async Task Main instead of void Main.",
             "explanation": "Top-level await changes the generated signature to async Task Main. Useful for console tools that call APIs without blocking."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exit code from top-level return",
+            "code": "if (args.Length == 0)\n{\n    Console.Error.WriteLine(\"usage: tool <queue>\");\n    return 1;\n}\n\nConsole.WriteLine($\"ok {args[0]}\");\nreturn 0; // synthesized Main returns int — process exit code",
+            "explanation": "Returning an int from top-level statements sets the process exit code — same as static int Main returning that value."
+          }
         }
       ]
     },
@@ -148,17 +157,46 @@
           "body": "Two Program.cs files both with top-level statements after a copy-paste. Looking for Main in a new template and concluding the app has no entry point. Forgetting that await at top-level changes the synthesized signature to async Main."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: the compiler synthesizes a static Main method from top-level statements — inspect with ildasm or dotPeek to see Program.<Main>$ or similar. Exactly one compilation unit may contain top-level statements per executable project. async Main returns Task; unhandled exceptions propagate differently than void Main. Library projects must not use top-level statements. CI should fail if two files define top-level entry — CS8802."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Style", "Generated signature", "When to choose"],
+          "rows": [
+            ["Top-level statements", "static void/int/Task Main", "Scripts, modern console templates"],
+            ["Classic Main", "Explicit static Main", "Libraries teaching, explicit args handling"],
+            ["Top-level await", "static async Task Main", "Console tools calling HTTP/Redis"],
+            ["return int", "Exit code to OS", "CI scripts checking $?"],
+            ["Multiple Main candidates", "CS0017 compile error", "Only one entry per exe"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming top-level statements skip Main entirely — compiler generates it. Two files with top-level statements in one project. Not knowing args is string[] without node path prefixes. Using top-level statements in a class library project."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Exactly one entry point per executable compilation.",
-    "Top-level statements are syntactic sugar for a synthesized Main, not a different runtime model.",
-    "`args` is the process argument vector, same idea as `process.argv.slice(2)` but typed as `string[]`."
+    "Exactly one entry point per executable — top-level statements are syntactic sugar for a compiler-generated static Main.",
+    "Top-level await synthesizes async Task Main; returning int sets process exit code for CI scripts.",
+    "In production, library projects must use explicit types — no top-level statements; exe projects fail build on duplicate entry files.",
+    "60s: One entry per exe. Top-level statements generate Main. args is string[]. return int for exit code. await makes async Main. Libraries cannot use top-level.",
+    "Follow-up: how does exception handling differ between async Task Main and void Main?"
   ],
   "commonPitfalls": [
-    "Two Program.cs files both with top-level statements after a copy-paste.",
-    "Looking for `Main` in a new template and concluding the app has no entry point.",
-    "Forgetting that `await` at top-level changes the synthesized signature to async Main."
+    "Two Program.cs with top-level statements gets you rejected — CS8802 duplicate entry.",
+    "Looking for Main in template and concluding no entry point — it is synthesized.",
+    "Strong answer: 'Compiler generates Main. One top-level file per exe. async Main for await. return for exit codes. Inspect IL if skeptical.'"
   ],
   "relatedTopicIds": [
     "csharp-01-file-based-apps",
@@ -171,6 +209,12 @@
       "concept": "process entry and argv",
       "note": "Node runs the file you pass to node. C# always compiles to an entry method. args is argv without the runtime path prefix Node includes.",
       "futureTopicSlug": "javascript/runtime/process-argv"
+    },
+    {
+      "language": "typescript",
+      "concept": "Top-level await in ESM",
+      "note": "Node ESM allows top-level await like C# top-level await synthesizing async Main — but Node has no single-entry constraint across files in a project.",
+      "futureTopicSlug": "typescript/modules/top-level-await"
     }
   ],
   "officialSources": [

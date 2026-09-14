@@ -1,11 +1,11 @@
 {
   "moduleId": "csharp-14-memory-and-gc",
   "title": "Memory and garbage collection — concept map",
-  "intro": "The Common Language Runtime (CLR) owns the managed heap and reclaims objects you no longer reference. This module covers stack versus heap layout, generations and the Large Object Heap (LOH), mark-and-compact collection, Dispose versus finalizers, allocation traps, garbage collection modes for microservices, and how that compares to V8 in Node.js.",
+  "intro": "The Common Language Runtime (CLR) owns the managed heap and reclaims objects you no longer reference. This module covers stack versus heap layout, generations and the Large Object Heap (LOH) and Pinned Object Heap (POH), mark-and-compact collection, ArrayPool and MemoryPool, pinning and weak references, Dispose versus finalizers, allocation traps, garbage collection modes for microservices, and how that compares to V8 in Node.js.",
   "overviewDiagram": {
     "type": "mermaid",
     "title": "Managed memory lifecycle",
-    "source": "flowchart TD\n  A[Allocate on managed heap] --> B{Size}\n  B -->|Small| C[Gen 0 SOH]\n  B -->|Large 85KB+| D[LOH]\n  C --> E[GC marks from roots]\n  E --> F[Compact survivors]\n  F --> G[Reclaim dead objects]\n  H[Dispose native resources] -->|deterministic| I[Free now]\n  H -->|forgotten| J[Finalizer queue later]"
+    "source": "flowchart TD\n  A[Allocate on managed heap] --> B{Size}\n  B -->|Small| C[Gen 0 SOH]\n  B -->|Large 85KB+| D[LOH]\n  B -->|Pinned| P[POH]\n  C --> E[GC marks from roots]\n  E --> F[Compact survivors]\n  F --> G[Reclaim dead objects]\n  D -->|CompactOnce| H[Defragment LOH]\n  R[ArrayPool rent] -.->|reuse| D\n  H[Dispose native resources] -->|deterministic| I[Free now]\n  H -->|forgotten| J[Finalizer queue later]"
   },
   "conceptCards": [
     {
@@ -17,9 +17,9 @@
     },
     {
       "id": "card-gens-loh",
-      "title": "Generations and LOH",
-      "summary": "Gen 0 nursery. LOH ~85 KB+. Large CSV buffers hit LOH — pool or stream instead.",
-      "example": "new byte[90_000] lands on LOH, collected with gen 2",
+      "title": "Generations, LOH, POH",
+      "summary": "Gen 0 nursery. LOH ~85 KB+. POH for pins since .NET 5. CompactOnce defragments LOH.",
+      "example": "new byte[90_000] lands on LOH; GCHandle.Pinned goes to POH",
       "topicSlug": "generations-soh-loh"
     },
     {
@@ -39,28 +39,42 @@
     {
       "id": "card-traps",
       "title": "Allocation traps",
-      "summary": "String concat, LINQ ToList, closures, boxing flood gen 0. Measure before micro-optimizing.",
+      "summary": "String concat, LINQ ToList, closures, boxing flood gen 0. Measure alloc-rate with dotnet-counters.",
       "example": "key += part in loop — use StringBuilder",
       "topicSlug": "allocation-traps"
     },
     {
       "id": "card-gc-modes",
       "title": "GC modes",
-      "summary": "Server GC for APIs. Heap hard limits in containers. DATAS for variable load. Never GC.Collect in requests.",
-      "example": "GCHeapHardLimitPercent in runtimeconfig",
+      "summary": "Server GC for APIs. DATAS for variable load. Heap hard limits in containers. Never GC.Collect in requests.",
+      "example": "GCHeapHardLimitPercent + System.GC.DynamicAdaptationMode",
       "topicSlug": "gc-modes-microservices"
     },
     {
       "id": "card-v8",
       "title": "V8 vs CLR",
-      "summary": "Both generational tracing GC. CLR adds server GC, LOH, IDisposable for native resources.",
+      "summary": "Both generational tracing GC. CLR adds server GC, LOH/POH, IDisposable for native resources.",
       "example": "NODE_OPTIONS max-old-space-size vs GC heap limits",
       "topicSlug": "v8-vs-clr-gc"
+    },
+    {
+      "id": "card-pool",
+      "title": "ArrayPool / MemoryPool",
+      "summary": "Rent large buffers, Return in finally. Avoids LOH churn per request.",
+      "example": "ArrayPool<byte>.Shared.Rent(90_000) for CSV rows",
+      "topicSlug": "array-pool-and-memory-pool"
+    },
+    {
+      "id": "card-pin-weak",
+      "title": "POH and weak refs",
+      "summary": "Pin for interop on POH. WeakReference for caches that yield to GC.",
+      "example": "GCHandle.Alloc(buf, Pinned) + handle.Free() in finally",
+      "topicSlug": "pinned-heap-and-weak-references"
     }
   ],
   "revisionDiagram": {
     "type": "mermaid",
     "title": "Memory and GC revision map",
-    "source": "mindmap\n  root((Memory and GC))\n    Layout\n      Stack per thread\n      Managed heap for objects\n      Struct inline vs class reference\n      Boxing async closures promote\n    Generations\n      Gen 0 nursery SOH\n      Promotion to gen 1 and 2\n      LOH 85KB threshold\n      ArrayPool for large buffers\n    Collection\n      Roots stacks statics handles\n      Mark reachable graph\n      Compact SOH survivors\n      Pinning blocks move\n    Cleanup\n      IDisposable using block\n      IAsyncDisposable await using\n      Finalizer delayed safety net\n      SkiaSharp needs Dispose\n    Traps\n      String concat loops\n      LINQ materialization\n      Closure display classes\n      Measure alloc rate first\n    Tuning\n      Server GC for services\n      Container heap hard limit\n      DATAS variable load\n      Compare V8 generational model"
+    "source": "mindmap\n  root((Memory and GC))\n    Layout\n      Stack per thread\n      Managed heap for objects\n      Struct inline vs class reference\n      Boxing async closures promote\n    Generations\n      Gen 0 nursery SOH\n      Promotion to gen 1 and 2\n      LOH 85KB threshold\n      POH for pinned objects\n      LOH CompactOnce defrag\n    Collection\n      Roots stacks statics handles\n      Mark reachable graph\n      Compact SOH survivors\n      Pinning on POH since NET5\n    Pooling\n      ArrayPool rent return\n      MemoryPool IMemoryOwner\n      Avoid LOH per request\n    Pinning and weak refs\n      GCHandle Pinned interop\n      WeakReference cache\n      Free handle in finally\n    Cleanup\n      IDisposable using block\n      IAsyncDisposable await using\n      Finalizer delayed safety net\n      SkiaSharp needs Dispose\n    Traps\n      String concat loops\n      LINQ materialization\n      Closure display classes\n      dotnet-counters alloc-rate\n    Tuning\n      Server GC for services\n      DATAS variable load\n      Container heap hard limit\n      Compare V8 generational model"
   }
 }

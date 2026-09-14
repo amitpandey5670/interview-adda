@@ -175,18 +175,55 @@
           "body": "Assuming query syntax talks to a database because it looks like SQL — it runs on whatever IEnumerable or IQueryable source you gave it. Writing SELECT-first SQL order in C# and expecting it to compile. Believing one spelling is faster than the other. Forgetting that let adds an extra projection step."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Query syntax is pure compiler rewrite to extension methods — identical Intermediate Language (IL) to method syntax for the same operators. Neither spelling changes **iterator allocations**: each deferred operator still allocates a delegate and an enumerator object (or struct enumerator boxed when returned as IEnumerable<T>). The let clause introduces an extra Select and transparent identifier, adding one iterator layer. For hot CSV import paths, method syntax is often preferred because reviewers see the chain and Count/ToList boundaries clearly. How to prove it in production: dotMemory allocation timeline showing WhereIterator + Func delegate per chained operator; BenchmarkDotNet query syntax versus method syntax on the same pipeline — expect parity."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Style", "Strength", "Hidden cost"],
+          "rows": [
+            ["Query syntax", "Multi-clause joins and groupings read cleanly", "let adds extra Select iterator"],
+            ["Method syntax", "Method-only ops (Count, TryGetNonEnumeratedCount) visible", "Long chains harder to scan"],
+            ["Mixed (query + .Count())", "Standard for immediate scalars", "Parentheses required; same IL as methods"],
+            ["Either on IQueryable", "Same expression-tree build", "Provider translation limits unchanged"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Decompile-equivalent — same chain both ways",
+            "code": "// Query syntax:\nvar q = from row in rows\n          where row.StartsWith(\"att\")\n          select row;\n\n// Compiler output equivalent:\nvar m = rows.Where(row => row.StartsWith(\"att\"));\n\n// IL and iterator allocations match — neither is faster.\n// dotMemory shows same WhereIterator for both.",
+            "explanation": "Interviewers asking which is faster expect you to say neither — the compiler rewrites query syntax to the same extension method calls and iterator types."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming query syntax is faster or hits SQL directly — it is compiler sugar over the same IEnumerable/IQueryable operators. Saying let is free — it adds a projection iterator. Insisting one style is always better — senior answer is readability and operator availability. Strong answer: same IL, choose by clarity, method-only for Count/TryGetNonEnumeratedCount, measure iterator allocations on hot paths."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Query syntax translates to method calls; no magic SQL and no performance difference.",
+    "Query syntax translates to method calls; no performance difference — same deferred iterator chain.",
     "from is first so the range variable is in scope — unlike SQL SELECT-first.",
-    "Some operators are method-only: Count, Any, ToList, ElementAt.",
-    "Identical lambdas become Func on IEnumerable and Expression on IQueryable."
+    "let adds an extra Select iterator — not free on hot paths.",
+    "60s: Query and method syntax compile to the same operators and same iterator allocations. Use query for joins/groups; methods for Count and operators without keywords. Neither talks to SQL unless the source is IQueryable.",
+    "Follow-up: what IL or allocation difference would you expect between the two spellings?"
   ],
   "commonPitfalls": [
-    "Assuming query syntax talks to a database because it looks like SQL.",
-    "Writing SQL-style SELECT ... FROM in C# and expecting it to compile.",
-    "Forgetting that let allocates an extra projection."
+    "Assuming query syntax talks to a database because it looks like SQL — rejected; source type determines execution.",
+    "Strong answer: IEnumerable runs in process; IQueryable builds expression trees — spelling is irrelevant.",
+    "Believing one spelling is faster than the other — BenchmarkDotNet shows parity for equivalent chains.",
+    "Forgetting that let allocates an extra projection iterator in the deferred chain."
   ],
   "relatedTopicIds": [
     "csharp-12-standard-operators",
@@ -199,6 +236,12 @@
       "concept": "Array map/filter chains",
       "note": "rows.filter(...).map(...) is method syntax. JavaScript has no query-expression compiler. Each Array method usually returns a new array immediately — eager — unlike LINQ's deferred Where.",
       "futureTopicSlug": "javascript/arrays/map-filter"
+    },
+    {
+      "language": "typescript",
+      "concept": "no query-expression rewrite",
+      "note": "TypeScript has no from/where/select compiler pass. LINQ query syntax is C#-specific sugar; TS always uses method chains on arrays or lazy iterables.",
+      "futureTopicSlug": "typescript/arrays/chain"
     }
   ],
   "officialSources": [

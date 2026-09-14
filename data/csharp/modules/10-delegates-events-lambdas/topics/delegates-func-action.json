@@ -159,18 +159,54 @@
           "body": "-= removes one matching entry from the end of the invocation list, not every equal handler. Loop carefully when cleaning up."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: when a RabbitMQ fan-out stops mid-list, capture the invocation list length in logs before raise and compare to handlers that actually ran. A metrics handler that throws on one poison messageId should not prevent ack — wrap GetInvocationList in try/catch per entry. dotnet-counters does not expose delegate internals, but thread-pool starvation from synchronous multicast on I/O threads shows up as queue depth growth while handler count in logs drops after the first exception."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Production multicast fault isolation with telemetry",
+            "code": "public void RaiseWithTelemetry(string messageId)\n{\n    var handlers = Processed;\n    if (handlers is null) return;\n\n    var list = handlers.GetInvocationList();\n    _metrics.RecordHandlerCount(list.Length);\n\n    foreach (var d in list)\n    {\n        try { ((Action<string>)d)(messageId); }\n        catch (Exception ex)\n        {\n            _metrics.RecordHandlerFailure(d.Method.Name);\n            _logger.LogError(ex, \"handler {Handler} failed for {Id}\", d.Method.Name, messageId);\n        }\n    }\n}",
+            "explanation": "Line 7: snapshot invocation list length for dashboards. Line 11: each handler isolated — one throw does not abort ack or routing handlers later in the list."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Pros", "Cons / when not to use"],
+          "rows": [
+            ["Direct Invoke on multicast", "Simple, fast", "One throw aborts remaining handlers"],
+            ["GetInvocationList + per-handler try/catch", "Fault-tolerant fan-out", "More code; order still synchronous"],
+            ["Custom delegate type", "Named contract, ref/out", "Boilerplate when Func/Action suffice"],
+            ["Func/Action", "BCL aliases, readable", "Return type is part of signature — no overload tricks"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying multicast handlers run on separate threads — they run synchronously on the raiser's thread in subscription order. Claiming return type does not matter for delegate compatibility. Not knowing that one handler exception skips the rest unless you iterate GetInvocationList. Proposing a public delegate field instead of event for a hosted service callback."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Delegate signature includes return type; overload resolution does not apply.",
-    "Func/Action are the default; custom delegates name a contract.",
-    "Multicast is synchronous; one throw stops the rest unless you walk GetInvocationList.",
-    "Snapshot the delegate field to a local before invoke to avoid a race with unsubscription."
+    "A delegate is a CLR type holding a method reference; signature includes return type — overload rules do not apply.",
+    "Multicast += builds an invocation list; one throw aborts later handlers unless you walk GetInvocationList.",
+    "In production, log invocation list length vs handlers completed when fan-out must ack despite a metrics handler failure.",
+    "60s: Delegate = typed method pointer. Func returns, Action void. Multicast is synchronous left-to-right. Snapshot before invoke. GetInvocationList isolates exceptions so ack still runs.",
+    "Follow-up: why does -= require the same delegate instance, and what race does snapshotting the field prevent?"
   ],
   "commonPitfalls": [
+    "Saying multicast runs handlers on separate threads gets you rejected — it is synchronous on the raiser's thread.",
     "Declaring a public delegate field so callers can assign null and wipe every handler.",
-    "Assuming -= removes every equal handler; it removes one matching entry from the end.",
-    "Capturing loop variables in handlers subscribed inside a foreach over deliveries."
+    "Strong answer: 'Snapshot the delegate, iterate GetInvocationList with per-handler try/catch when fan-out must survive one failure — order is still synchronous.'"
   ],
   "relatedTopicIds": [
     "csharp-10-lambdas-and-closures",

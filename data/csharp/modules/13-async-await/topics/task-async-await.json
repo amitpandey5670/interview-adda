@@ -125,6 +125,15 @@
             "code": "// Task.Run: queue CPU-bound work to the thread pool\nvar hash = await Task.Run(() => ComputeHash(largeFile));\n\n// async/await: compose I/O waits without blocking\nvar data = await httpClient.GetStringAsync(url);\nvar parsed = await ParseAsync(data);\n\n// Do NOT: Task.Run to wrap blocking I/O and call it async",
             "explanation": "Task.Run offloads CPU work to another pool thread. async composes I/O waits. Confusing them is a common interview trap."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IAsyncStateMachine — what the compiler generates",
+            "code": "// You write:\npublic async Task<string> FetchAsync(string url)\n{\n    var response = await http.GetStringAsync(url);\n    return response;\n}\n\n// Compiler rewrites to something like:\n// struct FetchAsyncStateMachine : IAsyncStateMachine\n// {\n//     int state; // -1 start, 0 after first await, -2 done\n//     string url; // hoisted locals live on the state machine\n//     TaskAwaiter<string> awaiter;\n//     void MoveNext() { switch(state) { case 0: ... } }\n//     void SetStateMachine(IAsyncStateMachine _) { }\n// }\n// First call may box the struct to the heap if it cannot stay on the stack.",
+            "explanation": "IAsyncStateMachine is the interface the compiler implements. Locals that look like stack variables are fields on a struct that may be boxed per invocation — this is the hidden allocation cost of async."
+          }
         }
       ]
     },
@@ -179,23 +188,78 @@
           "body": "Awaiting the same ValueTask instance twice after a cache miss that used IValueTaskSource. Using async on a method that never awaits — the compiler warns, and you still pay a state machine. Confusing Task.Run (queue CPU work) with async (compose waits). Returning ValueTask from a public API without measuring whether the allocation matters."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: every async method invocation allocates an IAsyncStateMachine — often a boxed struct on the heap. Use dotnet-counters (System.Runtime alloc rate) or a profiler to compare Task vs ValueTask on a Redis cache-hit path. IValueTaskSource lets socket and pipe APIs reuse a pooled completion source instead of allocating Task per read. BenchmarkDotNet on a hot path with 90% sync-complete hits shows ValueTask eliminating millions of Task allocations per minute."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Return type",
+            "Allocation profile",
+            "When to choose"
+          ],
+          "rows": [
+            [
+              "Task<T>",
+              "Heap Task object every call",
+              "Default public API — safe, composable"
+            ],
+            [
+              "ValueTask<T>",
+              "Struct; may wrap result or IValueTaskSource",
+              "Hot path with frequent sync-complete"
+            ],
+            [
+              "async without await",
+              "State machine for no benefit",
+              "Remove async or add real awaits"
+            ],
+            [
+              "IValueTaskSource",
+              "Pooled completion, zero Task alloc",
+              "Framework-level socket/pipe APIs"
+            ],
+            [
+              "Task.Run + blocking I/O",
+              "State machine + extra pool thread",
+              "Never — use true async API"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'async creates a new thread' — it does not; the state machine parks and resumes on pool threads. Claiming ValueTask is always faster without measuring — it adds API complexity and double-await is undefined. Not knowing IAsyncStateMachine exists or what gets hoisted off the stack. Using ValueTask in a public API that callers might await twice or pass to Task.WhenAll without .AsTask()."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "await is a compiler transformation, not a new thread.",
-    "ValueTask is an allocation optimization for completed-sync paths; await it once.",
-    "Public surface area should usually return Task unless you have measured otherwise."
+    "async/await is a compiler rewrite to IAsyncStateMachine — locals are hoisted, not on the real stack during awaits.",
+    "ValueTask avoids Task allocation on sync-complete paths; await it once; IValueTaskSource pools completions at framework level.",
+    "In production, profile gen-0 alloc rate on cache-hit paths — ValueTask wins only when sync-complete is the hot path.",
+    "60s: The compiler generates IAsyncStateMachine with hoisted locals. await parks the state machine and frees the thread. ValueTask is a struct for sync-complete optimization. Task is the safe default. Never await ValueTask twice.",
+    "Follow-up: when does the state machine get boxed to the heap versus staying on the stack?"
   ],
   "commonPitfalls": [
-    "Awaiting the same ValueTask instance twice after a cache miss that used IValueTaskSource.",
-    "Using async on a method that never awaits — the compiler warns, and you still pay a state machine.",
-    "Confusing Task.Run (queue CPU work) with async (compose waits)."
+    "Saying 'async spawns threads' gets you rejected — it is a state machine, not a thread per call.",
+    "Awaiting the same ValueTask twice after IValueTaskSource — undefined behavior, may return garbage.",
+    "Strong answer: 'Compiler builds IAsyncStateMachine. ValueTask for measured sync-complete hot paths. Task for public APIs. Profile allocations before switching.'"
   ],
   "introducedIn": "C# 5 (async/await); ValueTask in .NET Core 2.0 / C# 7",
   "relatedTopicIds": [
     "csharp-13-why-async",
     "csharp-13-async-exceptions",
     "csharp-13-promises-vs-tasks",
+    "csharp-13-task-completion-source",
+    "csharp-13-sync-over-async-deadlocks",
     "csharp-14-allocation-traps"
   ],
   "jsTsCorrelations": [
@@ -204,12 +268,22 @@
       "concept": "async functions always return a Promise",
       "note": "A JS async function boxes a Promise even on a sync return. C# can return ValueTask to skip a heap object on the sync path; JS has no equivalent struct awaitable.",
       "futureTopicSlug": "javascript/async/promises"
+    },
+    {
+      "language": "typescript",
+      "concept": "Generator-based async state machine",
+      "note": "TS/JS compilers also rewrite async functions to state machines (generators under the hood). C# IAsyncStateMachine is explicit in IL — you can inspect it with ildasm or dotPeek.",
+      "futureTopicSlug": "typescript/async/await"
     }
   ],
   "officialSources": [
     {
       "title": "Task asynchronous programming model",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/task-asynchronous-programming-model"
+    },
+    {
+      "title": "Understanding the ValueTask struct",
+      "url": "https://devblogs.microsoft.com/dotnet/understanding-the-whys-whats-and-whens-of-valuetask/"
     }
   ],
   "animationHint": "flow",

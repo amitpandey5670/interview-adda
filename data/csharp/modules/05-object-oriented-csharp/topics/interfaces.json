@@ -125,6 +125,15 @@
             "code": "interface ICacheKey\n{\n    string Value { get; }\n}\n\nreadonly struct RedisKey(string value) : ICacheKey\n{\n    public string Value { get; } = value;\n}\n\nICacheKey key = new RedisKey(\"tenant:acme\"); // boxes the struct\nRedisKey direct = new RedisKey(\"tenant:acme\"); // no boxing",
             "explanation": "Line 5: struct implements the interface. Line 10: storing as `ICacheKey` boxes the struct onto the heap. Line 11: keeping the concrete struct type avoids boxing. In hot cache-key paths, prefer the struct type directly."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Explicit implementation for two interfaces with the same member",
+            "code": "interface IInbound { void Handle(string msg); }\ninterface IOutbound { void Handle(string msg); }\n\nsealed class Bridge : IInbound, IOutbound\n{\n    void IInbound.Handle(string msg) => Console.WriteLine($\"in: {msg}\");\n    void IOutbound.Handle(string msg) => Console.WriteLine($\"out: {msg}\");\n}\n\nvar b = new Bridge();\n// b.Handle(\"x\"); // compile error — hidden from class surface\n((IInbound)b).Handle(\"x\");",
+            "explanation": "Explicit implementation disambiguates colliding member names and hides them from the class public API. Callers depend on the interface type — the same pattern as injecting IBus instead of RabbitBus in production."
+          }
         }
       ]
     },
@@ -161,16 +170,47 @@
           "body": "A default interface method is only callable through the interface type unless the implementing class redeclares it. If you add a DIM and callers use the concrete type, they will not see the new member until they cast or the class redeclares it."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interfaces are nominal CLR contracts stored in metadata — unlike TypeScript structural typing. Each implemented interface adds an interface mapping entry the runtime uses for casts and `is` checks. Default Interface Methods (DIM) ship a body on the interface itself; the CLR resolves the most specific override (class beats DIM). Explicit interface implementation keeps versioning seams clean: you can add IAuditableV2 members without polluting the public class surface. Struct-to-interface conversion always boxes unless you use generics constrained to the struct type. How to prove it in production: dotnet-counters or a profiler showing GC Gen0 spikes when a hot Redis key path stores `ICacheKey` instead of `RedisKey`, or BenchmarkDotNet comparing struct direct versus interface reference."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Benefit", "Cost"],
+          "rows": [
+            ["Small focused interfaces (ISP)", "Test fakes implement only what callers need", "More types to register in DI"],
+            ["DIM for contract evolution", "Add members without recompiling all implementers", "Only visible through interface unless redeclared"],
+            ["Explicit implementation", "Disambiguate collisions; hide from public API", "Callers must cast to interface"],
+            ["Struct implements interface", "Value semantics with polymorphic storage", "Boxing on every interface reference"],
+            ["Abstract base + interfaces", "Shared algorithm plus capability contracts", "Uses the single inheritance slot"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Treating C# interfaces like TypeScript structural types — C# requires `implements` and runtime casts fail on wrong CLR types. Saying DIM replaces abstract base classes for shared state — interfaces still cannot have instance fields. Ignoring struct boxing on hot paths — storing IEquatable<T> instead of T boxes value types. Strong answer: nominal contracts, many per class, DIM for evolution, explicit for collisions, watch struct boxing in cache and message paths."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Many interfaces, one class base.",
-    "DIM evolves contracts; explicit implementation disambiguates and hides.",
-    "Struct-to-interface conversion boxes."
+    "Many interfaces, one class base; interfaces are nominal CLR contracts, not structural duck typing.",
+    "DIM evolves contracts; explicit implementation disambiguates and hides members from the class surface.",
+    "Struct-to-interface conversion boxes — keep concrete struct types on hot Redis and cache-key paths.",
+    "60s: Interfaces are CLR contracts. Many per class. DIM adds default bodies visible through the interface type. Explicit implementation hides colliding members. Struct cast to interface boxes — measure on hot paths.",
+    "Follow-up: when would you choose explicit implementation over a public method on the class?"
   ],
   "commonPitfalls": [
-    "Fat interfaces that force fake implementations.",
-    "Forgetting a default method is only visible through the interface type unless redeclared on the class."
+    "Treating interfaces as structural like TypeScript — saying any object with matching members satisfies the contract gets rejected in C# interviews.",
+    "Strong answer: nominal typing; must declare implements; runtime is checks use CLR metadata.",
+    "Fat interfaces that force fake implementations of twenty methods never used by the caller.",
+    "Forgetting a DIM is only visible through the interface type unless redeclared on the class."
   ],
   "relatedTopicIds": [
     "csharp-05-composition-vs-inheritance",

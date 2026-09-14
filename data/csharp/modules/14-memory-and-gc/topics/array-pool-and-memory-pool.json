@@ -1,0 +1,231 @@
+{
+  "id": "csharp-14-array-pool-and-memory-pool",
+  "slug": "array-pool-and-memory-pool",
+  "title": "ArrayPool and MemoryPool (reuse buffers without LOH churn)",
+  "moduleId": "csharp-14-memory-and-gc",
+  "order": 8,
+  "hook": "Renting a buffer from ArrayPool reuses an existing array instead of allocating a new Large Object Heap (LOH) object every request. MemoryPool gives you an IMemoryOwner for the same pattern with Span-friendly semantics.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "System.Buffers.ArrayPool<T> maintains pools of arrays that callers rent and return. Rent(minimumLength) may return an array larger than requested — always track the length you actually need. System.Buffers.MemoryPool<T> provides IMemoryOwner<T> wrappers with deterministic disposal. Both patterns avoid per-request LOH allocations for CSV parsing, HTTP body buffering, and serialization scratch space."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ArrayPool",
+              "longForm": "System.Buffers.ArrayPool",
+              "plainDefinition": "Shared pool of reusable arrays; Rent returns, Return gives back.",
+              "example": "ArrayPool<byte>.Shared.Rent(90_000) for a CSV row buffer."
+            },
+            {
+              "term": "MemoryPool",
+              "longForm": "System.Buffers.MemoryPool",
+              "plainDefinition": "Pool that returns IMemoryOwner<T> for Span/Memory-based APIs.",
+              "example": "MemoryPool<byte>.Shared.Rent(4096) returns a disposable memory block."
+            },
+            {
+              "term": "IMemoryOwner",
+              "longForm": "IMemoryOwner<T>",
+              "plainDefinition": "Disposable wrapper around a rented memory block; Dispose returns it to the pool.",
+              "example": "using IMemoryOwner<byte> owner = pool.Rent(1024);"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A CSV import service allocating new byte[90_000] per row hits the LOH and triggers expensive generation-2 collections. Renting from ArrayPool reuses the same backing array across requests, slashing allocation rate and LOH fragmentation. The tradeoff: you must Return arrays (or Dispose IMemoryOwner) and never use a returned buffer after returning it."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to pool",
+          "body": "Pool when buffers are large (near LOH threshold), short-lived, and same-sized across requests. Do not pool tiny arrays — the bookkeeping cost exceeds the savings."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Rent-return lifecycle",
+          "items": [
+            {
+              "title": "Rent from pool",
+              "body": "Get an existing array (possibly larger than requested) from the shared pool."
+            },
+            {
+              "title": "Use only needed length",
+              "body": "Track actual bytes written; the rented array may be oversized."
+            },
+            {
+              "title": "Return or Dispose",
+              "body": "ArrayPool.Return or IMemoryOwner.Dispose puts the buffer back."
+            },
+            {
+              "title": "Never touch after return",
+              "body": "Another thread may rent the same array — use-after-return is a data race."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "ArrayPool rent-return cycle",
+            "source": "flowchart LR\n  A[Request needs 90KB buffer] --> B[ArrayPool.Rent]\n  B --> C[Reuse existing array]\n  C --> D[Parse CSV row]\n  D --> E[ArrayPool.Return]\n  E --> F[Buffer available for next request]\n  G[new byte 90KB] -.->|avoid| H[LOH allocation]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ArrayPool rent-return pattern",
+            "code": "var pool = ArrayPool<byte>.Shared;\nbyte[] buffer = pool.Rent(90_000);\ntry\n{\n    int written = ReadCsvRow(buffer);\n    ProcessRow(buffer.AsSpan(0, written));\n}\nfinally\n{\n    pool.Return(buffer, clearArray: true);\n}",
+            "explanation": "Rent in try, Return in finally. clearArray: true wipes sensitive data before reuse."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "MemoryPool with IMemoryOwner",
+            "code": "using IMemoryOwner<byte> owner = MemoryPool<byte>.Shared.Rent(4096);\nMemory<byte> memory = owner.Memory;\nSpan<byte> span = memory.Span;\n// write into span\n// owner.Dispose() returns buffer to pool",
+            "explanation": "IMemoryOwner integrates with using blocks and async pipelines that accept Memory<T>."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom ArrayPool for tests",
+            "code": "var customPool = ArrayPool<int>.Create(maxArrayLength: 1024, maxArraysPerBucket: 10);\nint[] arr = customPool.Rent(512);\ntry { /* test logic */ }\nfinally { customPool.Return(arr); }",
+            "explanation": "Create isolated pools for unit tests to avoid cross-test interference from Shared."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Verify pooling reduced LOH pressure",
+            "code": "dotnet-counters monitor -p <pid> \\\n  System.Runtime[alloc-rate,gc-heap-size,gen-2-gc-count]\n# Before pooling: alloc-rate high, gen-2 spikes per CSV batch\n# After pooling: alloc-rate drops, gen-2 stable",
+            "explanation": "Compare alloc-rate and gen-2-gc-count before and after introducing ArrayPool on the hot path."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Buffer reuse patterns",
+          "headers": ["Pattern", "C# ArrayPool/MemoryPool", "JavaScript / Node"],
+          "rows": [
+            ["Shared pool", "ArrayPool<byte>.Shared", "No built-in equivalent; reuse a module-level Buffer"],
+            ["Return semantics", "Explicit Return or Dispose", "Manual discipline; no framework guard"],
+            ["Oversized rent", "Rent may return larger array", "Buffer.allocUnsafe reuses but no size bucket"],
+            ["Clear on return", "clearArray: true option", "Manual buffer.fill(0)"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Returning a buffer then continuing to read it. Renting tiny arrays where allocation cost is negligible. Storing a rented array in a field beyond the request scope. Forgetting clearArray: true for buffers holding secrets."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ArrayPool<T>.Shared buckets arrays by size power-of-two. Rent may return an array up to 2× the minimum length — always use a length variable, never buffer.Length as the data size. MemoryPool<T> wraps the same idea with IMemoryOwner for APIs that accept Memory<T>. Pooling trades allocation for complexity: use-after-return bugs, data leakage between tenants if clearArray is false, and oversized arrays wasting cache lines. How to prove it in production: dotnet-counters alloc-rate and gen-2-gc-count drop after pooling a CSV or HTTP buffering hot path."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Win", "Risk"],
+          "rows": [
+            ["ArrayPool.Shared", "Zero LOH alloc per request", "Use-after-return, tenant data leak"],
+            ["MemoryPool + IMemoryOwner", "Span/Memory integration, using block safety", "Same return discipline required"],
+            ["new byte[n] per request", "Simple, no lifetime bugs", "LOH churn, gen-2 pressure"],
+            ["stackalloc for small", "True zero alloc, stack only", "Cannot exceed ~1 KB safely; no async escape"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Pooling every allocation including tiny ones, or returning a buffer then passing it to another async continuation. Strong answer: pool large short-lived buffers near LOH threshold; track actual length; Return in finally; clear sensitive data."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "ArrayPool rents reusable arrays; MemoryPool returns IMemoryOwner for Span/Memory-based APIs.",
+    "Do not pool tiny arrays — the bookkeeping exceeds savings; target LOH-sized buffers.",
+    "For CSV imports and HTTP buffering, pool 85 KB+ buffers and verify alloc-rate drops with dotnet-counters.",
+    "60s: Rent from ArrayPool, use only needed length, Return in finally. MemoryPool for IMemoryOwner. Avoids LOH churn. Never use after return.",
+    "Follow-up: what happens if you forget clearArray: true on a buffer holding PII?"
+  ],
+  "commonPitfalls": [
+    "Pooling every allocation including 16-byte arrays — gets you rejected because pool overhead exceeds savings.",
+    "Strong answer: pool large short-lived buffers near LOH threshold; track actual length; Return in finally.",
+    "Using a returned buffer after Return — another request may overwrite your data.",
+    "Assuming Rent returns exactly the requested size — it may return a larger power-of-two bucket."
+  ],
+  "relatedTopicIds": [
+    "csharp-14-generations-soh-loh",
+    "csharp-14-allocation-traps",
+    "csharp-14-gc-modes-microservices",
+    "csharp-08-arrays-and-span-preview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Buffer reuse in Node",
+      "note": "Node has no ArrayPool. Developers reuse module-level Buffer objects manually. C# ArrayPool provides thread-safe bucketing and clear-on-return semantics.",
+      "futureTopicSlug": "javascript/performance/buffer-pooling"
+    },
+    {
+      "language": "typescript",
+      "concept": "TypedArray allocation",
+      "note": "new Uint8Array(90000) in TS allocates on the V8 heap every time. C# ArrayPool<byte>.Rent avoids a new LOH object per call.",
+      "futureTopicSlug": "typescript/runtime/typed-arrays"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "ArrayPool<T> class",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    }
+  ],
+  "scenarioTag": "csv-import"
+}

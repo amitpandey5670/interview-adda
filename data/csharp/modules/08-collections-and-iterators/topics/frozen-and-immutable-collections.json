@@ -1,0 +1,244 @@
+{
+  "id": "csharp-08-frozen-and-immutable-collections",
+  "slug": "frozen-and-immutable-collections",
+  "title": "Frozen and immutable collections (read-only snapshots)",
+  "moduleId": "csharp-08-collections-and-iterators",
+  "order": 7,
+  "hook": "Some data is loaded once at startup and read millions of times — feature flags, route tables, tenant allow-lists. Mutable Dictionary works, but FrozenDictionary and ImmutableDictionary are built for that read-heavy, share-across-threads shape.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "System.Collections.Immutable ships types like ImmutableArray<T>, ImmutableList<T>, and ImmutableDictionary<TKey, TValue>. Every \"mutation\" returns a new copy; the old snapshot stays safe for readers. System.Collections.Frozen (introduced in .NET 8) adds FrozenDictionary<TKey, TValue> and FrozenSet<T> — read-only collections optimized at build time for faster lookups than a regular Dictionary. You build them once from a mutable source, then share the frozen result across all request handlers without locks."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ImmutableDictionary",
+              "longForm": "ImmutableDictionary<TKey, TValue>",
+              "plainDefinition": "A read-only hash map from System.Collections.Immutable. Add/Remove return a new dictionary; the original is unchanged.",
+              "example": "ImmutableDictionary<string, bool> flags = builder.ToImmutable();"
+            },
+            {
+              "term": "FrozenDictionary",
+              "longForm": "FrozenDictionary<TKey, TValue>",
+              "plainDefinition": "A read-only dictionary built with ToFrozenDictionary() that trades build-time work for faster runtime lookups.",
+              "example": "FrozenDictionary<string, int> lookup = source.ToFrozenDictionary();"
+            },
+            {
+              "term": "ImmutableArray",
+              "longForm": "ImmutableArray<T>",
+              "plainDefinition": "A struct wrapper around an array that cannot be mutated through the wrapper. Zero-copy when passed by value.",
+              "example": "ImmutableArray<string> scopes = [\"read\", \"write\"];"
+            },
+            {
+              "term": "structural sharing",
+              "longForm": "structural sharing",
+              "plainDefinition": "Immutable collections reuse unchanged internal nodes when you create a new version, so small edits do not copy the entire tree.",
+              "example": "dict2 = dict1.Add(\"key\", 1) shares most nodes with dict1."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Lambda or ASP.NET Core app that loads tenant feature flags from Redis at cold start can freeze them into a FrozenDictionary and never touch a lock on the hot path. ImmutableDictionary is the right choice when you need occasional updates that produce a new snapshot — configuration reload events, for example. Neither replaces Redis for cross-process sharing; both are in-process, read-only views. Picking a mutable Dictionary and wrapping every read in lock() is the slower, bug-prone alternative."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Build once, read many",
+          "body": "FrozenDictionary is for static lookup tables loaded at startup. ImmutableDictionary is for snapshots that occasionally get a new version. Mutable Dictionary is for per-request scratch maps."
+        }
+      ]
+    },
+    {
+      "heading": "How frozen and immutable collections work",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing the right read-only type",
+          "items": [
+            {
+              "title": "Load mutable data",
+              "body": "Dictionary<string, bool> raw = await LoadFlagsFromRedis(); — normal mutable collection during startup I/O."
+            },
+            {
+              "title": "Freeze or make immutable",
+              "body": "FrozenDictionary for max lookup speed on a fixed set. ImmutableDictionary when you expect versioned updates via Add/Remove that return new copies."
+            },
+            {
+              "title": "Share across threads",
+              "body": "No locks on reads — the collection cannot change. Safe to store in a static field or inject as a singleton."
+            },
+            {
+              "title": "Never mutate after freeze",
+              "body": "FrozenDictionary and ImmutableDictionary throw on Add/Remove. If you need writes, use a new mutable Dictionary and re-freeze."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Read-only collection pipeline",
+            "source": "flowchart LR\n  A[Redis / config file] --> B[Dictionary mutable]\n  B --> C{Read pattern?}\n  C -->|Static lookup table| D[FrozenDictionary]\n  C -->|Occasional new version| E[ImmutableDictionary]\n  D --> F[Shared across handlers no lock]\n  E --> F"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "FrozenDictionary at startup",
+            "code": "Dictionary<string, bool> raw = LoadFeatureFlagsFromRedis();\nFrozenDictionary<string, bool> flags = raw.ToFrozenDictionary(\n    StringComparer.OrdinalIgnoreCase);\n\n// Inject flags into DI — every request reads without locking\nbool enabled = flags.TryGetValue(\"new-checkout\", out bool on) && on;",
+            "explanation": "Load once, freeze with the right comparer, share forever. ToFrozenDictionary does extra work at build time to make TryGetValue faster than a regular Dictionary."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ImmutableDictionary versioned update",
+            "code": "ImmutableDictionary<string, int> v1 = ImmutableDictionary<string, int>.Empty;\nv1 = v1.Add(\"tenant-a\", 42);\n\n// v1 is still safe for readers holding the old reference\nImmutableDictionary<string, int> v2 = v1.SetItem(\"tenant-b\", 7);\n\nConsole.WriteLine(v1.Count); // 1 — unchanged\nConsole.WriteLine(v2.Count); // 2 — new snapshot",
+            "explanation": "Each Add/SetItem returns a new dictionary. Readers with v1 see a stable snapshot even after v2 is published. Structural sharing keeps small updates cheap."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ImmutableArray for zero-copy sharing",
+            "code": "ImmutableArray<string> scopes = [\"exam.read\", \"exam.write\"];\n\nvoid CheckScopes(ImmutableArray<string> allowed)\n{\n    // Passed by value (struct) — no heap allocation for the wrapper\n    foreach (string scope in allowed)\n        Validate(scope);\n}",
+            "explanation": "ImmutableArray<T> is a struct wrapping an array. It is ideal for small, fixed allow-lists passed through many method calls without defensive copying."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode: mutating after freeze",
+            "code": "FrozenDictionary<string, int> frozen =\n    new Dictionary<string, int> { [\"a\"] = 1 }.ToFrozenDictionary();\n\n// frozen[\"b\"] = 2;           // compile error — no indexer setter\n// frozen.Add(\"b\", 2);        // compile error — read-only API\n\n// Correct: rebuild when config reloads\nDictionary<string, int> next = ReloadFromRedis();\nFrozenDictionary<string, int> updated = next.ToFrozenDictionary();",
+            "explanation": "Frozen collections are truly read-only. On a config reload event, build a new FrozenDictionary and swap the reference atomically — do not try to patch in place."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Read-only collections across runtimes",
+          "headers": ["Aspect", "C# Frozen / Immutable", "JavaScript / TypeScript"],
+          "rows": [
+            ["Immutability", "Enforced by type — Add throws", "Object.freeze is shallow; arrays still mutable at runtime"],
+            ["Fast frozen lookup", "FrozenDictionary optimized at build time", "No built-in frozen Map; use a plain Map or Object"],
+            ["Structural sharing", "ImmutableDictionary reuses nodes", "Spread {...obj} copies top level only"],
+            ["Thread safety", "Safe to share read-only snapshots across threads", "Single-threaded event loop — different problem"],
+            ["TS readonly", "Runtime guarantee", "readonly T[] is compile-time only; erased at run time"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using FrozenDictionary for data that changes every request — the build cost dominates. Assuming ImmutableList is as fast as List<T> for hot loops — it allocates new nodes on every Add. Confusing in-process frozen flags with Redis — FrozenDictionary does not sync across Lambda instances."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "FrozenDictionary uses a perfect-hash or minimal-perfect-hash style layout when the key set is known at build time, so TryGetValue avoids the chaining and resize logic of Dictionary<TKey,TValue>. Immutable collections use AVL or hash-array mapped trie structures with structural sharing — an Add on a 10,000-entry ImmutableDictionary does not copy all 10,000 nodes. How to prove it in production: BenchmarkDotNet comparing TryGetValue on Dictionary vs FrozenDictionary with your real key distribution; dotnet-counters to confirm no gen-0 churn from per-request Dictionary allocations after switching to a frozen singleton."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Type", "Best for", "Avoid when"],
+          "rows": [
+            ["Dictionary", "Per-request scratch maps, frequent writes", "Shared read-only config read millions of times"],
+            ["FrozenDictionary", "Startup config, route tables, static lookups", "Keys change per request or mid-flight"],
+            ["ImmutableDictionary", "Versioned snapshots, functional-style updates", "Hot loops with thousands of Adds per second"],
+            ["ImmutableArray", "Small fixed allow-lists passed by value", "Large collections that grow dynamically"],
+            ["lock + Dictionary", "Rare writes, many readers, no rebuild", "High-contention hot path — prefer immutable swap"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"I'd use ConcurrentDictionary for read-only feature flags\" — ConcurrentDictionary is for concurrent writes, not read-only snapshots; it pays synchronization overhead you do not need. Strong answer: load Dictionary at startup, ToFrozenDictionary, inject as singleton, swap atomically on config reload."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "FrozenDictionary and ImmutableDictionary are read-only in-process snapshots — not a Redis replacement.",
+    "FrozenDictionary trades build-time work for faster TryGetValue; use for static lookup tables loaded at startup.",
+    "On config reload, build a new frozen snapshot and swap the reference — never mutate in place.",
+    "60s: Load flags into Dictionary, ToFrozenDictionary with the right comparer, share as singleton. ImmutableDictionary when you need versioned Add that returns a new snapshot. Neither crosses process boundaries.",
+    "Follow-up: how does FrozenDictionary achieve faster lookups than Dictionary? (perfect/minimal hashing at build time)"
+  ],
+  "commonPitfalls": [
+    "Saying ConcurrentDictionary is the answer for read-only flags — wrong tool; it pays write-lock overhead you never use.",
+    "Strong answer: FrozenDictionary at startup for static lookups; ImmutableDictionary when updates produce new versions; swap reference on reload.",
+    "Using FrozenDictionary for per-request data — build cost per request destroys the benefit.",
+    "Assuming ImmutableList performs like List<T> in a tight Add loop — each Add allocates new nodes."
+  ],
+  "relatedTopicIds": [
+    "csharp-08-when-not-to-invent",
+    "csharp-08-list-dictionary-set-queue",
+    "csharp-08-collection-expressions",
+    "csharp-15-concurrent-collections-channels"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Object.freeze and Map",
+      "note": "Object.freeze is shallow and does not stop array mutation. C# FrozenDictionary is a deep read-only guarantee with optimized lookup — no JS built-in equivalent.",
+      "futureTopicSlug": "javascript/objects/freeze"
+    },
+    {
+      "language": "typescript",
+      "concept": "readonly and as const",
+      "note": "TypeScript readonly is erased at run time — a readonly string[] is still a mutable JS array. C# ImmutableArray and FrozenDictionary enforce immutability in the CLR.",
+      "futureTopicSlug": "typescript/types/readonly"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Frozen collections",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.collections.frozen"
+    },
+    {
+      "title": "Immutable collections",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.collections.immutable"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
+}

@@ -119,6 +119,15 @@
             "code": "#error version\n// Uncomment the line above and build.\n// The compiler reports something like:\n// \"CS8304: ... compiler version ... language version ...\"",
             "explanation": "A quick way to see what Roslyn resolved for your project. Remove or comment out before shipping."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "xml",
+            "label": "Directory.Build.props for repo-wide TFM",
+            "code": "<Project>\n  <PropertyGroup>\n    <TargetFramework>net10.0</TargetFramework>\n    <LangVersion>14.0</LangVersion>\n    <Nullable>enable</Nullable>\n    <ImplicitUsings>enable</ImplicitUsings>\n  </PropertyGroup>\n</Project>",
+            "explanation": "Central props pin TFM and language version for reproducible CI — same idea as a shared tsconfig base, but LangVersion is C#-specific."
+          }
         }
       ]
     },
@@ -148,17 +157,46 @@
           "body": "Raising LangVersion without raising TFM, then hitting missing runtime APIs. Thinking implicit usings replace NuGet references — they only import namespaces from assemblies you already reference. Copy-pasting Directory.Build.props LangVersion across C# and Visual Basic projects — the version numbers are not interchangeable between languages."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: TFM (net10.0) selects default LangVersion (C# 14) and BCL surface — CI should pin SDK version in global.json for reproducible builds. LangVersion=latest is a smell: different build agents may accept different syntax. ImplicitUsings inject global usings from the SDK — inspect obj/Debug/net10.0/<Project>.GlobalUsings.g.cs. Mismatch symptoms: CS0618 on new syntax with old TFM, or missing API at compile time when TFM is too low."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Setting", "Controls", "Pin strategy"],
+          "rows": [
+            ["TargetFramework", "Runtime APIs + default LangVersion", "net10.0 in Directory.Build.props"],
+            ["LangVersion", "Syntax features only", "14.0 explicit, not latest"],
+            ["global.json SDK", "Which SDK restores/builds", "Pin for CI reproducibility"],
+            ["ImplicitUsings", "Generated global usings", "Disable if collisions in large repos"],
+            ["Nullable", "Flow analysis warnings", "enable in libraries"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "LangVersion=latest in a team repo — non-reproducible builds. Thinking implicit usings add NuGet packages. Raising LangVersion to use C# 14 syntax while TFM is net8.0 without checking API availability. Confusing SDK version with TFM."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Default language version follows the target framework; .NET 10 maps to C# 14.",
-    "`LangVersion=latest` is a reproducibility smell; prefer TFM or an explicit major like `14.0`.",
-    "Implicit usings are generated global usings, not magic scope."
+    "TFM selects runtime APIs and default C# language version; pin net10.0 (C# 14) rather than LangVersion=latest.",
+    "Implicit usings are auto-generated global using statements — they do not restore packages or add assemblies.",
+    "In production, pin SDK in global.json and TFM in Directory.Build.props so CI and local builds agree.",
+    "60s: TFM drives APIs and default LangVersion. Pin TFM not latest. Implicit usings from SDK. global.json pins SDK. Nullable enable for libraries.",
+    "Follow-up: what breaks when one project uses LangVersion 14 but references a net8.0 library?"
   ],
   "commonPitfalls": [
-    "Raising LangVersion without raising TFM, then hitting missing runtime APIs.",
-    "Thinking implicit usings replace NuGet references — they only import namespaces already referenced by the SDK.",
-    "Copy-pasting `Directory.Build.props` LangVersion across C# and VB projects — the version numbers are not the same language."
+    "LangVersion=latest gets you rejected — reproducibility breaks across build agents.",
+    "Thinking implicit usings replace NuGet references.",
+    "Strong answer: 'Pin TFM and SDK. LangVersion explicit when overriding. Check GlobalUsings.g.cs when imports surprise you.'"
   ],
   "relatedTopicIds": [
     "csharp-01-namespaces-and-usings",
@@ -172,6 +210,12 @@
       "concept": "tsconfig target vs language",
       "note": "compilerOptions.target and lib are closer to TFM than to LangVersion. Using latest in tsconfig has the same \"depends which tsc\" risk as LangVersion=latest.",
       "futureTopicSlug": "typescript/compiler/tsconfig"
+    },
+    {
+      "language": "javascript",
+      "concept": "engines field in package.json",
+      "note": "engines.node constrains runtime like TFM constrains BCL APIs — but npm does not enforce it at install time the way MSBuild enforces TFM.",
+      "futureTopicSlug": "javascript/tooling/package-json"
     }
   ],
   "officialSources": [

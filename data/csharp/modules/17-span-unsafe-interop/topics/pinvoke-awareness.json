@@ -148,17 +148,54 @@
           "body": "Wrong CharSet garbling strings. Holding native pointer after managed array is unpinned. SkiaSharp objects without using — native memory leak until GC finalizer."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: LibraryImport source generation emits trim-safe stubs at compile time — publish with PublishTrimmed and verify no MissingMethodException on interop entry points. Compare to legacy DllImport which relies on runtime marshalling tables that trimming can break. For Native AOT deployments, LibraryImport is the default path. Pin Span<byte> only for the native call duration; long pins show up as GC heap fragmentation in dotnet-gcdump POH segments."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "LibraryImport with Span — modern P/Invoke versus DllImport",
+            "code": "internal static partial class Posix\n{\n    [LibraryImport(\"libc\", StringMarshalling = StringMarshalling.Utf8)]\n    internal static partial int gethostname(Span<byte> name, int len);\n\n    public static string GetHostName()\n    {\n        Span<byte> buf = stackalloc byte[256];\n        var rc = gethostname(buf, buf.Length);\n        if (rc != 0) throw new InvalidOperationException(\"gethostname failed\");\n        return Encoding.UTF8.GetString(buf.Slice(0, buf.IndexOf((byte)0)));\n    }\n}\n\n// DllImport: runtime marshalling, trim/AOT riskier for custom signatures",
+            "explanation": "Line 3: LibraryImport partial method — Roslyn generates marshalling at compile time. Line 9: Span<byte> passes buffer without StringBuilder alloc. Line 15: contrast — DllImport is legacy path for new code."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["API", "Trim / AOT", "When to use"],
+          "rows": [
+            ["LibraryImport", "Source-generated, trim-friendly", "New interop in .NET 7+"],
+            ["DllImport", "Runtime marshalling tables", "Legacy code, quick prototypes"],
+            ["Official NuGet wrapper", "Maintained marshalling", "SkiaSharp, SQLite — prefer over raw"],
+            ["Hand-written unsafe", "Full control, high risk", "Only inside isolated shim"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Writing new DllImport when LibraryImport is available for trim/AOT. Holding a native pointer after the managed array is unpinned. SkiaSharp without using — native leak until finalizer. Saying P/Invoke is 'free' — marshalling and charset mistakes garble production strings."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "P/Invoke is the managed-to-native boundary — marshalling and lifetime matter.",
-    "Prefer LibraryImport and official NuGet wrappers over raw declarations.",
-    "Native resources need Dispose; GC does not track unmanaged heap."
+    "P/Invoke is the managed-to-native boundary — marshalling, charset, and pin lifetime matter.",
+    "LibraryImport source generation replaces DllImport for trim-safe, Native AOT-friendly interop in .NET 7+.",
+    "In production, verify LibraryImport entry points survive PublishTrimmed — DllImport tables may break.",
+    "60s: P/Invoke = native boundary. LibraryImport = compile-time generated stub. Span for short pin. SkiaSharp needs Dispose. Prefer NuGet wrappers.",
+    "Follow-up: what breaks when you trim a DllImport declaration that LibraryImport would have generated?"
   ],
   "commonPitfalls": [
-    "Ansi vs Unicode string mismatch.",
-    "Leaking SkiaSharp surfaces without using.",
-    "Custom P/Invoke when a maintained wrapper exists."
+    "Writing new DllImport instead of LibraryImport gets you rejected on AOT/trim interviews.",
+    "Ansi vs Unicode string mismatch garbling hostnames and paths in production.",
+    "Strong answer: 'LibraryImport for new code. Span pin only for call duration. Official wrappers over raw P/Invoke. Dispose native wrappers deterministically.'"
   ],
   "relatedTopicIds": [
     "csharp-17-unsafe-pointers-fixed",
@@ -169,14 +206,24 @@
     {
       "language": "javascript",
       "concept": "Native modules",
-      "note": "sharp and bcrypt use native code like SkiaSharp. C# P/Invoke is declared in C#; Node loads .node binaries built from C++.",
+      "note": "sharp and bcrypt use native code like SkiaSharp. C# P/Invoke is declared in C#; Node loads .node binaries built from C++. LibraryImport is like a build-time generated N-API binding instead of runtime dlopen tables.",
       "futureTopicSlug": "javascript/native/addons"
+    },
+    {
+      "language": "typescript",
+      "concept": "FFI and buffer lifetime",
+      "note": "Node ffi-napi passes Buffer pointers with manual lifetime. C# LibraryImport + Span<byte> pins only for the call — same discipline as keeping a Uint8Array alive while native code reads it.",
+      "futureTopicSlug": "typescript/native/ffi"
     }
   ],
   "officialSources": [
     {
       "title": "P/Invoke source generation",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/native-interop/pinvoke-source-generation"
+    },
+    {
+      "title": "Native AOT interop",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/interop"
     }
   ],
   "scenarioTag": "skiasharp-dispose",

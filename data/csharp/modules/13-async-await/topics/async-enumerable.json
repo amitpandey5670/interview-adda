@@ -124,6 +124,15 @@
             "code": "// BAD: ToListAsync defeats the purpose of streaming\nvar all = await ReadAttemptsAsync(path, token).ToListAsync();\nvar sorted = all.OrderBy(r => r.Score).ToList(); // needs everything anyway\n\n// GOOD: if you need the full sorted set, just load it\nvar allRows = await File.ReadAllLinesAsync(path, token);\nvar sorted = allRows.Skip(1)\n    .Select(ParseRow)\n    .OrderBy(r => r.Score)\n    .ToList();",
             "explanation": "If the next step needs all data for a sort or aggregate, IAsyncEnumerable buys nothing. Choose the right tool for the access pattern."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Backpressure with IAsyncEnumerable vs Channel",
+            "code": "// IAsyncEnumerable: consumer controls pace (pull)\nawait foreach (var page in FetchPagesAsync(url, token))\n{\n    await ProcessPageAsync(page, token); // producer waits here if slow\n}\n\n// Channel: producer pushes, bounded buffer provides backpressure\nvar channel = Channel.CreateBounded<Page>(new BoundedChannelOptions(10));\n_ = ProducePagesAsync(channel.Writer, url, token);\nawait foreach (var page in channel.Reader.ReadAllAsync(token))\n    await ProcessPageAsync(page, token);",
+            "explanation": "IAsyncEnumerable naturally backpressures via pull. Channels add an explicit bounded buffer when producer and consumer run independently."
+          }
         }
       ]
     },
@@ -178,22 +187,76 @@
           "body": "Forgetting [EnumeratorCancellation] so WithCancellation is ignored. Calling ToListAsync() on a huge import and recreating the memory problem. Yielding after disposing the resource the next MoveNextAsync still needs. Mixing yield return with side effects you cannot undo unless the consumer contract is clear."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: compare memory working set of ToListAsync versus await foreach on a 10 GB CSV import — streaming stays flat, buffering spikes linearly. IAsyncEnumerable uses a compiler-generated async iterator state machine (like async methods but with MoveNextAsync). ConfigureAwait flows through await foreach automatically. For backpressure, the consumer controls pace — if HandleAsync is slow, the producer naturally waits at the next MoveNextAsync."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Memory",
+            "When to use"
+          ],
+          "rows": [
+            [
+              "await foreach IAsyncEnumerable",
+              "O(1) per item",
+              "Paging, streaming, large imports"
+            ],
+            [
+              "ToListAsync / buffer all",
+              "O(n) total size",
+              "Need full dataset for sort/aggregate"
+            ],
+            [
+              "Channel<T> push model",
+              "Bounded buffer with backpressure",
+              "Producer faster than consumer"
+            ],
+            [
+              "IEnumerable + Task.Run",
+              "Blocks a thread per item",
+              "Avoid — use IAsyncEnumerable"
+            ],
+            [
+              "Reactive / IObservable",
+              "Push, multiple subscribers",
+              "Event streams, not pull paging"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Using IAsyncEnumerable then calling ToListAsync immediately — defeats the purpose. Forgetting [EnumeratorCancellation] and wondering why host shutdown does not stop the iterator. Saying await foreach runs the producer on a new thread — it is pull-based on the consumer's thread. Choosing IAsyncEnumerable when you need the full sorted dataset anyway."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "await foreach pulls; it does not run the producer on a new thread by itself.",
-    "Use EnumeratorCancellation so host shutdown actually stops the iterator.",
-    "Streaming pages avoids a giant List on CSV or queue drains."
+    "IAsyncEnumerable is a pull-based async stream — await foreach calls MoveNextAsync, which awaits I/O between items.",
+    "Use [EnumeratorCancellation] so WithCancellation from the consumer wires into the iterator's token parameter.",
+    "In production, compare working set: streaming stays flat on large imports; ToListAsync spikes memory linearly.",
+    "60s: IAsyncEnumerable streams pages with await between yields. await foreach pulls one item at a time. EnumeratorCancellation wires cancellation. ToListAsync defeats streaming. Use Channels for push backpressure.",
+    "Follow-up: when would Channel<T> be better than IAsyncEnumerable?"
   ],
   "commonPitfalls": [
-    "Forgetting [EnumeratorCancellation] so WithCancellation is ignored.",
-    "Calling .ToListAsync() on a huge import and recreating the memory problem.",
-    "Yielding after disposing the resource the next MoveNext still needs."
+    "Calling ToListAsync on a huge stream gets you rejected — you recreated the memory problem you were solving.",
+    "Forgetting [EnumeratorCancellation] — WithCancellation is silently ignored and shutdown does not stop the iterator.",
+    "Strong answer: 'IAsyncEnumerable for pull-based paging with constant memory. Channels when producer outpaces consumer and I need bounded backpressure.'"
   ],
   "introducedIn": "C# 8.0",
   "relatedTopicIds": [
     "csharp-13-why-async",
     "csharp-13-cancellation-tokens",
+    "csharp-13-task-async-await",
     "csharp-15-concurrent-collections-channels",
     "csharp-08-iterators-yield"
   ],
@@ -203,12 +266,22 @@
       "concept": "for await...of and async generators",
       "note": "JS async generators (async function*) plus for await...of are the same pull-stream idea. C# yield return in async IAsyncEnumerable is the closest language twin.",
       "futureTopicSlug": "javascript/async/async-iterators"
+    },
+    {
+      "language": "typescript",
+      "concept": "AsyncIterable<T> interface",
+      "note": "TypeScript types async iterators with AsyncIterable<T> and AsyncIterator<T>. C# IAsyncEnumerable<T> is the BCL interface with built-in LINQ support via System.Linq.Async.",
+      "futureTopicSlug": "typescript/async/async-iterators"
     }
   ],
   "officialSources": [
     {
       "title": "Asynchronous programming with async and await",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "title": "IAsyncEnumerable<T> interface",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.collections.generic.iasyncenumerable-1"
     }
   ],
   "scenarioTag": "csv-import"

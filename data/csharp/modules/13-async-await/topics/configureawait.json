@@ -124,6 +124,15 @@
             "code": "public async Task ProcessRequestAsync(HttpContext context)\n{\n    var userId = context.User.FindFirst(\"sub\")?.Value; // capture first\n\n    var data = await FetchDataAsync(userId!)\n        .ConfigureAwait(false);\n\n    // context may not be valid on this thread — use captured userId\n    await SaveAsync(userId!, data);\n}",
             "explanation": "After ConfigureAwait(false), you may be on a different thread. Capture ambient state (HttpContext values) before the await."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Deadlock stack trace — reading the evidence",
+            "code": "// Thread 1 (UI thread) — BLOCKED:\n//   at System.Threading.Tasks.Task.InternalWaitCore(...)\n//   at System.Threading.Tasks.Task.Wait()\n//   at System.Threading.Tasks.Task`1.get_Result()\n//   at MyForm.btnLoad_Click(...)          <-- sync-over-async entry\n//   at System.Windows.Forms.Control.OnClick(...)\n\n// Thread 1 continuation — QUEUED but cannot run:\n//   at System.Threading.SynchronizationContext.Send(...)\n//   at System.Threading.Tasks.SynchronizationContextAwaitTaskContinuation.Run(...)\n//   at MyForm.LoadDataAsync(...)          <-- needs UI thread\n\n// Fix: await instead of .Result, OR ConfigureAwait(false) in library",
+            "explanation": "The telltale pattern: Task.Wait/Result on one frame, SynchronizationContext.Send on the continuation frame, same thread ID on both. This is the stack interviewers ask you to read."
+          }
         }
       ]
     },
@@ -178,21 +187,75 @@
           "body": "Claiming ConfigureAwait(false) is required in every ASP.NET Core controller method. Using .Result in a library that later gets called from WinForms, recreating the classic deadlock. Capturing HttpContext after ConfigureAwait(false) and assuming you are still on the request thread. Sprinkling ConfigureAwait in application code without understanding why."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: a deadlock dump shows the UI thread blocked in Task.Result with a queued SynchronizationContextAwaitTaskContinuation on the same thread. In ASP.NET Core, ConfigureAwait(true) versus false is a no-op — both resume on pool threads. The value of ConfigureAwait(false) in Core is only in libraries shared with UI or legacy ASP.NET. Capture ambient state (HttpContext, Dispatcher) before ConfigureAwait(false) — after the await you may be on any pool thread."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Context",
+            "ConfigureAwait(true)",
+            "ConfigureAwait(false)"
+          ],
+          "rows": [
+            [
+              "WinForms / WPF",
+              "Resume on UI thread — required for controls",
+              "Library code — never touch UI after"
+            ],
+            [
+              "Classic ASP.NET",
+              "Resume on request thread",
+              "Library code — avoids deadlock with .Result callers"
+            ],
+            [
+              "ASP.NET Core",
+              "Same as false — no context",
+              "Same as true — no context"
+            ],
+            [
+              "Background worker",
+              "No context — both same",
+              "Explicit intent in shared libraries"
+            ],
+            [
+              "Unit tests with custom context",
+              "May marshal to test context",
+              "Runs inline on completing thread"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'always use ConfigureAwait(false) in ASP.NET Core controllers' — there is no context to capture, so it changes nothing. Not being able to read a deadlock stack with SynchronizationContext.Send inside Task.Wait. Claiming ConfigureAwait fixes pool starvation — it only fixes context-capture deadlock; starvation needs async all the way. Using ConfigureAwait(false) then accessing HttpContext — it is not valid on arbitrary pool threads."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "SynchronizationContext, if present, is where await resumes by default.",
-    "ASP.NET Core has no request SynchronizationContext; blocking is still wrong.",
-    "Reusable libraries should ConfigureAwait(false) unless they must return to the caller's context."
+    "ConfigureAwait controls whether await captures SynchronizationContext — default true resumes on the captured thread.",
+    "ASP.NET Core has no request context — ConfigureAwait is irrelevant in app code but critical in shared libraries targeting UI.",
+    "In production, deadlock dumps show Task.Wait plus SynchronizationContext.Send on the same thread ID — the classic signature.",
+    "60s: Default await captures SynchronizationContext. false skips capture — use in libraries. Core has no context so both paths are identical. Deadlock stack: Result on UI thread plus Send continuation on same thread. Fix: await or ConfigureAwait false in library.",
+    "Follow-up: does ConfigureAwait(false) help with thread-pool starvation in ASP.NET Core?"
   ],
   "commonPitfalls": [
-    "Claiming ConfigureAwait(false) is required in every ASP.NET Core controller method.",
-    "Using .Result in a library that later gets called from WinForms, recreating the classic deadlock.",
-    "Capturing HttpContext after ConfigureAwait(false) and assuming you are still on the request thread (you need to capture values first)."
+    "Saying 'ConfigureAwait false is required in every Core controller' gets you rejected — no SynchronizationContext exists.",
+    "Using .Result in a library that later gets called from WinForms — recreates the classic deadlock regardless of Core experience.",
+    "Strong answer: 'Libraries use ConfigureAwait false. Core has no context. I read deadlock stacks for SynchronizationContext.Send inside Task.Wait.'"
   ],
   "relatedTopicIds": [
     "csharp-13-task-async-await",
     "csharp-13-async-exceptions",
+    "csharp-13-sync-over-async-deadlocks",
     "csharp-15-races-deadlocks"
   ],
   "jsTsCorrelations": [
@@ -201,12 +264,22 @@
       "concept": "Microtasks always resume on the same JS thread",
       "note": "There is no ConfigureAwait in the browser: a Promise continuation is a microtask on the same event loop. C# can hop threads; JS cannot hop the JS thread without workers.",
       "futureTopicSlug": "javascript/async/microtasks"
+    },
+    {
+      "language": "typescript",
+      "concept": "No thread affinity in async/await",
+      "note": "TypeScript async code never worries about which thread resumes — there is only one JS thread. C# ConfigureAwait is the explicit knob for thread affinity that TS does not need.",
+      "futureTopicSlug": "typescript/async/await"
     }
   ],
   "officialSources": [
     {
       "title": "Asynchronous programming with async and await",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "title": "ConfigureAwait FAQ",
+      "url": "https://devblogs.microsoft.com/dotnet/configureawait-faq/"
     }
   ],
   "animationHint": "flow",

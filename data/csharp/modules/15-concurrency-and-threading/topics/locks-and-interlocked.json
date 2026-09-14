@@ -118,6 +118,15 @@
             "code": "private readonly SemaphoreSlim _httpLimit = new(8);\n\npublic async Task<string> FetchAsync(string url, CancellationToken ct)\n{\n    await _httpLimit.WaitAsync(ct);\n    try\n    {\n        return await _http.GetStringAsync(url, ct);\n    }\n    finally\n    {\n        _httpLimit.Release();\n    }\n}",
             "explanation": "Limits eight concurrent HTTP calls without locking the entire service."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "volatile flag with proper publication",
+            "code": "private volatile bool _shutdownRequested;\nprivate int _processedCount;\n\npublic void RequestShutdown() => _shutdownRequested = true;\n\npublic void ProcessBatch()\n{\n    while (!_shutdownRequested)\n    {\n        DoWorkUnit();\n        Interlocked.Increment(ref _processedCount);\n    }\n}",
+            "explanation": "volatile ensures reads of _shutdownRequested are not cached in a CPU register forever. Interlocked still handles the counter — volatile does not make compound operations atomic."
+          }
         }
       ]
     },
@@ -146,17 +155,46 @@
           "body": "Locking on this or typeof(MyType) — private readonly object is safer. await inside lock — compile error in modern C# but watch manual patterns. Locking a public string instance someone else might lock too."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: lock compiles to Monitor.Enter/Exit with a full memory barrier on release — subsequent reads see prior writes inside the critical section. volatile only guarantees ordered loads/stores for that field; it does not make check-then-act sequences atomic. Interlocked uses CPU atomic instructions with implicit barriers. Thread.VolatileWrite/Read and Interlocked.MemoryBarrier are explicit fences when you need publication without a full lock. Use dotnet-counters (ThreadPool ThreadCount, Lock Contention Rate) or a profiler to spot lock convoys under Redis cache miss storms."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Primitive", "Memory ordering", "When to choose"],
+          "rows": [
+            ["lock (Monitor)", "Full barrier on exit; mutual exclusion", "Multi-field invariants kept microseconds short"],
+            ["Interlocked", "Atomic RMW + barrier semantics", "Counters, CompareExchange, lazy init of references"],
+            ["volatile", "Prevents stale cached reads of one field", "Shutdown/cancel flags; not for compound logic"],
+            ["Thread.MemoryBarrier", "Explicit fence between operations", "Rare hand-rolled lock-free; prefer Interlocked"],
+            ["SemaphoreSlim", "No data visibility guarantee by itself", "Throttle concurrent I/O; pair with proper shared-state rules"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying volatile makes any operation thread-safe — it only orders visibility for that field; _count++ still races. Claiming you need volatile inside every lock block — lock already publishes writes. Using volatile instead of Interlocked for metrics because it sounds lighter. Holding lock across await or Redis GET — blocks the pool and can deadlock under load."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "lock protects in-memory critical sections; keep them short.",
-    "Interlocked for simple atomic counters and references.",
-    "Never hold a lock across I/O or await."
+    "lock (Monitor) provides mutual exclusion and publishes writes on exit; Interlocked atomically updates single fields with implicit memory barriers.",
+    "volatile prevents stale reads of one flag but does not make check-then-act atomic — use Interlocked or lock for counters and invariants.",
+    "In production, watch ThreadPool queue length and lock contention counters when cache misses spike — convoys mean critical sections are too wide or held across I/O.",
+    "60s: lock for short multi-step invariants. Interlocked for counters. volatile only for simple publication of a boolean/int flag. Never await inside lock. SemaphoreSlim throttles parallel I/O, not data races.",
+    "Follow-up: when would you reach for Thread.MemoryBarrier instead of lock or Interlocked?"
   ],
   "commonPitfalls": [
-    "Lock across Redis or HTTP await.",
-    "Using lock when ConcurrentDictionary suffices.",
-    "Locking on publicly visible objects."
+    "Saying 'volatile makes increment thread-safe' gets you rejected — volatile does not atomicize compound updates.",
+    "Lock across Redis or HTTP await — serializes the service and risks deadlock with the thread pool.",
+    "Strong answer: 'Monitor exit publishes writes. Interlocked for metrics. volatile for shutdown flags only. Profile lock contention with dotnet-counters before micro-optimizing.'"
   ],
   "relatedTopicIds": [
     "csharp-15-races-deadlocks",
@@ -169,6 +207,12 @@
       "concept": "Single-threaded assumption",
       "note": "Node avoids many race conditions via one event loop. C# services are multi-threaded — shared state needs explicit synchronization.",
       "futureTopicSlug": "javascript/concurrency/event-loop"
+    },
+    {
+      "language": "typescript",
+      "concept": "Atomics and SharedArrayBuffer",
+      "note": "Worker threads use Atomics.add for counters — the JS equivalent of Interlocked.Increment. There is no lock keyword; mutex libraries exist but are rare on the main thread.",
+      "futureTopicSlug": "typescript/concurrency/atomics"
     }
   ],
   "officialSources": [
@@ -179,6 +223,10 @@
     {
       "title": "Interlocked class",
       "url": "https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "scenarioTag": "high-concurrency"

@@ -160,16 +160,56 @@
           "body": "A mutable class used in a `HashSet` across a high-concurrency submit path will break when any thread changes a field that affects equality. The entry becomes unreachable. Use immutable records or readonly structs."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The `GetHashCode` contract is strict: if `a.Equals(b)` returns true, then `a.GetHashCode()` must equal `b.GetHashCode()`. The converse is not required — unequal objects may collide (hash buckets hold chains). `GetHashCode` must be **consistent**: calling it twice on an unmutated object returns the same value. It should be **fast** and **not throw** — dictionaries call it on every lookup. For structs, implement `IEquatable<T>` so `Dictionary` calls the typed `Equals(T)` without boxing the key. Use `HashCode.Combine(field1, field2)` — never XOR fields manually (XOR is commutative, so `(a,b)` and `(b,a)` can collide more often). Mutable keys are fatal: if `Tenant` changes after insert, the hash changes and the entry becomes an orphan. How to prove it in production: write a unit test that inserts `key1`, looks up with `key2` where `key1.Equals(key2)`, and assert the value is found; in a Redis-backed inflight tracker, log `ContainsKey` misses that `Equals` says should hit — that is a hash contract violation."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Benefit", "Cost"],
+          "rows": [
+            ["Records (compiler-generated pair)", "Equals and GetHashCode always agree", "Only for immutable included members"],
+            ["IEquatable<T> on struct", "Typed Equals avoids boxing in Dictionary", "Must also override object.Equals and GetHashCode"],
+            ["HashCode.Combine", "Correct mixing of multiple fields", "All fields in Equals must appear in Combine"],
+            ["Reference equality (default class)", "Fast — identity check only", "Two equal-value DTOs are different keys"],
+            ["Mutable key with set accessor", "Convenient for ORM mapping", "Silent dictionary orphans after mutation"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Full GetHashCode contract — correct struct key",
+            "code": "readonly struct AttemptKey : IEquatable<AttemptKey>\n{\n    public string Tenant { get; }\n    public string AttemptId { get; }\n\n    public AttemptKey(string tenant, string attemptId)\n    {\n        Tenant = tenant ?? throw new ArgumentNullException(nameof(tenant));\n        AttemptId = attemptId ?? throw new ArgumentNullException(nameof(attemptId));\n    }\n\n    // Contract: Equals true => same hash\n    public bool Equals(AttemptKey other) =>\n        Tenant == other.Tenant && AttemptId == other.AttemptId;\n\n    public override bool Equals(object? obj) =>\n        obj is AttemptKey other && Equals(other);\n\n    public override int GetHashCode() =>\n        HashCode.Combine(Tenant, AttemptId); // same fields as Equals\n\n    public static bool operator ==(AttemptKey left, AttemptKey right) => left.Equals(right);\n    public static bool operator !=(AttemptKey left, AttemptKey right) => !left.Equals(right);\n}",
+            "explanation": "Lines 12–13: typed Equals compares the same fields that drive identity. Line 18: GetHashCode uses HashCode.Combine on exactly those fields — satisfying the contract. Lines 20–21: operator overloads keep == consistent with Equals. Missing any of these four pieces (Equals object, Equals typed, GetHashCode, operators) is a common interview and production failure mode."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Overriding Equals but not GetHashCode — the classic rejection answer; equal objects in different buckets cause silent Dictionary misses. Saying hash collisions mean Equals is broken — collisions are expected; Equals disambiguates within a bucket. Using XOR to combine hash codes — order matters and XOR loses information. Mutating a key after Dictionary insert — the entry vanishes. Strong answer: Equals true implies same hash; use HashCode.Combine on the same fields; implement IEquatable<T> for structs; never mutate keys; records generate the pair automatically."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Equals and GetHashCode are a pair; collections depend on it.",
-    "IEquatable<T> avoids boxing for value types.",
-    "Never mutate a dictionary key; records help only if they stay immutable."
+    "If Equals returns true, GetHashCode must return the same value — Dictionary and HashSet depend on this contract.",
+    "Hash collisions are normal; Equals disambiguates within a bucket. Do not XOR fields — use HashCode.Combine on the same fields as Equals.",
+    "In production, IEquatable<T> on readonly structs avoids boxing on every Redis inflight-tracker lookup; mutable keys orphan entries silently.",
+    "60s: Equals and GetHashCode are a pair. Equal objects must hash equal. Implement IEquatable<T> for structs. HashCode.Combine, not XOR. Never mutate a dictionary key. Records generate both methods. A ContainsKey miss where Equals is true means the contract broke.",
+    "Follow-up: show a BrokenKey class where Equals is overridden but GetHashCode is not — what does ContainsKey return?"
   ],
   "commonPitfalls": [
-    "Overriding Equals on a class but leaving the default reference GetHashCode.",
-    "Using a mutable DTO as a HashSet element across a high-concurrency submit path."
+    "Overriding Equals without GetHashCode — that answer gets rejected because equal keys land in different buckets and lookups miss silently.",
+    "Strong answer: Equals true implies same hash; HashCode.Combine on the same fields; IEquatable<T> for structs; immutable keys only.",
+    "Using XOR to combine hash codes — commutative XOR loses field order and increases collision risk.",
+    "Mutating a dictionary key after insert — hash changes and the entry becomes unreachable with no exception."
   ],
   "relatedTopicIds": [
     "csharp-05-records",

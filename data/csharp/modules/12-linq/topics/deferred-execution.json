@@ -178,18 +178,56 @@
           "body": "Calling Count then foreach on the same IEnumerable. Returning a query over a using-disposed enumerator (yield after dispose). Putting expensive Select lambdas in a query that reporting enumerates three times. Assuming OrderBy streams — it buffers the entire source first."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Deferred execution means each operator wraps the previous in a new **iterator** — every Where/Select allocates a delegate and an enumerator object on the heap (struct enumerators box when the API returns IEnumerable<T>). Count then foreach on the same plan is two full passes; on List<T> use **TryGetNonEnumeratedCount** for the first pass when you only need count, or **ToList()** once to snapshot. Captured locals are read at enumeration time, not query construction — a race on mutable cutoff flags. OrderBy/GroupBy defer but buffer entirely before first yield. For CPU-bound in-memory aggregation on large snapshots, **Parallel LINQ (PLINQ)** via AsParallel() is an opt-in follow-up — never the default answer for deferred traps. How to prove it in production: dotnet-counters or dotMemory showing double enumeration on submit-path reporting; log enumeration count per request."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Pass count", "Fix"],
+          "rows": [
+            ["Count then foreach (deferred)", "Two full walks", "ToList once or TryGetNonEnumeratedCount + single foreach"],
+            ["Multiple report sections same query", "N passes", "Materialize snapshot at boundary"],
+            ["Live List while querying", "Non-deterministic between passes", "ToList before parallel readers"],
+            ["OrderBy in chain", "Buffers all before yield", "Do not assume streaming"],
+            ["AsParallel on deferred chain", "Partitions at enumeration", "Measure; overhead on small seqs"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Iterator allocations in a deferred chain",
+            "code": "IEnumerable<int> chain =\n    source.Where(x => x > 0)   // WhereIterator + Func\n        .Select(x => x * 2)    // SelectIterator + Func\n        .Take(10);              // TakeIterator\n\n// Each operator adds an iterator object; lambdas are delegate allocations.\n// Fix on hot path: one foreach loop, or for-loop on List/Span, or ToList once.\n\nReadOnlySpan<int> span = CollectionsMarshal.AsSpan(list);\nfor (int i = 0; i < span.Length; i++)\n{\n    if (span[i] > 0) { /* ... */ }\n}",
+            "explanation": "Senior interviews connect deferred execution to allocation cost, not just correctness. TryGetNonEnumeratedCount and materialization are the LINQ-side fixes; Span/for-loop is the escape hatch."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying deferred execution is always free until ToList — each enumeration runs the full chain and allocates iterators. Ignoring Count then foreach as two passes. Recommending PLINQ for every LINQ query — it is for measured CPU-bound in-memory work. Strong answer: plan vs run, snapshot with ToList, TryGetNonEnumeratedCount when ICollection, iterator allocations on hot paths."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Declaration is a plan; enumeration is work.",
-    "Scalar operators and ToList/ToArray are immediate; most sequence operators defer.",
-    "GroupBy/OrderBy defer but buffer; they are not cheap streaming.",
-    "Enumerate once on hot paths; snapshot captured filters."
+    "Declaration is a plan; each enumeration re-runs the chain and allocates iterators.",
+    "Count/ToList/First are immediate; Where/Select defer but add iterator layers per operator.",
+    "TryGetNonEnumeratedCount avoids a full walk for Count on ICollection-backed sources.",
+    "60s: Deferred means plan not results. Each foreach re-runs and allocates iterators. ToList snapshots once. Count then foreach is two passes. TryGetNonEnumeratedCount on lists. PLINQ AsParallel only when measured CPU-bound.",
+    "Follow-up: what allocates on a three-operator Where-Select-Take chain?"
   ],
   "commonPitfalls": [
-    "Calling Count then foreach on the same IEnumerable.",
-    "Returning a query over a using-disposed enumerator (yield after dispose).",
-    "Putting expensive Select lambdas in a query that reporting enumerates three times."
+    "Calling Count then foreach on the same IEnumerable — two passes; rejected on hot submit paths.",
+    "Strong answer: ToList once at the boundary, or TryGetNonEnumeratedCount when the source exposes Count.",
+    "Returning a query over a using-disposed enumerator — yield after dispose throws or returns empty.",
+    "Assuming OrderBy streams — it buffers the entire source before the first element."
   ],
   "relatedTopicIds": [
     "csharp-12-linq-to-objects",
@@ -210,6 +248,12 @@
       "concept": "Lazy iterables",
       "note": "A JS generator is lazy like IEnumerable until you spread it. Spreading twice re-runs the generator if you still have it.",
       "futureTopicSlug": "javascript/language/iteration-protocols"
+    },
+    {
+      "language": "typescript",
+      "concept": "generator double consumption",
+      "note": "TypeScript generators defer like IEnumerable but have no TryGetNonEnumeratedCount — materialize with Array.from or spread before counting and iterating.",
+      "futureTopicSlug": "typescript/iterators/generators"
     }
   ],
   "officialSources": [

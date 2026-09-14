@@ -124,6 +124,15 @@
             "code": "Dictionary<string, bool> raw = LoadFeatureFlagsFromRedis();\nFrozenDictionary<string, bool> flags = raw.ToFrozenDictionary();\n\n// flags is read-only and optimized for fast lookup\n// Safe to share across all request handlers in the Lambda",
             "explanation": "Load once at startup, freeze for fast shared reads. No locks needed because nothing mutates after freezing."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom AsyncQueue versus Channel — failure mode",
+            "code": "// Anti-pattern: hand-rolled queue with public lock\n// class AsyncQueue<T> {\n//     private readonly Queue<T> _q = new();\n//     private readonly object _lock = new();\n//     public void Enqueue(T item) { lock(_lock) _q.Enqueue(item); }\n//     // Missing: backpressure, async wait, SingleReader optimization\n// }\n\n// Correct: name the BCL type\nChannel<Message> pipe = Channel.CreateBounded<Message>(32);",
+            "explanation": "A custom queue with lock() lacks bounded backpressure, async waiting, and SingleReader/SingleWriter optimizations that Channel<T> provides. Interviewers want you to name Channel, not reinvent it."
+          }
         }
       ]
     },
@@ -131,8 +140,16 @@
       "heading": "Compare with JavaScript and TypeScript",
       "blocks": [
         {
-          "type": "prose",
-          "text": "Node.js has no built-in Channel or ConcurrentDictionary. Node streams and async iterators are the analogue of IAsyncEnumerable and Channel — not of Array.push in a loop. In TypeScript, you might reach for a library like p-queue for bounded concurrency; in C#, Channel<T> is in the standard library. The lesson is the same: do not reinvent a pipe when the runtime or standard library already ships one."
+          "type": "comparisonTable",
+          "title": "BCL versus reinventing in JS/TS",
+          "headers": ["Need", "C# BCL type", "JS/TS analogue"],
+          "rows": [
+            ["In-process async pipe", "Channel<T>", "No built-in; use streams or p-queue library"],
+            ["Thread-safe map", "ConcurrentDictionary", "No built-in; single-threaded event loop"],
+            ["Read-only config snapshot", "FrozenDictionary", "Object.freeze (shallow only)"],
+            ["Deferred sequence", "yield / IAsyncEnumerable", "function* / async function*"],
+            ["Distributed queue", "SQS / RabbitMQ client", "SQS SDK / BullMQ — not a language type"]
+          ]
         }
       ]
     },
@@ -146,20 +163,51 @@
           "body": "Writing a thread-safe list with public lock fields instead of using ConcurrentBag or Channel<T>. Exposing ConcurrentQueue as a substitute for SQS and losing durability. Building a custom enumerator that hits Redis on every MoveNext — hide I/O behind explicit methods."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The BCL collection hierarchy is tuned for decades of production use: resize strategies, comparer contracts, struct enumerators, and concurrent variants with lock-free segments. Custom collections introduce subtle bugs — incorrect GetHashCode, missing version checks, lock ordering deadlocks, and hidden I/O in MoveNext. How to prove it in production: code review radar for classes ending in Bag, Queue, or Pool that duplicate System.Collections; BenchmarkDotNet showing your custom type is slower than Channel<T> or ConcurrentDictionary; stack traces pointing at your MoveNext hitting Redis instead of an explicit FetchAsync method."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Scenario", "Name this type", "Do not invent"],
+          "rows": [
+            ["Startup feature flags", "FrozenDictionary", "lock + Dictionary singleton"],
+            ["Multi-producer async pipe", "Channel<T>", "lock + Queue<T> wrapper"],
+            ["Shared counter under contention", "ConcurrentDictionary or Interlocked", "Dictionary + lock on every read"],
+            ["CSV one-pass import", "yield return", "Custom IEnumerator hitting disk per item"],
+            ["Cross-Lambda dedup", "Redis / DynamoDB", "ConcurrentDictionary (single process only)"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Proposing to \"write a simple thread-safe list\" when asked about producer/consumer coordination — that is Channel<T>. Proposing ConcurrentQueue for cross-service messaging — it is in-process only, not durable. Strong answer: name the BCL type, state the invariant your case needs, and only customize when List or Dictionary genuinely cannot express it."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Prefer BCL generic collections; ArrayList and Hashtable are legacy.",
-    "Channel<T> is the in-process async queue — details in module 15.",
-    "Do not disguise I/O as IEnumerable unless the contract is explicitly a stream (module 13)."
+    "Reach for BCL types first — List, Dictionary, HashSet, Queue, Channel, FrozenDictionary, Immutable collections.",
+    "Channel<T> is the in-process async pipe with backpressure — not a hand-rolled lock + Queue.",
+    "Do not hide I/O inside IEnumerable.MoveNext — expose explicit async fetch methods.",
+    "60s: Growable → List. Lookup → Dictionary or FrozenDictionary at startup. Async pipe → Channel. Distributed → SQS/Redis, not BCL. Custom collection only when you can name the invariant BCL cannot express.",
+    "Follow-up: when is a custom collection justified? (domain-specific invariant, e.g. circular buffer with fixed capacity and overwrite semantics)"
   ],
   "commonPitfalls": [
-    "Writing a thread-safe list with public lock fields.",
-    "Exposing ConcurrentQueue as a substitute for SQS and losing durability.",
-    "Building a custom enumerator that hits Redis on every MoveNext."
+    "Proposing a custom thread-safe list for producer/consumer — say Channel<T> instead.",
+    "Strong answer: name BCL type first, state single-process vs distributed boundary, only customize for a named invariant.",
+    "Exposing ConcurrentQueue as SQS substitute — loses durability and cross-process visibility.",
+    "Building a custom enumerator that hits Redis on every MoveNext — hide I/O behind explicit methods."
   ],
   "relatedTopicIds": [
     "csharp-08-list-dictionary-set-queue",
+    "csharp-08-frozen-and-immutable-collections",
     "csharp-08-iterators-yield",
     "csharp-09-generic-result-wrapper",
     "csharp-15-concurrent-collections-channels"
@@ -168,8 +216,14 @@
     {
       "language": "javascript",
       "concept": "streams vs arrays",
-      "note": "Node streams / async iterators are the analogue of IAsyncEnumerable and Channel, not of Array.push in a loop.",
+      "note": "Node streams and async iterators are the analogue of IAsyncEnumerable and Channel<T>, not of Array.push in a loop. C# ships Channel in the BCL; Node requires a library.",
       "futureTopicSlug": "javascript/streams/async-iteration"
+    },
+    {
+      "language": "typescript",
+      "concept": "p-queue and bounded concurrency",
+      "note": "TypeScript teams use p-queue for bounded async work. C# Channel<T> is built-in with SingleReader/SingleWriter optimizations — do not reinvent either.",
+      "futureTopicSlug": "typescript/async/concurrency-libraries"
     }
   ],
   "officialSources": [
@@ -180,6 +234,10 @@
     {
       "title": "Generic types and methods",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/types/generics"
+    },
+    {
+      "title": "System.Threading.Channels",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels"
     }
   ],
   "animationHint": "compare",

@@ -36,6 +36,12 @@
               "example": "`bool TryGet(string key, [NotNullWhen(true)] out string? value)`"
             },
             {
+              "term": "NotNullIfNotNull",
+              "longForm": "NotNullIfNotNull attribute",
+              "plainDefinition": "Says a return value is not-null when a named parameter is not-null — dependent nullability the compiler can track.",
+              "example": "`[return: NotNullIfNotNull(nameof(key))] string? Get(string? key)`"
+            },
+            {
               "term": "SetsRequiredMembers",
               "longForm": "SetsRequiredMembers attribute",
               "plainDefinition": "On a constructor, disables required-member checks for that construction path. Use sparingly.",
@@ -120,6 +126,15 @@
           "type": "snippet",
           "snippet": {
             "language": "csharp",
+            "label": "NotNullIfNotNull for dependent return contracts",
+            "code": "public sealed class TokenCache\n{\n    [return: NotNullIfNotNull(nameof(key))]\n    public string? GetCached(string? key)\n    {\n        if (key is null)\n            return null;\n        return _store.TryGetValue(key, out var json) ? json : null;\n    }\n}\n\n// Flow analysis: non-null key => non-null return expected when hit",
+            "explanation": "Line 3: `[return: NotNullIfNotNull(nameof(key))]` — when `key` is not null, the return is treated as not-null if the method returns non-null. Models cache lookups where null key means null result but a real key implies a real payload when found."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
             "label": "Find with MaybeNull return",
             "code": "[return: MaybeNull]\npublic T Find<T>(string id)\n{\n    return _items.TryGetValue(id, out var item) ? item : default!;\n}\n\n// Caller must check — NRT will warn if you assume non-null:\nif (_repo.Find<User>(id) is { } user)\n    SendWelcome(user.Email);",
             "explanation": "Line 1: `[return: MaybeNull]` documents that miss returns default/null. Lines 8–9: pattern match narrows before using nested properties."
@@ -159,17 +174,46 @@
           "body": "Callers will assume a miss is a valid object. Annotate the return or switch to `TryFind` with `[NotNullWhen(true)]`."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: nullable analysis attributes are compile-time contracts only — no IL change. `[NotNullIfNotNull(nameof(param))]` on returns models dependent nullability: null in implies null out allowed; non-null in raises the bar on the return. BCL uses `[NotNullWhen(true)]` on TryGetValue out parameters. Generic `T?` is ambiguous on unconstrained T — prefer MaybeNull, NotNull, MemberNotNullWhen on library APIs. required enforces presence in initializers, not non-null — pair with non-nullable types for auth Issuer/Audience fields."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Attribute", "Models", "Typical API"],
+          "rows": [
+            ["NotNullWhen(true)", "out param not-null when true", "TryGetValue, TryParse"],
+            ["MaybeNull", "Return may be null/default", "Find, FirstOrDefault on generic T"],
+            ["NotNullIfNotNull", "Return nullability depends on arg", "GetCached(key) — null key => null"],
+            ["NotNull", "Parameter/return not-null after call", "ThrowIfNull helpers"],
+            ["required", "Must assign in initializer", "Options, DTOs — not same as non-null"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying required forbids null. Returning T from Find without MaybeNull. Not knowing NotNullIfNotNull for dependent returns. Sprinkling null! instead of attributes on generic Try APIs."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "`required` enforces initialization in object initializers; it does not forbid null.",
-    "`MaybeNull` / `NotNull` / `NotNullWhen` exist because generic signatures cannot always say `T?`.",
-    "`SetsRequiredMembers` and `null!` both turn the compiler off — use them as last resorts."
+    "required enforces initialization — not non-null unless the type is non-nullable.",
+    "NotNullWhen, MaybeNull, NotNullIfNotNull refine generic and bool-returning contracts.",
+    "Attributes change warnings only — validate at process boundaries anyway.",
+    "60s: required is presence in initializer. NotNullWhen for Try*. MaybeNull on Find. NotNullIfNotNull when return tracks argument null. No runtime enforcement.",
+    "Follow-up: why is T? awkward on unconstrained generic T?"
   ],
   "commonPitfalls": [
-    "Marking a property `required string?` and believing the value cannot be omitted and cannot be null.",
-    "Returning `T` from Find without MaybeNull, so callers think a miss is a valid T.",
-    "Forgetting `[NotNullWhen(true)]` on a custom IsPresent, then sprinkling `!` at every call site."
+    "Saying required means non-null gets you rejected.",
+    "Find<T> without MaybeNull — callers assume hit.",
+    "Strong answer: 'required is init presence. NotNullWhen for Try. NotNullIfNotNull for dependent returns. Attributes are analysis only.'"
   ],
   "introducedIn": "C# 11",
   "relatedTopicIds": [

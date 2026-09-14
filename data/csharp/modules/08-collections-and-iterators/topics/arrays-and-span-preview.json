@@ -126,6 +126,15 @@
             "code": "string[] names = [\"alice\", \"bob\"];\nobject[] boxed = names;          // compiles — arrays are covariant\nboxed[0] = 42;                   // compiles as object\n// throws ArrayTypeMismatchException at run time",
             "explanation": "The compiler allows assigning string[] to object[] because arrays are covariant. Writing an int into a string slot fails at run time, not compile time. List<string> does not allow this — that is why generics exist."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ArrayPool for high-throughput buffers",
+            "code": "byte[] buffer = ArrayPool<byte>.Shared.Rent(4096);\ntry\n{\n    int read = await stream.ReadAsync(buffer.AsMemory(0, 4096));\n    Process(buffer.AsSpan(0, read));\n}\nfinally\n{\n    ArrayPool<byte>.Shared.Return(buffer, clearArray: true);\n}",
+            "explanation": "ArrayPool avoids allocating a new byte[] per request. Always Return in finally and clear sensitive data. The rented array may be larger than requested — use only the bytes you read."
+          }
         }
       ]
     },
@@ -156,17 +165,47 @@
           "body": "Calling Add on an array typed as IList<T> throws NotSupportedException — arrays do not grow. Using object[] as a mixed-type bag and hitting array covariance bugs. Trying to store Span<T> as a class field — Span is a ref struct and cannot live on the heap; full rules are in module 17."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A T[] array is a single CLR object on the heap: object header, method table pointer, Length field, then Length slots of T laid out contiguously. Indexing computes offset = base + (index × elementSize) — true O(1) with a bounds check the JIT can sometimes eliminate. List<T> wraps T[] _items with a separate _size counter; when _size exceeds _items.Length, it allocates a new array at ~2× capacity and Array.Copy's the old contents. Span<T> is a ref struct (stack-only) holding a reference to memory plus length — no allocation, but cannot be stored on the heap or in async methods. How to prove it in production: BenchmarkDotNet comparing for-loop over T[] vs List<T>.Count iteration; dotnet-gcdump to confirm one array object per batch versus multiple resize allocations."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Choice", "Memory", "When not to use"],
+          "rows": [
+            ["T[] fixed size", "One heap object, no resize overhead", "Size unknown at creation or will grow"],
+            ["List<T>", "Amortized growth, extra _size field", "Fixed batch where Length is known forever"],
+            ["ArrayPool<T>.Shared", "Rent/return avoids per-request alloc", "Need to remember Return and clear sensitive data"],
+            ["Span<T> slice", "Zero-copy view, stack-only", "Long-lived field, async state, or boxing"],
+            ["object[] covariance", "Allows string[] as object[]", "Never for heterogeneous storage — use List<object> or generics"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"arrays are value types\" — they are reference types on the heap; only the elements can be value types. Saying \"I'd use List everywhere because arrays are slow\" — List adds indirection and resize copies you do not need for a fixed SQS batch of 10. Strong answer: array when Length is fixed and known, List when appending, Span for zero-copy parsing without allocation."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Arrays have fixed Length; indexing is O(1); they are reference types on the heap.",
-    "Array covariance (string[] to object[]) can throw ArrayTypeMismatchException at run time.",
-    "Span<T> is a zero-copy view over memory — full treatment is module 17."
+    "T[] is a fixed-length heap object with O(1) indexing; List<T> wraps a growable backing array.",
+    "Array covariance (string[] to object[]) compiles but throws ArrayTypeMismatchException at run time.",
+    "Span<T> is a stack-only ref struct for zero-copy slices — full rules in module 17.",
+    "60s: Fixed batch → array. Growing buffer → List. Zero-copy parse → Span. Never use object[] as a mixed-type bag — covariance will bite you.",
+    "Follow-up: why can Span<T> not be a class field? (ref struct, stack-only lifetime)"
   ],
   "commonPitfalls": [
-    "Calling Add on an array typed as IList<T> and being surprised by NotSupportedException.",
-    "Using object[] as a heterogeneous bag and hitting array covariance bugs.",
-    "Trying to store Span<T> on a worker class field — illegal; wait for module 17 to see why."
+    "Saying arrays are value types — they are reference types; only elements like int are value types.",
+    "Strong answer: array for fixed known size, List for growth, Span for zero-copy slices without heap allocation.",
+    "Calling Add on an array typed as IList<T> — throws NotSupportedException because arrays do not grow.",
+    "Using object[] as a heterogeneous bag — array covariance causes run-time type mismatch."
   ],
   "relatedTopicIds": [
     "csharp-08-list-dictionary-set-queue",
@@ -197,6 +236,10 @@
     {
       "title": "Collection expressions (Span example)",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/collection-expressions"
+    },
+    {
+      "title": "dotnet-gcdump",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump"
     }
   ],
   "animationHint": "stack-heap",

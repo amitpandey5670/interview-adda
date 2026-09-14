@@ -178,18 +178,56 @@
           "body": "Copy-pasting an in-memory query onto IQueryable and shipping it. Leaving a query over File.ReadLines un-materialized after the stream closes. Micro-optimizing LINQ versus foreach before measuring allocations on the submit path. Assuming a remote provider is just a faster List."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "LINQ to Objects is Enumerable over materialized or streaming in-memory sequences — full C# in Func lambdas, deferred iterator allocations on every operator. CSV import, Redis JSON, and parsed attempt lists belong here: **ToList()** before the file stream closes is the materialization wall. Remote IQueryable is a different contract with a translatable subset — copy-pasting in-memory LINQ fails at runtime. On hot in-memory paths, measure **iterator allocations** (WhereIterator, SelectIterator, delegate captures) with dotMemory; use **TryGetNonEnumeratedCount** when you need Count without walking a List twice. **Parallel LINQ (PLINQ)** via AsParallel() partitions in-memory snapshots for CPU-bound aggregation — pointer only when profiling shows single-threaded LINQ is the bottleneck; it does not apply to IQueryable providers. How to prove it in production: BenchmarkDotNet foreach versus LINQ on the submit path; allocation diff before/after folding three Where into one."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Workload", "Right tool", "Trap"],
+          "rows": [
+            ["CSV / JSON in memory", "LINQ to Objects + ToList wall", "Deferred query over closed stream"],
+            ["Translatable filter on server", "IQueryable then ToList", "Custom C# in remote Where"],
+            ["Count + report same data", "TryGetNonEnumeratedCount or ToList once", "Double deferred enumeration"],
+            ["Hot path micro-opt", "for/Span after measure", "Premature LINQ removal without data"],
+            ["CPU-bound in-memory aggregate", "PLINQ AsParallel (measured)", "Default for every query"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "PLINQ pointer — measured opt-in only",
+            "code": "var snapshot = attempts.Where(a => a.Tenant == tenant).ToList();\n\n// Only after profiling shows CPU-bound work on large in-memory snapshot:\nvar summary = snapshot.AsParallel()\n    .Where(a => a.Score >= 50)\n    .GroupBy(a => a.QuestionId)\n    .Select(g => (g.Key, g.Count()))\n    .ToList();\n\n// PLINQ: partitions locally; nondeterministic order unless AsOrdered().\n// Not for IQueryable, not for small lists, not before measuring allocations first.",
+            "explanation": "Senior answer mentions PLINQ as a follow-up for CPU-bound in-memory aggregation after snapshot — not as the first fix for deferred execution bugs."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Copy-pasting LINQ to Objects onto IQueryable without checking translation — runtime NotSupportedException. Leaving File.ReadLines query un-materialized — empty results after dispose. Saying LINQ is always slower than foreach without measuring iterator allocations. Leading with PLINQ for every performance question. Strong answer: right flavor, ToList wall, measure allocations, PLINQ as measured CPU-bound opt-in."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "LINQ to Objects = Enumerable + in-memory sequences + full C# in lambdas.",
-    "CSV, Redis JSON, and already-loaded attempts belong here.",
-    "A remote provider is a different contract, not a faster List.",
-    "Materialize, then use rich C#, when translation is not guaranteed."
+    "LINQ to Objects = Enumerable + in-memory sequences + full C# Func lambdas + deferred iterator allocations.",
+    "CSV, Redis JSON, and loaded attempt lists belong here; ToList before stream closes.",
+    "TryGetNonEnumeratedCount avoids double walk for Count on ICollection-backed sources.",
+    "60s: LINQ to Objects is in-process Func LINQ with iterator allocations. Materialize with ToList at boundaries. Remote IQueryable is a different translatable contract. PLINQ AsParallel is measured CPU-bound opt-in on snapshots, not default.",
+    "Follow-up: when would you replace LINQ with a for-loop on a hot path?"
   ],
   "commonPitfalls": [
-    "Copy-pasting an in-memory query onto IQueryable and shipping it.",
-    "Leaving a query over File.ReadLines un-materialized after the stream closes.",
-    "Micro-optimizing LINQ versus foreach before measuring allocations on the submit path."
+    "Copy-pasting an in-memory query onto IQueryable — fails translation at run time; rejected in senior loops.",
+    "Strong answer: keep translatable predicates on provider; ToList wall; then LINQ to Objects with full C#.",
+    "Leaving a query over File.ReadLines un-materialized after the stream closes — enumeration yields nothing.",
+    "Micro-optimizing LINQ versus foreach before measuring iterator allocations on the submit path."
   ],
   "relatedTopicIds": [
     "csharp-12-deferred-execution",
@@ -203,6 +241,12 @@
       "concept": "In-memory array transforms versus SQL builders",
       "note": "rows.filter is LINQ to Objects. knex/prisma query builders are closer to IQueryable: a DSL, not your full JS, runs on the server.",
       "futureTopicSlug": "javascript/arrays/map-filter"
+    },
+    {
+      "language": "typescript",
+      "concept": "array methods eager versus lazy iterables",
+      "note": "Array filter/map is eager like immediate ToList. Lazy generator pipelines mirror deferred IEnumerable but lack TryGetNonEnumeratedCount — spread or Array.from to snapshot.",
+      "futureTopicSlug": "typescript/iterators/lazy"
     }
   ],
   "officialSources": [

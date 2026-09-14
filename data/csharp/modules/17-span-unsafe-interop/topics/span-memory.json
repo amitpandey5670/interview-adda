@@ -147,21 +147,60 @@
           "body": "Storing Span in a class field — compile error. Using span after underlying array is returned to pool. Assuming span works across await without Memory conversion."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: compare gen-0 allocation rate before and after replacing Substring with AsSpan on a hot auth header parser — dotnet-counters System.Runtime gen-0-gc-count should drop. The JavaScript bridge: ArrayBuffer is a fixed byte slab; Uint8Array.subarray and TextEncoder.encodeInto map directly to ReadOnlySpan<byte> and Utf8.TryWrite in C#. When a WASM or Node addon hands you bytes, treat them like Memory<byte> with explicit lifetime — detached ArrayBuffer is the JS analogue of returning an ArrayPool buffer while a Span still references it."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ArrayBuffer / TextEncoder mental model — UTF-8 span bridge",
+            "code": "// JS: const buf = new ArrayBuffer(64);\n//     const view = new Uint8Array(buf);\n//     const { written } = new TextEncoder().encodeInto(\"Bearer abc\", view);\n\nSpan<byte> utf8 = stackalloc byte[64];\nvar chars = \"Bearer abc\".AsSpan();\nint written = Encoding.UTF8.GetBytes(chars, utf8); // like encodeInto\nReadOnlySpan<char> token = chars.Slice(\"Bearer \".Length);\n\n// Slice without copy — like Uint8Array.subarray:\nReadOnlySpan<byte> payload = utf8.Slice(0, written);",
+            "explanation": "Lines 7–8: C# stackalloc + GetBytes mirrors TextEncoder.encodeInto into ArrayBuffer. Line 11: Slice on span matches Uint8Array.subarray — shared backing, no new allocation."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Concept", "C# Span/Memory", "JS ArrayBuffer / TextEncoder"],
+          "rows": [
+            ["Byte view", "ReadOnlySpan<byte>", "Uint8Array.subarray — shared backing"],
+            ["UTF-8 encode in place", "Encoding.UTF8.GetBytes into span", "TextEncoder.encodeInto"],
+            ["String slice no alloc", "ReadOnlySpan<char>", "substring creates new string"],
+            ["Async field storage", "Memory<T>", "Hold ArrayBuffer reference — detached on transfer"],
+            ["Lifetime trap", "ArrayPool return while span alive", "ArrayBuffer detached after postMessage transfer"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Storing Span<T> in a class field — compile error for good reason. Using span after ArrayPool.Return — same as using detached ArrayBuffer in JS. Saying Span works across await without converting to Memory. Not knowing TextEncoder.encodeInto maps to writing into a byte span."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Span is a zero-copy view; Memory is the storable/async-friendly variant.",
-    "Prefer span slicing over Substring on hot paths.",
-    "ref struct cannot live on the heap or cross await as Span."
+    "Span<T> is a stack-only ref struct view; Memory<T> is the heap-storable async-friendly counterpart.",
+    "ArrayBuffer + Uint8Array.subarray + TextEncoder.encodeInto map to stackalloc/Memory<byte> + Span.Slice + UTF8 GetBytes.",
+    "In production, dotnet-counters gen-0 drops when Substring chains become AsSpan + TryParse on auth headers.",
+    "60s: Span slices without alloc. Memory for async fields. JS ArrayBuffer = byte backing; subarray = Slice; encodeInto = write UTF-8 into span. Detached buffer = use-after-free trap.",
+    "Follow-up: why cannot Span be a field on a class but Memory can?"
   ],
   "commonPitfalls": [
-    "Span as instance field on a class.",
-    "Use-after-free when backing array goes back to pool.",
-    "Substring when TryParse on span exists."
+    "Span as instance field on a class gets you rejected — ref struct cannot live on heap.",
+    "Use-after-free when backing array returned to pool while span still references it — like detached ArrayBuffer.",
+    "Strong answer: 'Span for hot parse. Memory for async. JS bridge: ArrayBuffer backing, subarray = Slice, TextEncoder = UTF-8 into byte span. Profile gen-0 after Substring removal.'"
   ],
   "relatedTopicIds": [
     "csharp-17-stackalloc-csv",
     "csharp-17-unsafe-pointers-fixed",
+    "csharp-14-pinned-heap-and-weak-references",
     "csharp-18-csharp-8-to-14-map",
     "csharp-08-arrays-and-span-preview",
     "csharp-04-ref-in-out",
@@ -170,15 +209,25 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Buffer.subarray",
-      "note": "subarray shares underlying memory like Span.Slice. Unlike JS strings, C# spans over char buffers avoid new string allocations.",
+      "concept": "ArrayBuffer and Uint8Array.subarray",
+      "note": "ArrayBuffer is the backing slab; subarray creates a view without copying — identical mental model to Span<byte>.Slice. postMessage transfer detaches the buffer like returning an ArrayPool array while a span still points at it.",
       "futureTopicSlug": "javascript/buffers/typed-arrays"
+    },
+    {
+      "language": "javascript",
+      "concept": "TextEncoder.encodeInto",
+      "note": "encodeInto writes UTF-8 into an existing Uint8Array without allocating a new buffer. C# Encoding.UTF8.GetBytes(ReadOnlySpan<char>, Span<byte>) and Utf8.TryWrite are the same zero-extra-buffer pattern for protocol headers.",
+      "futureTopicSlug": "javascript/text/encoding"
     }
   ],
   "officialSources": [
     {
       "title": "Memory<T> usage guidelines",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/memory-and-spans/memory-t-usage-guidelines"
+    },
+    {
+      "title": "Diagnostic metrics — dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "scenarioTag": "high-concurrency",

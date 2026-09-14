@@ -13,7 +13,7 @@
     },
     {
       "question": "How does single inheritance work in C#?",
-      "answer": "class Derived : Base is the only class inheritance shape. You get one base class plus any number of interfaces. Constructors are not inherited — Derived must call base(...) explicitly or rely on an implicit parameterless base constructor. abstract blocks instantiation; sealed blocks further derivation. Constructor order: base body runs before derived body.",
+      "answer": "class Derived : Base is the only class inheritance shape. You get one base class plus any number of interfaces. Constructors are not inherited — Derived must call base(...) explicitly or rely on an implicit parameterless base constructor. abstract blocks instantiation; sealed blocks further derivation. Initialization order: derived field inits, base constructor body, derived constructor body.",
       "followUps": [
         "What happens if you call a virtual method from a base constructor?",
         "Can a struct inherit from a class?"
@@ -22,19 +22,37 @@
     },
     {
       "question": "virtual, override, abstract, sealed, and new — what does each do?",
-      "answer": "virtual opens a dispatch slot in the method table. override replaces that slot in the derived type. abstract demands an override and forbids instantiating the type. sealed on a class blocks derivation; sealed override blocks further override. new hides a member and does not participate in the base slot — calling through the base type still hits the base method.",
+      "answer": "virtual opens a dispatch slot in the method table. override replaces that slot in the derived type. abstract demands an override and forbids instantiating the type. sealed on a class blocks derivation; sealed override blocks further override and enables JIT devirtualization. new hides a member and does not participate in the base slot — calling through the base type still hits the base method. Covariant returns (C# 9+) let an override return a more derived type.",
       "followUps": [
         "Show a bug caused by new instead of override.",
-        "Can you override a non-virtual method?"
+        "What is covariant return on an override?"
       ],
-      "sixtySeconds": "Dispatch uses the override slot. new is a different member. Interviewers listen for that sentence."
+      "sixtySeconds": "Dispatch uses the override slot. new is a different member. sealed enables devirtualization. Never call virtual from base ctor."
+    },
+    {
+      "question": "Explain devirtualization and when sealed matters on a hot path.",
+      "answer": "Virtual calls walk the vtable at run time. When the JIT can prove the receiver type — sealed class, sealed override, or a local of concrete type — it may inline the target and skip the indirect call. This matters on auth handler hot paths with millions of Parse calls. It is not automatic for every virtual call; unsealed public hierarchies keep slots open. Benchmark sealed versus unsealed on the actual method before claiming a win.",
+      "followUps": [
+        "Does interface dispatch devirtualize the same way?",
+        "What does BenchmarkDotNet show for sealed override?"
+      ],
+      "sixtySeconds": "Virtual is vtable dispatch. sealed lets JIT devirtualize when type is known. Measure on hot paths, do not assume every virtual call is slow."
+    },
+    {
+      "question": "What breaks when a base constructor calls a virtual method?",
+      "answer": "The derived override runs before derived field initializers and constructor body complete. The override may read default/null derived fields even though the object exists. Template Method patterns in base constructors cause subtle production bugs in handler hierarchies. Fix: non-virtual hooks called from derived ctor after fields init, or a factory that calls Init() after construction.",
+      "followUps": [
+        "Does primary constructor syntax change this order?",
+        "How would you spot this in a stack trace?"
+      ],
+      "sixtySeconds": "Base ctor runs before derived fields finish. Virtual call from base ctor invokes derived override on uninitialized state. Ban virtual calls in base ctors."
     },
     {
       "question": "How do C# interfaces differ from TypeScript interfaces?",
-      "answer": "A C# interface is a Common Language Runtime (CLR) contract: implementing types have metadata, Default Interface Methods (DIM) can run, and you can cast to the interface. TypeScript interfaces erase at compile time. Explicit interface implementation in C# hides the member unless you cast. DIM lets you add members without recompiling every implementer. Struct-to-interface conversion boxes.",
+      "answer": "A C# interface is a Common Language Runtime (CLR) contract: implementing types have metadata, Default Interface Methods (DIM) can run, and you can cast to the interface. TypeScript interfaces erase at compile time. Explicit interface implementation hides members unless you cast. DIM lets you add members without recompiling every implementer. Struct-to-interface conversion boxes — measure on Redis cache-key hot paths.",
       "followUps": [
         "Can a struct implement an interface? What happens?",
-        "What is an explicit implementation used for?"
+        "When do you use explicit implementation?"
       ],
       "sixtySeconds": "C# interfaces survive at runtime. TypeScript interfaces do not. Boxing happens when a struct is cast to an interface."
     },

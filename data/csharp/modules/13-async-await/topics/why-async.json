@@ -124,6 +124,15 @@
             "code": "// WRONG: still pays a thread for the entire blocking wait\nvar message = await Task.Run(() =>\n    sqs.ReceiveMessage(queueUrl)); // synchronous SDK call\n\n// RIGHT: use the truly async API\nvar message = await sqs.ReceiveMessageAsync(queueUrl, cancellationToken);",
             "explanation": "Task.Run queues CPU work to the pool. Wrapping a blocking call hides the blocking from the reader but still wastes a thread for the wait."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnose thread-pool starvation",
+            "code": "// dotnet-counters monitor --counters System.Runtime\n//   --counters ThreadPool ThreadPool QueueLength\n//   --counters ThreadPool ThreadPool ThreadCount\n\n// Under load with blocking .Result:\n//   QueueLength: 50 → 500 (requests queuing)\n//   ThreadCount: 8 → 200 (all blocked in I/O)\n//   CPU: 15% (processors idle, threads blocked)\n\n// With async await:\n//   QueueLength: ~0\n//   ThreadCount: stable at MinThreads + burst\n//   CPU: similar — work completes faster",
+            "explanation": "How to prove it in production: rising queue length with low CPU is the starvation signature. Async keeps queue depth flat under the same load."
+          }
         }
       ]
     },
@@ -178,21 +187,75 @@
           "body": "Calling .Result or .Wait() on async I/O in a library used by ASP.NET Core. Assuming async methods run in parallel on multiple cores. Using Task.Run to wrap a blocking receive and calling that async. Confusing async (compose waits) with parallelism (use multiple cores)."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: under load test, compare throughput of blocking ReceiveMessage versus ReceiveMessageAsync at equal concurrency. dotnet-counters ThreadPool QueueLength climbs with blocking; async keeps it flat. CPU utilization staying below 30% while requests queue is the signature of thread starvation, not CPU saturation. The correct metric is concurrent in-flight I/O operations, not thread count."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Thread cost",
+            "Throughput under load"
+          ],
+          "rows": [
+            [
+              "Blocking I/O on pool thread",
+              "1 thread per concurrent wait",
+              "Caps at pool size — starvation"
+            ],
+            [
+              "async/await I/O",
+              "Thread free during wait",
+              "Scales with in-flight I/O count"
+            ],
+            [
+              "Task.WhenAll independent I/O",
+              "1 thread, N concurrent waits",
+              "Wall-clock = max(latency), not sum"
+            ],
+            [
+              "Sequential await",
+              "1 thread, 1 wait at a time",
+              "Wall-clock = sum of latencies"
+            ],
+            [
+              "Task.Run for CPU work",
+              "1 extra pool thread",
+              "Correct for CPU-bound, wrong for I/O"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'async makes code faster' — it makes concurrency cheaper, not individual operations faster. Claiming async uses multiple cores for a single sequential await chain. Using Task.Run to wrap blocking I/O and calling it 'async' — you still waste a thread. Not knowing the difference between concurrent I/O (one thread, many waits) and parallel CPU (many threads)."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "async/await is a scalability tool for waits, not a speed-up for CPU.",
-    "Blocking on Task in a worker is how you run out of threads with idle CPUs.",
-    "WhenAll is for independent I/O; sequential await is for true data dependencies."
+    "async/await frees threads during I/O waits — it is a scalability tool, not a CPU speed-up.",
+    "Blocking .Result on pool threads causes starvation: requests queue while CPUs sit idle.",
+    "In production, dotnet-counters ThreadPool QueueLength rising with low CPU means blocking, not CPU saturation.",
+    "60s: async is for I/O wait. await releases the thread. Blocking holds a pool thread for the entire wait. WhenAll overlaps independent I/O. Task.Run is for CPU, not I/O. Measure with dotnet-counters.",
+    "Follow-up: how many concurrent SQS receives can one thread handle with async versus blocking?"
   ],
   "commonPitfalls": [
-    "Calling .Result or .Wait() on async I/O 'just this once' in a library used by ASP.NET Core.",
-    "Assuming async methods run in parallel on multiple cores.",
-    "Using Task.Run to wrap a blocking SQS receive and calling that async."
+    "Saying 'async makes things faster' gets you rejected — it improves concurrency, not per-operation latency.",
+    "Calling .Result on async I/O in a library — works in tests, starves the pool in production.",
+    "Strong answer: 'async frees threads during I/O. Blocking caps throughput at pool size. I use WhenAll for independent I/O and diagnose starvation with dotnet-counters.'"
   ],
   "relatedTopicIds": [
     "csharp-13-task-async-await",
     "csharp-13-promises-vs-tasks",
+    "csharp-13-sync-over-async-deadlocks",
     "csharp-15-thread-pool-task-parallel",
     "csharp-10-delegates-func-action",
     "csharp-06-using-and-idisposable"
@@ -203,12 +266,22 @@
       "concept": "Non-blocking I/O on a single thread",
       "note": "Node's event loop also frees the JS thread during I/O. C# await does the same for a pool thread. Neither turns CPU-heavy work into free concurrency.",
       "futureTopicSlug": "javascript/async/event-loop"
+    },
+    {
+      "language": "typescript",
+      "concept": "Concurrent awaits on one thread",
+      "note": "await Promise.all([a, b]) on one JS thread overlaps I/O like Task.WhenAll on one pool thread. Both are concurrent waits, not parallel CPU execution.",
+      "futureTopicSlug": "typescript/async/await"
     }
   ],
   "officialSources": [
     {
       "title": "Asynchronous programming with async and await",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "title": "dotnet-counters diagnostic tool",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "animationHint": "compare",

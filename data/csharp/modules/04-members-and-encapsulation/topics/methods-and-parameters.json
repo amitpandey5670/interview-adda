@@ -120,6 +120,15 @@
           "type": "snippet",
           "snippet": {
             "language": "csharp",
+            "label": "params ReadOnlySpan<char> for zero-allocation CSV scans (C# 13+)",
+            "code": "public static bool AnyEmptyRow(params ReadOnlySpan<char> rows)\n{\n    foreach (var row in rows)\n    {\n        if (row.IsEmpty)\n            return true;\n    }\n    return false;\n}\n\n// Comma-separated spans — no string[] allocation:\nAnyEmptyRow(\"a,b,c\".AsSpan(), ReadOnlySpan<char>.Empty);",
+            "explanation": "Line 1: `params ReadOnlySpan<char>` accepts multiple span arguments at the call site. Lines 8–9: `.AsSpan()` and span literals avoid intermediate arrays when scanning CSV rows in a hot import path."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
             "label": "Struct copy vs class alias in a method",
             "code": "struct Counter { public int Value; }\n\nclass ScoreBoard { public int Total; }\n\nstatic void BumpStruct(Counter c) { c.Value++; }\nstatic void BumpClass(ScoreBoard s) { s.Total++; }\n\nvar counter = new Counter();\nBumpStruct(counter); // counter.Value is still 0\n\nvar board = new ScoreBoard();\nBumpClass(board); // board.Total is now 1",
             "explanation": "Line 7: `BumpStruct` receives a copy — the caller's `counter` is unchanged. Line 11: `BumpClass` receives a reference copy — mutation is visible to the caller."
@@ -159,16 +168,46 @@
           "body": "A public API that takes `params object[]` forces callers to lose type safety. Prefer generics or a named collection type when the list has structure."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: optional parameter defaults are baked into caller Intermediate Language (IL) — changing a default in a library does not update already-compiled consumers until they recompile. For public APIs prefer overloads over default churn. C# 13 extended params to IEnumerable and ReadOnlySpan — use params ReadOnlySpan<char> on CSV parsers to avoid string[] allocations on hot paths. Overload resolution with null is ambiguous — cast explicitly at Redis key boundaries where null means missing versus empty."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Feature", "Prefer", "Avoid"],
+          "rows": [
+            ["Overload", "Stable public API boundaries", "Ten parameters with six defaults"],
+            ["Optional defaults", "Internal helpers", "Changing defaults in shipped NuGet"],
+            ["params IEnumerable", "Short tag lists in logging", "Large collections — pass IReadOnlyList"],
+            ["params ReadOnlySpan<T>", "Hot-path char/byte scanning", "Storing span beyond the method — lifetime rules"],
+            ["Named arguments", "Many-parameter factory calls", "Hiding required args with defaults"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Overloading by return type only. Saying optional defaults update old binaries automatically. Using params object[] on a public API. Not knowing struct parameters copy while class parameters alias."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Overload on parameter types, not return types.",
-    "Optional-argument defaults are caller-side constants; changing them does not update old assemblies.",
-    "Ordinary parameters copy the reference (class) or the struct data; `ref`/`in`/`out` are the next topic."
+    "Optional defaults are caller IL constants — binary breaking to change.",
+    "params ReadOnlySpan<T> avoids allocations on hot CSV/token scans.",
+    "60s: Overloads for public API. Defaults baked in IL. params span for hot paths. struct copies, class aliases.",
+    "Follow-up: when do you reach for ref/in/out instead?"
   ],
   "commonPitfalls": [
-    "Ambiguous overloads with null and optional parameters.",
-    "`params object[]` that erases useful typing at a public API."
+    "Changing optional defaults in a library without recompile of callers.",
+    "params object[] erasing type safety on public APIs.",
+    "Strong answer: 'Overload not return-type overload. Defaults in caller IL. params ReadOnlySpan for zero-alloc scans. Ordinary params copy struct.'"
   ],
   "relatedTopicIds": [
     "csharp-04-ref-in-out",

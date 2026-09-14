@@ -118,6 +118,15 @@
             "code": "// BAD — serializes all cache access\nlock (_global)\n{\n    var hit = _redis.Get<User>(key); // sync block\n    if (hit is null)\n        hit = _db.Load(key);         // still inside lock\n    return hit;\n}",
             "explanation": "Global lock plus blocking I/O destroys concurrency. Never hold locks across network calls."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Jittered TTL to spread expirations",
+            "code": "var ttl = TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(Random.Shared.Next(0, 60));\nawait _redis.SetAsync(key, user, ttl);",
+            "explanation": "Random jitter prevents every key from expiring at the same second — reduces synchronized stampede triggers."
+          }
         }
       ]
     },
@@ -147,17 +156,47 @@
           "body": "Global lock on cache path. Forgetting to remove completed entries from _inflight — memory leak of Task references. Materializing entire user list with LINQ ToList on every miss. Ignoring CancellationToken when coalesced waiters cancel."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: when traffic jumps 199→999 users, watch Redis connected_clients, DB connection pool saturation, and p99 latency together — stampede shows correlated spikes on miss rate and DB queries. Single-flight via ConcurrentDictionary<string, Task<T>> coalesces in-process; add Redis SET NX or stale-while-revalidate for multi-instance deployments. SemaphoreSlim caps total DB concurrency across keys. dotnet-counters ThreadPool queue length rising with flat CPU suggests blocking I/O on pool threads from wrong locking."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Technique", "Scope", "When to choose"],
+          "rows": [
+            ["Single-flight Task map", "In-process per key", "One API instance; coalesce parallel misses"],
+            ["Redis SET NX lock", "Cross-instance", "Multiple pods; short-lived loader lock"],
+            ["SemaphoreSlim on DB", "Total concurrency cap", "Many distinct keys miss at once"],
+            ["TTL jitter", "Spread expirations", "Prevent synchronized expiry waves"],
+            ["Global lock on cache", "Serializes everything", "Never — interview trap answer"],
+            ["Stale-while-revalidate", "Serve stale during refresh", "High read SLAs; tolerate slightly old data"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Proposing one big lock around Redis GET and DB query — correct that it prevents stampede on one key but destroys throughput on all keys. Single-flight without TryRemove — memory leak of completed Tasks. Ignoring multi-instance — in-process coalescing alone fails behind a load balancer. Sync Redis calls in async API under load."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Cache stampede: many parallel misses overload the origin.",
-    "Single-flight coalesces in-flight loads per key.",
-    "Never lock across Redis, HTTP, or database I/O."
+    "Cache stampede: many parallel misses on the same key overload the origin; fix with per-key single-flight, DB semaphores, and TTL jitter — not a global lock.",
+    "ConcurrentDictionary<string, Task<T>> coalesces in-flight loads in one process; multi-instance needs Redis SET NX or similar.",
+    "In production, correlate Redis miss rate, DB pool usage, and p99 latency during traffic spikes — stampede shows all three rising together.",
+    "60s: 999 users hit cold key. Single-flight one loader per key. Semaphore caps DB. Jitter TTL. Never lock across Redis/DB I/O. Multi-node needs distributed coalescing.",
+    "Follow-up: how do cancelled waiters affect the inflight Task entry?"
   ],
   "commonPitfalls": [
-    "Global lock around cache and DB.",
-    "No semaphore on total DB concurrency.",
-    "Synchronous Redis in async API."
+    "Global lock around cache path gets you rejected — serializes all keys and blocks pool threads on I/O.",
+    "Single-flight without TryRemove after await — leaks Task references in the dictionary.",
+    "Strong answer: 'Per-key Task coalescing plus DB semaphore plus jitter. Redis lock for multi-instance. Metrics on miss rate and pool saturation.'"
   ],
   "relatedTopicIds": [
     "csharp-13-cancellation-tokens",
@@ -173,12 +212,22 @@
       "concept": "Promise deduplication",
       "note": "Storing Map<string, Promise<T>> for in-flight loads is the same single-flight pattern as ConcurrentDictionary<string, Task<T>>.",
       "futureTopicSlug": "typescript/patterns/single-flight"
+    },
+    {
+      "language": "javascript",
+      "concept": "p-limit concurrency cap",
+      "note": "p-limit mirrors SemaphoreSlim for capping parallel DB calls. Node still needs explicit deduplication Map for per-key coalescing.",
+      "futureTopicSlug": "javascript/patterns/rate-limiting"
     }
   ],
   "officialSources": [
     {
       "title": "Managed threading best practices",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "scenarioTag": "high-concurrency",

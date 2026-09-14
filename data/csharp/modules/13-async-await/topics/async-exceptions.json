@@ -124,6 +124,15 @@
             "code": "var tasks = new[] { FailingA(), FailingB(), FailingC() };\n\ntry\n{\n    await Task.WhenAll(tasks);\n}\ncatch (Exception ex)\n{\n    // await WhenAll throws the FIRST fault only\n    Console.WriteLine(ex.Message);\n}\n\n// To see ALL faults, inspect each task:\nforeach (var t in tasks.Where(t => t.IsFaulted))\n    Console.WriteLine(t.Exception!.InnerException!.Message);",
             "explanation": "await WhenAll throws the first exception. Inspecting individual tasks reveals all faults."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode: fire-and-forget without observation",
+            "code": "// BAD — exception is unobserved until GC finalizes the Task\n_ = ProcessMessageAsync(message); // no await, no ContinueWith\n\n// BAD — ContinueWith without OnlyOnFaulted check\nProcessMessageAsync(message)\n    .ContinueWith(t => Log.Error(t.Exception)); // runs on ANY completion\n\n// GOOD — host awaits and handles\nawait ProcessMessageAsync(message);\n\n// GOOD — explicit fault handler\n_ = ProcessMessageAsync(message).ContinueWith(t =>\n{\n    if (t.IsFaulted) Log.Error(t.Exception);\n}, TaskContinuationOptions.OnlyOnFaulted);",
+            "explanation": "Fire-and-forget Tasks with unobserved exceptions are production incidents. Always await or attach an OnlyOnFaulted continuation that logs."
+          }
         }
       ]
     },
@@ -178,22 +187,76 @@
           "body": "async void on a message Received event, then wondering why the process dies on a JSON error. Catching Exception around an await that also swallows OperationCanceledException during shutdown. Assuming try/catch around Task.Run without await observes the inner exception. Using .Result instead of await and getting AggregateException instead of the real type."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: unobserved Task exceptions trigger TaskScheduler.UnobservedTaskException — in .NET Framework this could tear down the process; in modern .NET they are logged but still indicate bugs. async void exceptions bypass the host's error handler entirely. Use AppDomain.UnhandledException and IHostApplicationLifetime logs to catch async void faults. For WhenAll with multiple failures, only the first exception surfaces on await — inspect task.Exception.Flatten() for the full set."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Observation method",
+            "Exception type",
+            "Use when"
+          ],
+          "rows": [
+            [
+              "await",
+              "Original exception, preserved stack",
+              "Default — always prefer"
+            ],
+            [
+              ".Wait() / .Result",
+              "AggregateException wrapper",
+              "Never in production code"
+            ],
+            [
+              "task.Exception",
+              "AggregateException, no throw",
+              "Inspecting faulted tasks in WhenAll"
+            ],
+            [
+              "async void",
+              "Posted to context — unobserved",
+              "UI events only"
+            ],
+            [
+              "OperationCanceledException",
+              "Cooperative shutdown signal",
+              "Catch separately from business errors"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying exceptions in async methods propagate synchronously like sync code — they fault the Task. Using async void in a message consumer because 'it is simpler.' Catching Exception without filtering OperationCanceledException during SIGTERM shutdown. Not knowing that await WhenAll throws only the first fault, not all of them."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "await rethrows the inner exception; Wait/Result wrap in AggregateException.",
-    "async void cannot be awaited or unit-tested as a Task and is banned outside events.",
-    "Cancellation is an exception type; treat it as shutdown, not as a poison message by default."
+    "Exceptions in async Task methods fault the Task — they do not unwind the caller's synchronous stack.",
+    "await rethrows the inner exception; .Wait()/.Result wrap in AggregateException — a different catch path.",
+    "In production, async void on event handlers posts exceptions unobserved — return Task so the host can log and nack.",
+    "60s: async Task stores exceptions on the Task. await rethrows the real type. Wait wraps AggregateException. async void has no Task — exceptions crash unobserved. Catch OperationCanceledException separately. WhenAll throws first fault only.",
+    "Follow-up: how do you collect all exceptions from Task.WhenAll failures?"
   ],
   "commonPitfalls": [
-    "async void on a RabbitMQ Received event, then wondering why the process dies on a JSON error.",
-    "catch (Exception) around an await that also swallows OperationCanceledException during SIGTERM.",
-    "Assuming try/catch around Task.Run without await observes the inner exception."
+    "Saying 'throw in async propagates to caller immediately' gets you rejected — it faults the Task until awaited.",
+    "async void on a RabbitMQ Received handler — host cannot observe the exception or control ack/nack.",
+    "Strong answer: 'Return Task everywhere except UI events. await for real exception types. Inspect individual tasks after WhenAll for all faults.'"
   ],
   "relatedTopicIds": [
     "csharp-13-task-async-await",
     "csharp-13-cancellation-tokens",
     "csharp-13-configureawait",
+    "csharp-13-sync-over-async-deadlocks",
     "csharp-06-what-is-an-exception",
     "csharp-10-events"
   ],
@@ -203,12 +266,22 @@
       "concept": "Unhandled Promise rejection",
       "note": "An async JS function always returns a Promise, so a throw becomes a rejection you can await. async void is closer to an unhandled rejection with no Promise handle — worse than JS because the caller cannot attach .catch.",
       "futureTopicSlug": "javascript/async/error-handling"
+    },
+    {
+      "language": "typescript",
+      "concept": "Promise rejection vs async void",
+      "note": "TypeScript enforces that async functions return Promise<T> — there is no async void equivalent for general code. C# async void is a language escape hatch that TS avoids by typing.",
+      "futureTopicSlug": "typescript/async/error-handling"
     }
   ],
   "officialSources": [
     {
       "title": "Asynchronous programming with async and await",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "title": "Exception handling (Task)",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/asynchronous-programming-patterns/consuming-the-task-based-asynchronous-pattern"
     }
   ],
   "scenarioTag": "rabbitmq"

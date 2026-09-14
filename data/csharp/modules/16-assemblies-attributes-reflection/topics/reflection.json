@@ -118,6 +118,15 @@
             "code": "// Instead of reflection per message:\nIMessageHandler handler = message.Type switch\n{\n    \"OrderCreated\" => _orderHandler,\n    \"PaymentFailed\" => _paymentHandler,\n    _ => _unknownHandler\n};\nawait handler.HandleAsync(message, ct);",
             "explanation": "Switch or dictionary of delegates avoids per-call GetMethod and Invoke."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "DynamicallyAccessedMembers root for trim",
+            "code": "[RequiresUnreferencedCode(\"Uses reflection to map handlers.\")]\npublic void RegisterHandlers<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)] T>()\n{\n    foreach (var method in typeof(T).GetMethods())\n        _routes[method.Name] = method;\n}",
+            "explanation": "Annotate reflection entry points so Native AOT and trimming preserve T's methods — or replace with source-generated registration."
+          }
         }
       ]
     },
@@ -147,17 +156,46 @@
           "body": "Reflection inside tight loops. No trim/AOT annotations when publishing Native AOT. Catching TargetInvocationException without inspecting InnerException."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: MethodInfo.Invoke is orders of magnitude slower than direct calls — BenchmarkDotNet on a SQS handler loop shows microseconds vs nanoseconds per dispatch. Reflection is fine once at startup for DI registration; per-message GetMethod breaks under load. Native AOT and trimming remove unreferenced metadata — use DynamicallyAccessedMembers or RequiresUnreferencedCode to document roots. dotnet-trace CPU samples often show System.Reflection.MethodBase.Invoke hot when dispatch is stringly typed."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Cost", "When to choose"],
+          "rows": [
+            ["Startup scan GetTypes", "One-time; acceptable", "Plugin discovery, DI registration"],
+            ["Per-request Invoke", "Very high", "Avoid — use switch or generators"],
+            ["Source generator router", "Compile-time", "Hot SQS/HTTP dispatch paths"],
+            ["DynamicallyAccessedMembers", "Metadata retained", "Limited reflection with trim/AOT"],
+            ["Activator.CreateInstance", "Alloc + reflection", "Prefer DI or generated factories"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying reflection is 'free enough' on every SQS message. Ignoring trim — publish succeeds, runtime MissingMethodException on first request. GetMethod without BindingFlags — null at runtime, not compile time. Not unpacking TargetInvocationException.InnerException — hides real fault."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Reflection inspects metadata at run time — flexible but costly.",
-    "Fine for startup; avoid on per-request hot paths.",
-    "Source generators replace many reflection patterns with compile-time code."
+    "Reflection reads assembly metadata at runtime — flexible for startup registration, too slow for per-message hot paths.",
+    "Native AOT and trimming remove unreflected types unless DynamicallyAccessedMembers or RequiresUnreferencedCode roots them.",
+    "In production, CPU profiles showing MethodBase.Invoke on request path mean replace with switch, dictionary, or source generator.",
+    "60s: Reflection OK at startup. Per-request Invoke is too slow. Generators and typed switches for hot paths. DynamicallyAccessedMembers for trim. Check InnerException on TargetInvocationException.",
+    "Follow-up: how would you migrate a stringly typed message router to a source generator?"
   ],
   "commonPitfalls": [
-    "GetMethod with wrong binding flags — null at runtime.",
-    "Reflection breaks rename-refactor safety.",
-    "Native AOT trims reflected types without roots."
+    "Per-message MethodInfo.Invoke on SQS path gets you rejected — use typed dispatch or generators.",
+    "Reflection without trim roots — Native AOT fails at runtime on first use.",
+    "Strong answer: 'Startup scan OK. Hot path: switch or generator. DynamicallyAccessedMembers for remaining reflection. Profile Invoke before claiming it is fine.'"
   ],
   "relatedTopicIds": [
     "csharp-16-source-generators",
@@ -170,12 +208,22 @@
       "concept": "Dynamic import",
       "note": "import() loads modules dynamically. C# reflection loads types from already-loaded assemblies — different mechanism, similar plugin patterns.",
       "futureTopicSlug": "javascript/modules/dynamic-import"
+    },
+    {
+      "language": "typescript",
+      "concept": "Dynamic property access",
+      "note": "obj[key as keyof T] loses compile-time safety like MethodInfo.Invoke — both break on rename unless codegen provides typed routes.",
+      "futureTopicSlug": "typescript/types/indexed-access"
     }
   ],
   "officialSources": [
     {
       "title": "Reflection",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/reflection-and-attributes/"
+    },
+    {
+      "title": "Prepare for trimming",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/deploying/trimming/prepare-illink"
     }
   ],
   "scenarioTag": "sqs-consumer"

@@ -124,6 +124,15 @@
             "code": "int[] empty = [];                    // Array.Empty<int>() when not mutated\nSpan<string> days = [\"Sun\", \"Mon\"];   // stack-friendly slice\n\n// Cannot use as default parameter or const:\n// void Foo(int[] x = [1, 2]) { }     // compile error",
             "explanation": "Empty [] can optimize to Array.Empty. Span targets follow ref-struct rules (module 17). Collection expressions cannot be default parameter values or constants."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Eager spread of a deferred query — failure mode",
+            "code": "IEnumerable<string> lazy = File.ReadLines(\"huge.csv\")\n    .Where(l => l.Length > 0);\n\n// Looks like LINQ — but [..lazy] forces full file read NOW\nList<string> all = [..lazy];\n// 400k lines in memory; gen-0 spike visible in dotnet-counters",
+            "explanation": "Collection expressions always materialize. Spreading a deferred IEnumerable reads every element immediately. Use yield or IAsyncEnumerable for streaming, not [..query]."
+          }
         }
       ]
     },
@@ -154,22 +163,53 @@
           "body": "Thinking [..query] is as lazy as query — it copies every element immediately. Using collection expressions as default parameter values — that is a compile error. Ambiguous overloads when both List and Span are applicable without an explicit cast."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Collection expressions lower to calls on CollectionBuilder attributes or well-known factory methods depending on the target type. [1, 2, 3] assigned to int[] becomes a heap array; assigned to List<int> uses List<T> collection builder; assigned to Span<int> may use stackalloc for small counts. The spread operator .. copies every element from the source into the new collection — even when the target is IEnumerable<T>, the compiler still allocates storage for all elements. How to prove it in production: BenchmarkDotNet comparing [..source] vs source.ToList() — similar allocations; dotnet-counters gen-0-gc-count spike when spreading a million-row CSV into a List."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Syntax", "Behavior", "When not to use"],
+          "rows": [
+            ["[a, b, c]", "Eager literal collection", "Infinite or streaming sequences"],
+            ["[..source]", "Eager copy of all elements", "Deferred LINQ or I/O-backed IEnumerable"],
+            ["[]", "Array.Empty or empty collection", "Default parameter values — compile error"],
+            ["Span target", "May stackalloc small counts", "Large collections — stack overflow risk"],
+            ["new List { }", "Legacy initializer syntax", "Modern code — prefer collection expressions for literals"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"collection expressions are lazy like LINQ\" — Microsoft documents they always create a collection holding every element. Saying \"I'll spread a File.ReadLines into [..lines] to stream\" — that loads the entire file. Strong answer: collection expressions for small literals and spreads of already-materialized data; yield or IAsyncEnumerable for streaming."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Introduced in C# 12; [e1, e2, ..rest] is the syntax.",
-    "Always eager; IEnumerable<T> target still allocates.",
-    "Can target arrays, List, Span, immutable collections, and builder-attributed types."
+    "C# 12 collection expressions [e1, e2, ..rest] always materialize every element eagerly.",
+    "Target type (int[], List, Span, ImmutableArray) is chosen by context, not by the brackets alone.",
+    "Spreading [..deferredQuery] forces full enumeration — not a lazy LINQ replacement.",
+    "60s: C# 12 syntax for literals and spreads. Always eager. Good for allow-lists and batch IDs. Never for infinite or file-backed streams — use yield or IAsyncEnumerable.",
+    "Follow-up: can collection expressions be default parameter values? (no — compile error)"
   ],
   "commonPitfalls": [
-    "Thinking [..query] is as lazy as query.",
-    "Using collection expressions as default parameter values (illegal).",
-    "Ambiguous overloads when both List and Span are applicable without a cast."
+    "Saying collection expressions are lazy — they always allocate a full in-memory collection.",
+    "Strong answer: use for literals and small spreads of materialized data; yield/IAsyncEnumerable for streaming.",
+    "Spreading a deferred LINQ or File.ReadLines query — loads everything into memory immediately.",
+    "Using collection expressions as default parameter values — illegal in C#."
   ],
   "introducedIn": "C# 12",
   "relatedTopicIds": [
     "csharp-08-arrays-and-span-preview",
     "csharp-08-list-dictionary-set-queue",
+    "csharp-08-frozen-and-immutable-collections",
     "csharp-09-generic-types-and-methods",
     "csharp-18-csharp-8-to-14-map"
   ],
@@ -191,6 +231,10 @@
     {
       "title": "Collection expressions",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/operators/collection-expressions"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "animationHint": "compare",

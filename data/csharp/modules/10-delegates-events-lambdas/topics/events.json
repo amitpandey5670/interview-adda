@@ -159,18 +159,54 @@
           "body": "Handlers run on the raiser's thread. UI subscribers may need BeginInvoke or a synchronization context — document threading expectations."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: when an SQS consumer stops processing after a metrics handler throws, the invocation list aborted mid-raise — add per-handler try/catch via GetInvocationList and log which handler index failed. Memory leaks from events show in dotnet-gcdump as hosted services holding scoped processor graphs — search for EventHandler delegates rooted from a singleton host. Thread-pool queue depth spikes when a slow synchronous handler blocks the raise thread during DrainAsync."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Multicast exception in event raise — before and after",
+            "code": "// BAD: metrics throw stops poison routing\nMessageReceived?.Invoke(this, message);\n\n// GOOD: isolate so routing still runs\nvar handlers = MessageReceived;\nif (handlers is null) return;\nforeach (var d in handlers.GetInvocationList())\n{\n    try { ((EventHandler<SqsMessage>)d)(this, message); }\n    catch (Exception ex) when (d.Method.Name.Contains(\"Metrics\"))\n    {\n        _logger.LogWarning(ex, \"metrics handler failed — continuing\");\n    }\n}",
+            "explanation": "Line 2: default multicast aborts on first throw. Line 6: iterate individual handlers so poison routing and ack handlers still run when metrics fails."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["Field-like event", "Simple += / -=", "No built-in fault isolation"],
+            ["GetInvocationList + try/catch", "Survives handler failures", "Synchronous; still blocks raiser thread"],
+            ["Custom add/remove with weak refs", "Reduces leak risk", "Complex; handler may be collected early"],
+            ["IObservable / channels instead", "Async, backpressure", "Heavier than in-process events"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying events are thread-safe for concurrent += during raise without custom locking. Not knowing multicast exception semantics — one throw skips remaining handlers. Using public Action<T>? instead of event and calling it 'the same thing'. Unsubscribing with a new lambda and wondering why the leak persists."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "event restricts callers to += and -=; only the declaring type raises and assigns.",
-    "Handlers run synchronously; isolate exceptions with GetInvocationList if needed.",
-    "Leaks: long-lived publisher + short-lived subscriber without -=.",
-    "You must -= the same delegate instance you +=; a new lambda will not detach."
+    "event exposes only += and -= outside the type; only the publisher invokes and assigns the backing delegate.",
+    "Multicast raises run synchronously; one handler exception aborts the rest unless you iterate GetInvocationList.",
+    "In production, scoped subscribers on singleton hosts leak until -= in Dispose — verify with a heap dump under load.",
+    "60s: event protects the invocation list from outsiders. Raise synchronously left-to-right. Exception skips later handlers. GetInvocationList isolates faults. Same delegate instance for -=.",
+    "Follow-up: when would you replace C# events with System.Threading.Channels?"
   ],
   "commonPitfalls": [
-    "Using a public delegate field as an 'event'.",
-    "Unsubscribing with a newly allocated lambda.",
-    "Raising events from a background thread without documenting reentrancy."
+    "Saying events are automatically thread-safe gets you rejected — concurrent += during raise needs custom add/remove locking.",
+    "Unsubscribing with a newly allocated lambda — delegate identity matters, not source text equality.",
+    "Strong answer: 'event for subscribe-only API. Snapshot and GetInvocationList when metrics can throw but routing must continue. Always -= in Dispose on long-lived publishers.'"
   ],
   "relatedTopicIds": [
     "csharp-10-delegates-func-action",

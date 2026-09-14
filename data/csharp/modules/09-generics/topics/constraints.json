@@ -147,17 +147,56 @@
           "body": "Using == on a class-constrained T and expecting string-style value equality. Writing where T : struct, new() — struct already implies a parameterless constructor. Expecting new() to work with types that have required properties. Using T? on an unconstrained T as a cache-miss signal — prefer TryGet or a Result wrapper."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Unconstrained T is nearly object — only Object members unless you add a where clause. Constraints are how generic algorithms call CompareTo, construct instances, or accept Span-like ref structs via allows ref struct. The exclusion matrix matters in interviews: struct and unmanaged already imply a parameterless constructor, so new() is illegal; types with required members cannot satisfy new(). notnull is a nullable-reference-types warning, not a hard error. class-constrained T uses reference equality for == unless you add IEquatable<T>. Open generic constraints appear in factory and DI code: `where T : class, new()` is the classic activator pattern. How to prove it in production: a compile-error catalog in code review for struct,new() pairs; unit test showing Same<string>(x,y) is false for equal content when only class-constrained."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Constraint", "Unlocks", "Excludes / trap"],
+          "rows": [
+            ["where T : IComparable<T>", "CompareTo for Max/Min", "Types without comparison"],
+            ["where T : new()", "new T() factory", "Required members; pairs illegal with struct"],
+            ["where T : struct", "Value type only", "Cannot pair with new(); not nullable T?"],
+            ["where T : notnull", "Nullable analysis warning", "Not a runtime check"],
+            ["where T : allows ref struct", "Span-like T", "Must be last; cannot combine with class"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Open generic factory with class, new() constraints",
+            "code": "static T CreateInstance<T>() where T : class, new() => new T();\n\n// Closed at call site:\nSessionDto dto = CreateInstance<SessionDto>();\n\n// Open generic in DI:\nType open = typeof(IRepository<>);\nType closed = open.MakeGenericType(typeof(Order));\n// Activator.CreateInstance(closed) when you also register new() constraint",
+            "explanation": "class, new() is the classic open-generic factory constraint pair. It fails for types with required members or abstract classes — interviewers ask why CreateInstance<RequiredDto>() does not compile."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Writing where T : struct, new() — redundant and illegal. Using == on class-constrained T expecting string equality — reference identity wins unless IEquatable<T>. Listing notnull as a hard compile error — it warns. Strong answer: constraint catalog, exclusion rules, new() last, allows ref struct last of all, IEquatable for value equality on T."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Constraints unlock operations on T; unbounded T is object-like.",
+    "Constraints unlock operations on T; unbounded T is object-like with no CompareTo or new T().",
     "struct / unmanaged / new() have exclusion rules; new() last; allows ref struct last of all.",
-    "notnull warns; required members block new(); Enum and Delegate constraints are first-class."
+    "class-constrained == uses reference identity unless you add IEquatable<T> — the string trap.",
+    "60s: Constraints unlock members on T. struct and new() cannot combine. notnull warns. allows ref struct is last. Use IEquatable<T> for value equality on class-constrained T.",
+    "Follow-up: why cannot a type with required properties satisfy where T : new()?"
   ],
   "commonPitfalls": [
-    "Using == on a class-constrained T and expecting String overload behavior.",
-    "Trying where T : struct, new().",
-    "Expecting new() to work with required properties."
+    "Using == on a class-constrained T expecting String overload behavior — rejected; T uses reference identity.",
+    "Strong answer: constrain to IEquatable<T> and call a.Equals(b) for value semantics.",
+    "Trying where T : struct, new() — struct already implies parameterless constructor; compiler rejects new().",
+    "Expecting new() to work with types that have required properties — compiler cannot guarantee valid construction."
   ],
   "relatedTopicIds": [
     "csharp-09-generic-types-and-methods",
@@ -170,6 +209,12 @@
       "concept": "generic constraints extends",
       "note": "function f<T extends Foo>(x: T) is the TypeScript analogue of where T : Foo. TypeScript has no struct, unmanaged, or ref struct story.",
       "futureTopicSlug": "typescript/generics/constraints"
+    },
+    {
+      "language": "javascript",
+      "concept": "no constructor constraint",
+      "note": "JavaScript cannot express where T : new() at compile time. .NET factory generics enforce construction in metadata; JS uses Object.create or class references passed as values.",
+      "futureTopicSlug": "javascript/classes/constructor"
     }
   ],
   "officialSources": [

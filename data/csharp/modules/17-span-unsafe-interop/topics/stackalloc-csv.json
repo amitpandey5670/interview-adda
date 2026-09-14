@@ -147,17 +147,54 @@
           "body": "stackalloc inside loop with unbounded size. Using string.Split on million-row imports. Forgetting to validate line length before stackalloc."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: cap MaxLineBytes before stackalloc and log rejections — a 10 MB line attempt should never reach the stack. BenchmarkDotNet stackalloc + span walk versus string.Split on a 1M-row fixture quantifies gen-0 savings. Stream with yield return keeps memory flat like Node csv-parse; File.ReadAllLines is the anti-pattern that blows heap on import jobs."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Bounded stackalloc line buffer with length guard",
+            "code": "const int MaxLineBytes = 4096;\n\nbool TryReadLine(Span<byte> stackBuf, StreamReader reader, out ReadOnlySpan<char> line)\n{\n    var raw = reader.ReadLine();\n    if (raw is null) { line = default; return false; }\n    if (raw.Length > MaxLineBytes)\n        throw new InvalidDataException($\"line exceeds {MaxLineBytes} bytes\");\n    line = raw.AsSpan();\n    return true;\n}",
+            "explanation": "Line 1: hard cap before any stackalloc sized from user data. Line 7: reject oversize lines at boundary — prevents stack overflow on malicious CSV."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Strategy", "Memory", "When"],
+          "rows": [
+            ["stackalloc + span parse", "Stack only, bounded", "Known max line < few KB"],
+            ["ArrayPool<byte>", "Rent/return, no LOH if sized right", "Large but bounded lines"],
+            ["string.Split", "Alloc per field array", "Small files only"],
+            ["record struct row", "Stack or inline struct", "Million-row import hot path"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "stackalloc with user-controlled size inside a loop. File.ReadAllLines for million-row production import. string.Split per row on a hot path. Not validating line length before stackalloc."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "stackalloc puts small bounded buffers on the stack — no GC for that buffer.",
-    "Parse CSV fields with span walks, not Split arrays.",
-    "Huge rows use ArrayPool, not stackalloc."
+    "stackalloc places a bounded buffer on the stack — no GC for that slab when size is proven safe.",
+    "Parse CSV with span walks and list patterns, not Split arrays that allocate per row.",
+    "In production, cap MaxLineBytes and stream with yield — reject oversize lines before stackalloc.",
+    "60s: stackalloc for bounded lines. Span field walk. ArrayPool for large. record struct rows. Never stackalloc from user size. Stream don't ReadAllLines.",
+    "Follow-up: when does stackalloc in a loop become a stack overflow risk?"
   ],
   "commonPitfalls": [
-    "stackalloc size tied to user input without cap.",
-    "Materializing entire CSV with File.ReadAllLines.",
-    "LOH allocation per row for wide CSV."
+    "stackalloc size tied to user input without cap gets you rejected — hard MaxLineBytes first.",
+    "Materializing entire CSV with File.ReadAllLines on production import jobs.",
+    "Strong answer: 'Cap line size. stackalloc under cap. Span parse fields. ArrayPool above cap. record struct per row. BenchmarkDotNet Split vs span.'"
   ],
   "relatedTopicIds": [
     "csharp-17-span-memory",
@@ -171,6 +208,12 @@
       "concept": "Streaming CSV",
       "note": "Node csv-parse streams rows. C# combines StreamReader, span parsing, and yield return for similar streaming without loading all lines.",
       "futureTopicSlug": "javascript/io/streams"
+    },
+    {
+      "language": "typescript",
+      "concept": "Buffer and line parsing",
+      "note": "Parsing CSV in Node often uses Buffer slices without new strings — same as ReadOnlySpan<char> over a rented byte buffer. C# stackalloc is the stack analogue of a fixed-size scratch Buffer.allocUnsafe when max line is bounded.",
+      "futureTopicSlug": "typescript/node/buffers"
     }
   ],
   "officialSources": [

@@ -118,6 +118,15 @@
             "code": "int count = 0;\nvar actions = new List<Action>();\nfor (int i = 0; i < 100; i++)\n    actions.Add(() => count++); // closure captures count\n\nIComparable boxed = 42; // boxes int to heap object",
             "explanation": "Each lambda may share one display class but still allocates. Boxing wraps the int in a heap object."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Measure allocation rate with dotnet-counters",
+            "code": "dotnet-counters monitor --process-id <pid> \\\n  System.Runtime[alloc-rate,gen-0-gc-count,gc-heap-size,time-in-gc]\n# alloc-rate spikes under Redis load → find the hot method in a trace",
+            "explanation": "Watch alloc-rate and time-in-gc under realistic load. A gen-0 storm shows as high alloc-rate with rising time-in-gc before you optimize individual lines."
+          }
         }
       ]
     },
@@ -147,17 +156,46 @@
           "body": "Calling ToList() or ToArray() inside tight loops. Using object or IComparable with structs. Logging with string interpolation on every cache hit at Debug level in production."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Allocation traps hide in hot paths: string concat in loops (O(n²) intermediate strings), LINQ ToList/ToArray materialization per request, closure display classes for captured locals, boxing through non-generic APIs, and async state machine objects per awaitable method. Gen-0 collections are cheap individually, but high alloc-rate drives time-in-gc and promotes survivors to gen 2. How to prove it in production: dotnet-counters System.Runtime alloc-rate and time-in-gc under Redis or HTTP load; dotnet-trace with GC collect events pinpoints the allocating method."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Trap", "Hidden cost", "Fix"],
+          "rows": [
+            ["string += in loop", "New string per iteration", "StringBuilder, string.Create, TryFormat"],
+            ["LINQ ToList per call", "New List + enumerator alloc", "Defer IEnumerable; materialize once"],
+            ["Closure capture", "Display class on heap", "Pass state as parameter; avoid capture in hot loop"],
+            ["async state machine", "Heap object per async method", "ValueTask for sync-complete paths; cache awaitables"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Premature micro-optimization without measuring, or claiming async has zero allocations. Strong answer: measure alloc-rate with dotnet-counters, fix the hottest trap, verify gen-0 pressure drops."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Closures, boxing, string concat, and LINQ materialization are common gen-0 storms.",
-    "Measure allocation rate before optimizing.",
-    "Prefer StringBuilder, deferred IEnumerable, and generic APIs over object."
+    "Allocation traps are hidden heap churn: closures, boxing, string concat, LINQ materialization, and async state machines.",
+    "Do not micro-optimize without measuring — fix the path with highest alloc-rate first.",
+    "In Redis cache services, avoid ToList and string concat per key lookup; use StringBuilder or Span formatting.",
+    "60s: Traps flood gen 0. Measure alloc-rate with dotnet-counters. Fix string concat, ToList, closures, boxing on hot path. Async allocates state machines.",
+    "Follow-up: how does ValueTask reduce allocations on cache-hit paths?"
   ],
   "commonPitfalls": [
+    "Optimizing cold code before measuring — gets you rejected because you waste time and miss the real hot path.",
+    "Strong answer: dotnet-counters alloc-rate under load, dotnet-trace to find method, fix trap, re-measure.",
     "ToList() on every Redis cache read.",
-    "Boxing value types through non-generic interfaces.",
-    "Assuming async adds zero heap allocations."
+    "Assuming async adds zero heap allocations — every async method gets a state machine object."
   ],
   "relatedTopicIds": [
     "csharp-14-stack-heap-layout",
@@ -173,12 +211,22 @@
       "concept": "String and array churn",
       "note": "JS also allocates on string concat and array methods. C# gives you Span and stackalloc to avoid some heap traffic — module 17.",
       "futureTopicSlug": "javascript/performance/allocations"
+    },
+    {
+      "language": "typescript",
+      "concept": "Async function allocations",
+      "note": "Every async function in JS allocates a Promise. Every async method in C# allocates a state machine (unless optimized away). Both runtimes punish hot-path async wrappers.",
+      "futureTopicSlug": "typescript/async/allocations"
     }
   ],
   "officialSources": [
     {
       "title": "Garbage collection and performance",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/performance"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "scenarioTag": "redis-cache"

@@ -118,6 +118,15 @@
             "code": "<ItemGroup>\n  <ProjectReference Include=\"..\\MyApp.Domain\\MyApp.Domain.csproj\" />\n</ItemGroup>",
             "explanation": "Build copies the referenced assembly output. Version comes from the referenced project's properties."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "AssemblyLoadContext for plugin isolation",
+            "code": "public sealed class PluginLoadContext(string pluginPath) : AssemblyLoadContext(isCollectible: true)\n{\n    protected override Assembly? Load(AssemblyName name)\n    {\n        var path = Path.Combine(pluginPath, name.Name + \".dll\");\n        return File.Exists(path) ? LoadFromAssemblyPath(path) : null;\n    }\n}\n\n// Load, use, then unload:\nvar ctx = new PluginLoadContext(pluginDir);\nvar asm = ctx.LoadFromAssemblyName(new AssemblyName(\"MyPlugin\"));\n// ... invoke plugin ...\nctx.Unload();",
+            "explanation": "AssemblyLoadContext (ALC) loads assemblies in an isolated context — collectible ALCs allow unloading plugin DLLs without restarting the process."
+          }
         }
       ]
     },
@@ -147,17 +156,46 @@
           "body": "InternalsVisibleTo with wrong assembly name — tests fail to access internals. Mixing copy-local DLLs with mismatched versions. Assuming one .cs file equals one assembly."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: assembly load failures show as FileNotFoundException or LoaderExceptions in inner exceptions — log AssemblyLoadContext.Default.Assemblies or use Fusion Log Viewer on Windows for binding redirects. AssemblyLoadContext (ALC) separates default shared runtime assemblies from collectible plugin contexts — unload collectible ALCs after plugin hot-swap to reclaim metadata. InternalsVisibleTo requires strong-name public key token when the friend is signed. dotnet-dump !dumpassembly -all lists loaded assemblies during a memory investigation."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Mechanism", "Isolation", "When to choose"],
+          "rows": [
+            ["Default ALC", "Shared with host; not collectible", "Normal app references and NuGet"],
+            ["Custom collectible ALC", "Unloadable plugin domain", "Hot-reload plugins, script engines"],
+            ["InternalsVisibleTo", "Cross-assembly internal access", "Test friends without public API pollution"],
+            ["NuGet package", "Versioned assembly delivery", "Shared libraries across services"],
+            ["LoadFromAssemblyPath", "Explicit path load in ALC", "Plugin folders outside main deps.json"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Equating one .cs file to one assembly — a project emits one assembly with many types. Saying AppDomain is the modern plugin story without mentioning AssemblyLoadContext. InternalsVisibleTo without PublicKey on signed friends. Loading plugins into Default ALC and expecting to unload DLLs — Default is not collectible."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Assembly = IL + metadata + manifest; versioning is at assembly level.",
-    "InternalsVisibleTo exposes internals to friend assemblies like tests.",
-    "Project references and NuGet resolve assembly dependencies."
+    "An assembly packages IL, metadata, and manifest — versioning and loading are assembly-level, not file-level.",
+    "AssemblyLoadContext isolates plugin loads; collectible ALCs enable unload without process restart.",
+    "In production, log binding failures and use deps.json alignment — version mismatches surface as FileNotFoundException at startup.",
+    "60s: Assembly is IL plus metadata plus version. Default ALC for app. Collectible ALC for plugins. InternalsVisibleTo for test friends. NuGet ships assemblies, not source.",
+    "Follow-up: when can you not unload a collectible AssemblyLoadContext?"
   ],
   "commonPitfalls": [
-    "Wrong friend assembly name in InternalsVisibleTo.",
-    "Version mismatch at runtime — FileNotFoundException.",
-    "Making types public just for tests instead of InternalsVisibleTo."
+    "Saying one class file equals one assembly gets you rejected — projects compile many types into one DLL.",
+    "Wrong friend assembly name in InternalsVisibleTo — tests compile but cannot access internals.",
+    "Strong answer: 'ALC for plugin isolation. Collectible for hot swap. InternalsVisibleTo keeps tests off public API. Log loader exceptions on deploy.'"
   ],
   "relatedTopicIds": [
     "csharp-16-attributes",
@@ -172,12 +210,22 @@
       "concept": "npm packages vs NuGet",
       "note": "npm ships source or bundled JS. NuGet ships compiled assemblies with metadata the CLR loads.",
       "futureTopicSlug": "javascript/modules/packages"
+    },
+    {
+      "language": "typescript",
+      "concept": "Dynamic import vs ALC",
+      "note": "import() loads a module graph at runtime in Node. ALC loads compiled assemblies with version binding — closer to JAR classloaders than ESM.",
+      "futureTopicSlug": "typescript/modules/dynamic-import"
     }
   ],
   "officialSources": [
     {
       "title": "Assemblies in .NET",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/assembly/"
+    },
+    {
+      "title": "AssemblyLoadContext",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/dependency-loading/understanding-assemblyloadcontext"
     }
   ],
   "scenarioTag": "redis-cache",

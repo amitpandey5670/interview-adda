@@ -147,17 +147,56 @@
           "body": "Assuming static fields on Generic<T> are shared across all T — they are per closed type. Fighting inference instead of writing Foo<T>(...) explicitly when the compiler cannot deduce T. Putting T on the class when only one method needed it, creating unnecessary coupling."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An **open generic** still has an unbound type parameter — `List<>` in reflection via `typeof(List<>)`, or `RedisCache<T>` before you close T. A **closed generic** supplies concrete arguments — `List<string>`. You cannot `new List<>()` without closing T. Static members on generic types are keyed by the **closed type**: `Counter<int>.Count` is independent of `Counter<string>.Count`. At the JIT level, **generic sharing** means many closed types with reference-type arguments reuse the same native implementation; value-type closures get per-T code. Generic methods infer type arguments from call sites; when T appears only in the return type, you must specify `Empty<string>()`. How to prove it in production: log `typeof(RedisCache<>).GetGenericTypeDefinition()` in startup diagnostics; BenchmarkDotNet comparing static counter fields across two closed types."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Shape", "Example", "Senior note"],
+          "rows": [
+            ["Open generic type", "typeof(List<>)", "Used in DI, reflection, factory patterns"],
+            ["Closed generic type", "List<string>", "Real constructed type; statics are per closure"],
+            ["Open generic method", "Print<T>(T x)", "T inferred or specified at call site"],
+            ["Generic sharing", "List<string> vs List<CustomClass>", "Reference T args often share JIT body"],
+            ["Per-T specialization", "List<int> vs List<double>", "Value types get separate native code"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Open generic reflection and closed construction",
+            "code": "Type openList = typeof(List<>);           // open generic type definition\nType closedString = typeof(List<string>); // closed generic\n\nType[] args = { typeof(SessionDto) };\nType closedSession = openList.MakeGenericType(args);\nobject cache = Activator.CreateInstance(closedSession)!; // List<SessionDto>\n\n// DI pattern: register open generic handler\n// services.Add(typeof(IHandler<>), typeof(Handler<>));",
+            "explanation": "typeof(List<>) is the open generic. MakeGenericType closes it at run time — the pattern behind open-generic dependency injection registration. Closed types are what you use at compile time with List<SessionDto>."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying static fields on Generic<T> are shared across all T — Counter<int> and Counter<string> are independent. Confusing open and closed: you cannot instantiate List<> without a type argument. Claiming generic methods always need explicit type args — inference works from parameters unless T is return-only. Strong answer: open vs closed, statics per closed type, generic sharing for reference T, inference rules."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Open versus closed generic types; static state is per closed type.",
-    "Generic methods infer type arguments from call arguments; specify T when inference fails.",
-    "Dictionary<TKey, TValue> is the canonical two-parameter generic."
+    "Open generic List<> versus closed List<string>; static state is per closed type, not per open T.",
+    "Generic methods infer type arguments from call arguments; specify T explicitly when inference fails.",
+    "Generic sharing: reference-type type arguments often share JIT code; value types specialize per closure.",
+    "60s: Open generic has unbound T — typeof(List<>). Closed generic is List<string>. Statics are per closed type. Generic sharing applies to reference type args. Inference from call args unless T is return-only.",
+    "Follow-up: how does open-generic DI registration work with typeof(IHandler<>)?"
   ],
   "commonPitfalls": [
-    "Assuming static fields on Generic<T> are shared across all T.",
-    "Fighting inference instead of writing Foo<T>(...) explicitly.",
-    "Putting T on the class when only one method needed it."
+    "Assuming static fields on Generic<T> are shared across all T — that gets rejected; Counter<int> and Counter<string> are separate.",
+    "Strong answer: static members belong to the closed constructed type, not the open generic definition.",
+    "Fighting inference instead of writing Foo<T>(...) explicitly when T appears only in the return type.",
+    "Confusing open generic typeof(List<>) with trying to new List<>() without a type argument."
   ],
   "relatedTopicIds": [
     "csharp-09-why-generics",
@@ -170,6 +209,12 @@
       "concept": "generic functions and classes",
       "note": "TypeScript infers type arguments similarly from call arguments. There is no per-T static field at run time because generic parameters erase.",
       "futureTopicSlug": "typescript/generics/functions"
+    },
+    {
+      "language": "javascript",
+      "concept": "no open generic at run time",
+      "note": "JavaScript has no typeof(List<>) equivalent. Open generic registration patterns in .NET DI have no direct JS analogue — you register concrete constructors.",
+      "futureTopicSlug": "javascript/modules/dynamic-import"
     }
   ],
   "officialSources": [

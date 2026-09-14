@@ -140,18 +140,54 @@
           "body": "Calling with and then mutating a nested List on the new instance when the original still shares that list. Assuming record equality compares nested lists by value — List<T> uses reference equality unless you customize. Using with on an ordinary class — it will not compile without copy machinery. Expecting deep copy — with is always shallow at the top level."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: under concurrent attempt-submit load, snapshot ScoringPolicy with with before passing to a worker thread — no lock on field writes. Profile allocations: each with allocates one record; for hot paths consider record struct. dotnet-counters gen-0 rate spikes when with runs per message in an SQS loop — batch or use immutable nested ImmutableList instead of shared List<T>."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Concurrent snapshot with with — shallow copy trap",
+            "code": "public sealed record AuthDecision(string UserId, IReadOnlyList<string> Roles, bool Allowed);\n\npublic AuthDecision GrantRole(AuthDecision live, string role)\n{\n    // Snapshot for worker — original unchanged\n    var snapshot = live with { Allowed = true };\n\n    // TRAP: Roles list still shared if live.Roles is mutable List\n    // FIX: snapshot = live with { Roles = live.Roles.Append(role).ToImmutableArray() };\n    return snapshot;\n}",
+            "explanation": "Line 6: with copies top-level fields only. Line 9: nested List is shared — concurrent mutation on live.Roles affects snapshot unless you replace the collection in with."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Thread safety", "Cost"],
+          "rows": [
+            ["with on record", "Snapshot top-level fields", "One allocation per with"],
+            ["Mutable class + lock", "Correct if disciplined", "Lock contention under load"],
+            ["ImmutableList in with", "Safe nested updates", "Extra allocation for new list"],
+            ["JS object spread", "Shallow copy same trap", "No value equality"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Assuming with deep-copies nested collections. Mutating a List on the copy while the original still holds the same reference. Saying records are value types — record is a reference type with value-based equality. Using with on ordinary classes without copy machinery."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "with copies a record (or copyable struct) and sets named properties.",
-    "The copy is shallow; nested mutable collections stay shared.",
-    "Use snapshots for concurrent attempt-submit instead of locking field writes on a live object.",
-    "Ordinary classes do not support with by default."
+    "with performs a non-destructive shallow copy of a record and sets named properties.",
+    "Nested mutable collections remain shared — replace them in with for true immutability.",
+    "In production, snapshot policy records with with before parallel workers instead of locking field writes.",
+    "60s: with copies record shallowly. Original unchanged. List inside still shared. ImmutableList for nested safety. record is reference type with value equality.",
+    "Follow-up: when is record struct with preferable to record class with?"
   ],
   "commonPitfalls": [
-    "Calling with and then mutating a nested List on the new instance.",
-    "Assuming record equality compares nested lists by value — List equality is referential unless you customize.",
-    "Using with on a class and expecting a compiler error to be the only issue — it simply does not compile."
+    "Assuming with deep-copies nested lists gets you rejected — shallow only; replace collection in with.",
+    "Mutating Roles on a shared AuthDecision across concurrent requests instead of immutable snapshot.",
+    "Strong answer: 'with for top-level snapshot. Nested mutables need ImmutableList or copy in with. Profile gen-0 if with runs per SQS message.'"
   ],
   "relatedTopicIds": [
     "csharp-11-pattern-kinds",
@@ -165,6 +201,12 @@
       "concept": "Object spread",
       "note": "const next = { ...live, allowLate: false } is a shallow copy, same trap as with. JavaScript has no compiler-generated value equality on that object.",
       "futureTopicSlug": "javascript/objects/spread"
+    },
+    {
+      "language": "typescript",
+      "concept": "Readonly and immutable update patterns",
+      "note": "TS readonly arrays still allow push on the underlying reference if copied shallowly. C# with on records is the same shallow semantics — use ImmutableList or record the nested collection in with for honest immutability.",
+      "futureTopicSlug": "typescript/types/readonly"
     }
   ],
   "officialSources": [

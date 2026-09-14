@@ -147,17 +147,55 @@
           "body": "Using List<object> as a quiet ArrayList — you lose type safety again. Saying C# generics work like C++ templates — C# does not generate a new source file per T; the JIT or Ahead-of-Time (AOT) compiler specializes at run time or publish time. Boxing anyway by storing structs as interface types inside a List<IComparable> when you meant List<int>."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "C# generics are **reified**: `List<int>` and `List<string>` are distinct constructed types in CLR metadata — unlike Java or TypeScript erasure. At the native-code level, the runtime uses **generic sharing** for reference-type type arguments: `List<string>` and `List<object>` (when legal) often share one JIT-compiled body because reference types share the same representation size; value-type arguments get specialized native code per closed type (List<int> versus List<double>). That is why boxing in legacy ArrayList hurt both allocation and cache locality. How to prove it in production: `typeof(List<int>) != typeof(List<string>)` in a diagnostic endpoint; dotnet-counters GC allocation rate comparing ArrayList.Add loop versus List<int> on a hot SQS batch path."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Collection", "Type safety", "Value-type cost"],
+          "rows": [
+            ["ArrayList (object)", "Cast at read; mixed types at run time", "Box every int add"],
+            ["List<T> (reified)", "Compile-time rejection of wrong T", "Direct storage, no box"],
+            ["List<object>", "Quiet loss of T safety", "Box value types again"],
+            ["Generic sharing (ref T args)", "One JIT body for reference T", "Value types still specialize per T"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Generic sharing — reference types vs value types",
+            "code": "// Reified: different metadata types\nConsole.WriteLine(typeof(List<int>) == typeof(List<string>)); // False\n\n// Reference-type type args often share native code (generic sharing).\n// Value-type args get separate JIT specializations — List<int> vs List<double>.\n\nIEnumerable<string> names = [\"a\", \"b\"];\nIEnumerable<object> asObjects = names; // covariant — no copy, shared iterator plan\n// IEnumerable<int> nums = [1, 2];\n// IEnumerable<object> boxed = nums; // compile error — int is value type",
+            "explanation": "Reification gives you distinct types for reflection and casts. Generic sharing is an optimization: reference-type arguments reuse code; value types do not participate in IEnumerable<object> covariance."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying C# generics erase like Java — they do not; typeof(List<int>) works. Claiming List<object> is as safe as List<string> — it is a typed object bag that boxes ints again. Confusing C# generics with C++ template expansion — C# shares JIT code for reference type parameters. Strong answer: reified types, no boxing in List<int>, generic sharing for reference T args, prefer System.Collections.Generic."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Generics give compile-time type safety and avoid boxing value types in collections.",
     "C# generics are reified at run time; Java and TypeScript generics are erased.",
-    "ArrayList and Hashtable are legacy object collections — prefer System.Collections.Generic."
+    "Generic sharing: reference-type type arguments often share one JIT body; value types specialize per closed type.",
+    "60s: ArrayList boxed object and required casts. List<T> is reified, type-safe, no box for structs. typeof(List<int>) works. Reference-type T args share JIT code; value types get separate specializations.",
+    "Follow-up: why does IEnumerable<int> not convert to IEnumerable<object>?"
   ],
   "commonPitfalls": [
-    "Using List<object> as a quiet ArrayList.",
-    "Saying C# generics work like C++ templates (no per-T source codegen; JIT/AOT specializes).",
-    "Boxing anyway by storing structs as interface types inside the list."
+    "Saying C# generics erase at run time like Java — that answer gets rejected; typeof(List<int>) proves reification.",
+    "Strong answer: reified constructed types; List<int> stores ints directly without boxing.",
+    "Using List<object> as a quiet ArrayList — you lose compile-time safety and box value types again.",
+    "Saying C# generates separate C++-style source per T — JIT/AOT specializes; reference types share code."
   ],
   "relatedTopicIds": [
     "csharp-09-generic-types-and-methods",

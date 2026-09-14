@@ -4,39 +4,84 @@
   "items": [
     {
       "question": "Why not ArrayList?",
-      "answer": "ArrayList stores object. Adding an int boxes it onto the heap. Reading requires a cast that can throw InvalidCastException. List<int> stores ints directly, the compiler rejects a string, and there is no box. Microsoft's generics overview says always prefer System.Collections.Generic.",
+      "answer": "ArrayList stores object. Adding an int boxes it onto the heap. Reading requires a cast that can throw InvalidCastException. List<int> stores ints directly, the compiler rejects a string, and there is no box. C# generics are reified — typeof(List<int>) works at run time unlike TypeScript erasure.",
       "followUps": [
         "What is reification versus Java type erasure?",
-        "Can you add a string to List<object> that was really a List<string>?"
+        "What is generic sharing for reference type arguments?"
       ],
-      "sixtySeconds": "ArrayList = object + boxing + casts. List<T> = compile-time T, runtime constructed type, no box for structs."
+      "sixtySeconds": "ArrayList = object + boxing + casts. List<T> = compile-time T, reified constructed type, no box for structs."
     },
     {
-      "question": "Name the important constraints.",
-      "answer": "class, class?, struct, notnull, unmanaged, new(), a base type, an interface, Enum, Delegate, and the anti-constraint allows ref struct. new() must be last among ordinary constraints. struct and unmanaged already imply a constructor story and cannot pair with new(). notnull is a warning, not an error.",
+      "question": "Explain open versus closed generics and generic sharing.",
+      "answer": "Open generic: List<> or typeof(List<>) — type parameter still unbound. Closed generic: List<string> — concrete type you instantiate. Static fields are per closed type, not shared across all T. Generic sharing: reference-type type arguments often share one JIT-compiled body; value types like int get separate specializations. Open generics appear in DI registration: typeof(IHandler<>).",
+      "followUps": [
+        "Why is Counter<int>.Count independent of Counter<string>.Count?",
+        "How does MakeGenericType work?"
+      ],
+      "sixtySeconds": "Open = unbound T. Closed = List<string>. Statics per closed type. Reference T args share JIT code; value types specialize."
+    },
+    {
+      "question": "Name the important constraints and exclusion rules.",
+      "answer": "class, class?, struct, notnull, unmanaged, new(), base type, interface, Enum, Delegate, and allows ref struct. At most one of struct/class/notnull/unmanaged first. new() last among ordinary constraints; cannot pair with struct or unmanaged. notnull warns, does not error. Required members block new(). allows ref struct is last and cannot combine with class.",
       "followUps": [
         "Why can't a type with required members satisfy new()?",
         "What does where T : U mean?"
       ],
-      "sixtySeconds": "Constraints unlock members on T. struct/class/notnull/unmanaged are mutually exclusive as the first slot. allows ref struct is last and special."
+      "sixtySeconds": "Constraints unlock members on T. struct and new() cannot combine. allows ref struct last. IEquatable for value equality on class-constrained T."
+    },
+    {
+      "question": "Why does == on class-constrained T fail for strings?",
+      "answer": "== on a class-constrained type parameter uses reference identity unless constrained to IEquatable<T>. string overloads == for content, but T does not inherit that overload semantics. Same<string>(x, y) can be false for equal content. Fix: constrain to IEquatable<T> and call a.Equals(b).",
+      "followUps": [
+        "Does this apply to record types?",
+        "What about unconstrained T?"
+      ],
+      "sixtySeconds": "class-constrained == is reference identity. Use IEquatable<T> for value equality. Classic string trap in generic Max/Same helpers."
     },
     {
       "question": "IEnumerable<string> assigned to IEnumerable<object> — legal?",
-      "answer": "Yes, because IEnumerable<out T> is covariant. IList<string> to IList<object> is not — you could Add a Cat to a dog list. Action<object> can be used as Action<string> (contravariance, in T). TypeScript's default function parameter bivariance is looser; do not import that intuition.",
+      "answer": "Yes — IEnumerable<out T> is covariant because T only flows out. IList<string> to IList<object> is not — Add would break type safety. Action<object> as Action<string> is contravariance (in T). Value types do not participate: IEnumerable<int> is not IEnumerable<object>. Arrays are covariant but unsafe on write.",
       "followUps": [
-        "Why are arrays covariant but generic lists are not?",
-        "Where does out T appear besides IEnumerable?"
+        "Why are arrays covariant but List<T> is not?",
+        "How does TypeScript strictFunctionTypes compare?"
       ],
-      "sixtySeconds": "out = producer = covariant. in = consumer = contravariant. Mutable lists are invariant. Arrays are the historical exception."
+      "sixtySeconds": "out = producer = covariant. in = consumer = contravariant. IList and List invariant. Value types excluded."
     },
     {
       "question": "How would you model a Redis cache miss in a generic API?",
-      "answer": "Not T Get<T>(key) returning null — that collapses miss and stored-null. Prefer bool TryGet<T>(key, out T value) with MaybeNullWhen(false), or Result<T> with explicit Miss / Hit / Fault. That is a closed generic you control, not a BCL type.",
+      "answer": "Not T? Get<T>(key) — null collapses miss, stored empty, and JsonException fault. Prefer bool TryGet<T>(key, out T value) with MaybeNullWhen(false), or CacheResult<T> with Hit/Miss/Fault factories. Log metrics by outcome, not null rate. Keep a small readonly struct; do not import a heavyweight Result library.",
       "followUps": [
-        "Where does MaybeNull fit?",
-        "Would you use T? on an unconstrained T?"
+        "When is TryGet enough without Fault?",
+        "Why is unconstrained T? a poor miss signal?"
       ],
-      "sixtySeconds": "Miss is not null. Use TryGet or Result<T>. Unconstrained T? is a mess across struct and class."
+      "sixtySeconds": "Miss is not null. TryGet for hit/miss. CacheResult<T> for fault. Metrics by outcome on Redis paths."
+    },
+    {
+      "question": "How do C# generics differ from C++ templates and TypeScript generics?",
+      "answer": "C++ templates expand per use at compile time. C# shares JIT code for reference type parameters and reifies closed types in metadata. TypeScript erases T before run time — no typeof(List<int>). C# List<int> and List<string> are distinct types; TypeScript List<T> is compile-time only. Do not say C# generates a new source file per T.",
+      "followUps": [
+        "What does reification buy you in reflection?",
+        "Does Java behave like C# or TypeScript?"
+      ],
+      "sixtySeconds": "C# reified, shared JIT for ref T. TS erased. C++ template expansion. Not interchangeable answers."
+    },
+    {
+      "question": "When would you declare your own IProducer<out T> or IConsumer<in T>?",
+      "answer": "When you design an API where T only flows out (read-only producer) or only in (callback consumer). The compiler rejects T in both input and output positions on a variant interface. Use invariance (no out/in) when T is both read and written — like a mutable buffer interface. IList<T> stays invariant for safety.",
+      "followUps": [
+        "Can a class declare out T?",
+        "Give a production example of contravariance."
+      ],
+      "sixtySeconds": "out for producers, in for consumers, invariant when T goes both ways. Only interfaces and delegates."
+    },
+    {
+      "question": "Static state on RedisCache<T> — one counter or many?",
+      "answer": "Per closed type. RedisCache<int> and RedisCache<string> each get their own static fields. Assuming one shared static across all T is a common interview trap. Generic sharing applies to JIT code for reference type arguments, not to static field storage.",
+      "followUps": [
+        "What about instance fields?",
+        "How does open generic DI registration relate?"
+      ],
+      "sixtySeconds": "Statics belong to the closed constructed type. Counter<int> and Counter<string> are independent."
     }
   ]
 }

@@ -21,6 +21,24 @@
       "sixtySeconds": "lock plus await equals disaster. Short lock for memory only. Throttle I/O with SemaphoreSlim."
     },
     {
+      "question": "When is volatile enough, and when do you need Interlocked or lock?",
+      "answer": "volatile ensures reads and writes of one field are not cached in a CPU register indefinitely — good for shutdown flags. It does not make compound operations like check-then-act atomic. Interlocked provides atomic read-modify-write for counters and CompareExchange for lazy initialization. lock protects multi-field invariants. Monitor exit publishes writes with a full memory barrier.",
+      "followUps": [
+        "Does lock make volatile redundant inside the critical section?",
+        "What is Thread.MemoryBarrier used for?"
+      ],
+      "sixtySeconds": "volatile for single flag visibility. Interlocked for counters. lock for invariants. Never volatile for increment."
+    },
+    {
+      "question": "ReaderWriterLockSlim versus ConcurrentDictionary — when do you pick each?",
+      "answer": "ReaderWriterLockSlim fits read-heavy data with rare bulk reload — many readers share the read lock, one writer takes exclusive lock. ConcurrentDictionary fits per-key churn and cache maps with continuous updates. Wrong choice: RW lock on a hot mutable map where writers block all readers constantly. Profile lock contention with dotnet-counters before micro-optimizing.",
+      "followUps": [
+        "Can you await while holding a read lock?",
+        "What is lock striping in ConcurrentDictionary?"
+      ],
+      "sixtySeconds": "RW lock for rare reload, many readers. ConcurrentDictionary for per-key updates. Not RW lock on hot writes."
+    },
+    {
       "question": "How do you fix a Redis cache stampede when traffic spikes?",
       "answer": "Many parallel cache misses on the same key each hit the database. Single-flight: ConcurrentDictionary of in-flight Task per key so one loader runs and others await the same Task. Add SemaphoreSlim to cap total database concurrency across keys. Jitter cache TTL. Never wrap Redis get and database query in one global lock — that serializes all keys.",
       "followUps": [
@@ -37,6 +55,24 @@
         "How does Channel relate to IAsyncEnumerable?"
       ],
       "sixtySeconds": "Channel for async producer-consumer with backpressure. ConcurrentDictionary for shared maps."
+    },
+    {
+      "question": "Your service deadlocks under load after adding sync-over-async — diagnose it.",
+      "answer": "Capture dotnet-dump thread stacks. Look for threads blocked on Monitor.Wait while another thread waits on Task.Wait or .Result — classic pool deadlock. Fix: async all the way, ConfigureAwait(false) in libraries, never .Result inside lock. Fixed global lock order when multiple locks are unavoidable.",
+      "followUps": [
+        "Does ASP.NET Core have a SynchronizationContext?",
+        "How does lock ordering prevent circular wait?"
+      ],
+      "sixtySeconds": "Dump threads. Monitor plus Result equals deadlock. Async end-to-end. Fixed lock order."
+    },
+    {
+      "question": "How do you prove thread pool starvation in production?",
+      "answer": "dotnet-counters on System.Runtime: threadpool-queue-length and threadpool-thread-count rising while CPU is flat suggests blocking on pool threads — sync I/O, .Result, or lock convoys. Latency rises on unrelated endpoints because continuations queue behind blocked workers. Fix root cause: true async I/O, remove blocking waits, shorten critical sections.",
+      "followUps": [
+        "What is hill-climbing in the thread pool?",
+        "How does Parallel.ForEach interact with the pool?"
+      ],
+      "sixtySeconds": "Queue length up, CPU flat — blocking on pool. dotnet-counters. Fix async and locks."
     }
   ]
 }

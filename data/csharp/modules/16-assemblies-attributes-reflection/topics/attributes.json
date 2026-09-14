@@ -118,6 +118,15 @@
             "code": "[AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]\npublic sealed class FeatureFlagAttribute(string name) : Attribute\n{\n    public string Name { get; } = name;\n}\n\n[FeatureFlag(\"new-checkout\")]\npublic sealed class CheckoutService { }",
             "explanation": "Define reusable metadata. Your feature system reads it via reflection or a generator."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Obsolete with compile-time enforcement",
+            "code": "[Obsolete(\"Use CreateOrderV2 instead.\", error: true)]\npublic void CreateOrderV1() { }\n\n// CreateOrderV1(); // CS0619 compile error",
+            "explanation": "Compiler honors Obsolete directly — error:true blocks call sites without any runtime check."
+          }
         }
       ]
     },
@@ -147,17 +156,46 @@
           "body": "Attributes on properties that nothing reads — dead metadata. Wrong AttributeTargets so attribute does not compile on method. Assuming [Serializable] replaces proper DTO design in modern APIs."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: attributes compile into metadata tables — ildasm or dotPeek shows them on types and members. The C# compiler directly honors Obsolete, Conditional, and nullable flow attributes; ASP.NET and System.Text.Json read their attributes at startup via reflection or source generators. Dead attributes bloat metadata and confuse readers — grep for GetCustomAttribute consumers before adding new ones. Nullable and DynamicallyAccessedMembers attributes feed trim and analyzer pipelines in CI."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Attribute family", "Reader", "When to use"],
+          "rows": [
+            ["Obsolete / Conditional", "C# compiler", "Deprecation and conditional compilation"],
+            ["Nullable / NotNullIfNotNull", "Compiler flow analysis", "Null safety contracts"],
+            ["Validation / JSON", "Framework at runtime or generator", "DTO shape and API contracts"],
+            ["Custom feature flags", "Your scanner or generator", "Only if something reads them"],
+            ["DynamicallyAccessedMembers", "Trim/AOT analyzers", "Guard reflection entry points"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming all attributes are compiler magic — most are passive metadata until a framework reads them. Putting validation attributes on fields when the validator only inspects properties. Mixing Newtonsoft and System.Text.Json attribute sets on the same DTO. Custom attributes with no consumer — dead weight in every assembly."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Attributes are metadata; frameworks read them via reflection or generators.",
-    "Compiler honors Obsolete, Conditional, nullable attributes directly.",
-    "Validation and JSON shape commonly use attributes on DTOs."
+    "Attributes are IL metadata; the compiler honors Obsolete, Conditional, and nullable attributes — frameworks read the rest via reflection or generators.",
+    "Validation and JSON attributes on DTOs must match what the framework actually inspects — property vs field targets matter.",
+    "In production, audit custom attributes — if nothing reads them at startup or compile time, remove them to shrink metadata.",
+    "60s: Attributes are metadata tables. Compiler: Obsolete, Conditional, nullable. Frameworks: validation, JSON, routing. Generators replace runtime attribute scanning on hot paths.",
+    "Follow-up: how do source generators read attributes without runtime reflection?"
   ],
   "commonPitfalls": [
-    "Custom attributes never read by any tool.",
-    "Attribute only on getter when validation expects property target.",
-    "Mixing Newtonsoft and System.Text.Json attribute sets."
+    "Saying the compiler enforces [Required] gets you rejected — ASP.NET/model binders read it at runtime.",
+    "Custom attributes never consumed by reflection or a generator.",
+    "Strong answer: 'Compiler attributes vs framework attributes. Generators for hot paths. Match attribute target to consumer. Obsolete error:true for hard breaks.'"
   ],
   "relatedTopicIds": [
     "csharp-16-assemblies-and-metadata",
@@ -170,6 +208,12 @@
       "concept": "Decorators",
       "note": "TS decorators attach metadata similar to C# attributes but rely on emit helpers. C# stores attributes in CLR metadata tables.",
       "futureTopicSlug": "typescript/decorators"
+    },
+    {
+      "language": "javascript",
+      "concept": "JSDoc tags",
+      "note": "JSDoc @deprecated is comment-only — no compile enforcement. C# [Obsolete(error:true)] is a hard compiler error.",
+      "futureTopicSlug": "javascript/documentation/jsdoc"
     }
   ],
   "officialSources": [

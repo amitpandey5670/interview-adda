@@ -118,6 +118,15 @@
             "code": "await foreach (var msg in reader.ReadAllAsync(cancellationToken))\n{\n    await ProcessAsync(msg, cancellationToken);\n}",
             "explanation": "ReadAllAsync yields messages as they arrive. Multiple consumers can each run this loop on the same reader."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Multiple channel consumers",
+            "code": "var workers = Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>\n{\n    await foreach (var msg in reader.ReadAllAsync(ct))\n        await HandleAsync(msg, ct);\n}));\nawait Task.WhenAll(workers);",
+            "explanation": "Four parallel consumers compete fairly for channel items — scales processing without locking a shared List."
+          }
         }
       ]
     },
@@ -146,17 +155,46 @@
           "body": "Unbounded channel when producers can flood memory. Assuming ConcurrentDictionary values are immutable — mutate copies or use locks inside values. Forgetting Writer.Complete() so readers hang forever."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: ConcurrentDictionary uses striped locks — high write contention on one bucket still serializes. Channels decouple producers from consumers with optional backpressure; monitor channel depth via custom metrics or log when WriteAsync blocks. For RabbitMQ ingestion, a bounded Channel between receive and workers prevents memory blow-up when ProcessAsync slows. dotnet-counters won't show channel depth directly — instrument Count or time spent in WriteAsync."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Structure", "Contention model", "When to choose"],
+          "rows": [
+            ["ConcurrentDictionary", "Per-bucket locking; GetOrAdd atomic per key", "Shared cache maps; single-flight tables"],
+            ["ConcurrentQueue/Bag", "Lock-free or striped enqueue", "Many producers collecting results"],
+            ["Channel bounded", "Writers wait at capacity — backpressure", "Producer faster than consumer"],
+            ["Channel unbounded", "No backpressure — memory risk", "Low-volume internal pipelines only"],
+            ["lock + List", "Single lock for all operations", "Avoid — Channels or concurrent collections win"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Treating ConcurrentDictionary as making mutable values thread-safe — two threads mutating the same UserDto still races. Unbounded Channel in a burst SQS consumer — OOM under spike. Using ConcurrentQueue when you need async backpressure — callers spin or block manually. Single consumer on a Channel when CPU-bound processing could parallelize."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "ConcurrentDictionary for shared maps; Channels for producer-consumer pipelines.",
-    "Bounded channels provide backpressure.",
-    "Prefer message passing over shared mutable state when possible."
+    "ConcurrentDictionary provides thread-safe map operations; Channel provides async producer-consumer queues with optional bounded backpressure.",
+    "Values inside ConcurrentDictionary are not magically immutable — coordinate mutations inside the value or store immutable snapshots.",
+    "In production, bound Channels between fast ingress (RabbitMQ/SQS) and slow workers; alert when WriteAsync wait time grows.",
+    "60s: ConcurrentDictionary for shared maps and single-flight. Channel for async pipelines with backpressure. Multiple ReadAllAsync consumers for parallel processing. Never unbounded under burst traffic.",
+    "Follow-up: when is message passing (Channel) strictly better than a concurrent map?"
   ],
   "commonPitfalls": [
-    "Unbounded channel in a burst traffic scenario.",
-    "Mutating objects stored in ConcurrentDictionary without synchronization.",
-    "Single consumer when throughput needs parallel workers."
+    "Saying ConcurrentDictionary makes object graphs thread-safe gets you rejected — only dictionary operations are coordinated.",
+    "Unbounded channel in burst traffic — memory grows until OOM.",
+    "Strong answer: 'Channel for pipeline decoupling with bounded capacity. ConcurrentDictionary for keyed caches. Immutable values or internal locks on mutable DTOs.'"
   ],
   "relatedTopicIds": [
     "csharp-13-async-enumerable",
@@ -171,6 +209,12 @@
       "concept": "Async queues",
       "note": "p-queue and similar npm packages mirror bounded worker queues. C# Channels are built into the runtime.",
       "futureTopicSlug": "javascript/concurrency/queues"
+    },
+    {
+      "language": "typescript",
+      "concept": "AsyncIterable pipelines",
+      "note": "await for...of on async iterables resembles ReadAllAsync — both pull items sequentially, but C# Channels support multiple competing consumers safely.",
+      "futureTopicSlug": "typescript/async/iterators"
     }
   ],
   "officialSources": [

@@ -118,6 +118,15 @@
             "code": "using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);\nusing var canvas = new SKCanvas(bitmap);\ncanvas.Clear(SKColors.White);\n// bitmap native memory freed when using ends",
             "explanation": "SKBitmap wraps native pixels. using ensures immediate release instead of waiting for GC."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Spot native leak via dotnet-counters",
+            "code": "dotnet-counters monitor -p <pid> \\\n  System.Runtime[gc-heap-size,gen-2-gc-count]\n# Managed heap flat but process RSS grows → native leak; check Dispose",
+            "explanation": "When managed heap is stable but process memory climbs, undisposed native wrappers (SkiaSharp, DB handles) are a prime suspect."
+          }
         }
       ]
     },
@@ -146,17 +155,46 @@
           "body": "Relying on finalizers for SkiaSharp or database connections. Throwing from Dispose without guarding _disposed. Implementing a finalizer on every class — only types that wrap unmanaged resources need one."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Dispose is deterministic: runs synchronously (or via DisposeAsync) on the calling thread when using/await using exits. A finalizer (~Type) is queued when the object becomes unreachable; the finalizer thread runs it later with no timing guarantee. Finalizable objects survive one extra GC cycle because they are resurrected onto the finalizer queue. GC.SuppressFinalize(this) in Dispose skips that cycle. How to prove it in production: dotnet-counters shows gc-heap-size stable but process RSS climbing — classic undisposed native wrapper pattern (SkiaSharp, sockets, file handles)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Mechanism", "Timing", "Use when"],
+          "rows": [
+            ["Dispose / using", "Immediate, caller thread", "All IDisposable types — default choice"],
+            ["DisposeAsync / await using", "Immediate, async path", "Npgsql, streams, IAsyncEnumerable pipelines"],
+            ["Finalizer", "Delayed, finalizer thread", "Safety net for native interop wrappers only"],
+            ["No IDisposable", "GC reclaims managed memory only", "Pure managed POCOs with no native handles"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'GC will clean up SkiaSharp bitmaps' or implementing finalizers on every class. Strong answer: Dispose is deterministic; finalizer is last-chance; finalizable objects cost an extra GC cycle."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Dispose releases resources now; finalizers run later on another thread.",
-    "Finalizable objects survive an extra GC cycle — avoid finalizers unless necessary.",
-    "Use using and await using for IDisposable and IAsyncDisposable types."
+    "Dispose releases resources deterministically; finalizers run later on a dedicated thread with no timing guarantee.",
+    "Finalizable objects survive an extra GC cycle — only add a finalizer when wrapping unmanaged resources.",
+    "Wrap SkiaSharp, Npgsql, and file streams in using or await using; monitor RSS vs managed heap for native leaks.",
+    "60s: Dispose now on using exit. Finalizer is a delayed safety net on another thread. SuppressFinalize skips extra cycle. Native wrappers need Dispose.",
+    "Follow-up: when is IAsyncDisposable required over IDisposable?"
   ],
   "commonPitfalls": [
-    "Expecting finalizers to run when a using block would have sufficed.",
+    "Expecting finalizers to free SkiaSharp promptly — that gets you rejected because native memory stays until the finalizer thread runs.",
+    "Strong answer: using/await using for deterministic cleanup; finalizer only as backstop with SuppressFinalize.",
     "Not calling GC.SuppressFinalize in Dispose.",
-    "Disposing objects still needed by other code."
+    "Implementing finalizers on managed-only classes — adds GC overhead with no benefit."
   ],
   "relatedTopicIds": [
     "csharp-14-roots-mark-compact",
@@ -170,12 +208,22 @@
       "concept": "Explicit cleanup",
       "note": "Node streams have .destroy(); Web Streams have abort. C# using is the idiomatic deterministic pattern for IDisposable.",
       "futureTopicSlug": "javascript/runtime/resources"
+    },
+    {
+      "language": "typescript",
+      "concept": "FinalizationRegistry",
+      "note": "JS FinalizationRegistry is also delayed and non-deterministic — like C# finalizers. Neither replaces explicit .destroy() or using for native resources.",
+      "futureTopicSlug": "typescript/runtime/finalization"
     }
   ],
   "officialSources": [
     {
       "title": "Implement a Dispose method",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/implementing-dispose"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "scenarioTag": "skiasharp-dispose"

@@ -159,16 +159,55 @@
           "body": "when should be fast and side-effect free. Logging or mutating state inside a filter makes debugging nightmares. Throwing inside a filter is especially nasty."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: exceptions are for exceptional control flow — they are expensive (stack walk, allocation) and poison hot paths. Many teams adopt Result<T> or OneOf-style returns for expected failures (validation, not-found) and reserve exceptions for truly unexpected faults. In an SQS worker, catch transient HttpRequestException with when filters for retry, but return Result.Failure for business rule violations instead of throw — the message completes without stack churn. Rust and Go bias Result; C# BCL still throws — know when to wrap at your boundary. finally still runs on success paths — prefer using for IDisposable over manual finally when possible."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exception versus Result at a service boundary",
+            "code": "public readonly record struct ParseResult(bool Ok, string? Error, CsvRow? Row);\n\npublic static ParseResult TryParseRow(string line)\n{\n    if (string.IsNullOrWhiteSpace(line))\n        return new(false, \"empty line\", null);\n    // expected failure — no stack walk\n    return new(true, null, new CsvRow(line));\n}\n\n// Reserve throw for programmer bugs or unrecoverable I/O:\npublic static CsvRow ParseOrThrow(string line) =>\n    TryParseRow(line) is { Ok: true, Row: { } row }\n        ? row\n        : throw new InvalidOperationException(\"invariant broken\");",
+            "explanation": "Lines 1–8: expected CSV problems return Result — no exception cost. Lines 11–14: throw only when the caller asserted success — bug or catastrophic path."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Prefer for", "Avoid for"],
+          "rows": [
+            ["throw / catch", "I/O failures, programmer bugs, unrecoverable", "Expected validation on every row in CSV import"],
+            ["Result / Try*", "Business outcomes callers must handle", "Replacing every BCL throw without wrapping"],
+            ["when filter", "Transient HTTP status, cancellation token", "Logging or DB calls inside filter"],
+            ["finally", "Manual cleanup when no IDisposable", "Logic that throws and hides original"],
+            ["using", "IDisposable / IAsyncDisposable", "Non-deterministic cleanup timing needs"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Empty catch (Exception) { }. Using exceptions for normal control flow on every request. Not knowing finally runs before return. Saying Result replaces all exceptions with no tradeoff discussion."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
     "Most-derived catch first; finally always runs for that try.",
-    "when filters select a subset without catching sibling failures.",
-    "catch (Exception) belongs at process or message boundaries, if at all, and should rethrow when you cannot recover."
+    "when filters select subsets — keep them side-effect free.",
+    "Result/Try* for expected failures; exceptions for exceptional paths.",
+    "60s: catch at worker boundary with when for transient faults. Result for expected failures. throw; preserves stack. Empty catch rejected.",
+    "Follow-up: how does exception cost compare to returning Result on a hot CSV path?"
   ],
   "commonPitfalls": [
-    "Empty catch blocks.",
-    "Side effects inside when filters."
+    "Empty catch blocks get you rejected immediately.",
+    "Exceptions for every validation row without measuring cost.",
+    "Strong answer: 'Result for expected outcomes. Exceptions for exceptional. when for transient catch. finally always runs. throw; not throw ex.'"
   ],
   "relatedTopicIds": [
     "csharp-06-what-is-an-exception",

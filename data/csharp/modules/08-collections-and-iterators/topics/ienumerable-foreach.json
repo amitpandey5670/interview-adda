@@ -124,6 +124,15 @@
             "code": "void ProcessAll(IEnumerable<string> items)\n{\n    // Cannot do items[0] or items.Count — not on the interface\n    foreach (string item in items) { ... }\n}\n\nvoid ProcessIndexed(IReadOnlyList<string> items)\n{\n    for (int i = 0; i < items.Count; i++)\n        Console.WriteLine(items[i]);\n}",
             "explanation": "Use IEnumerable when you only need to walk. Use IReadOnlyList when callers need Count and an indexer. ICollection and IList add mutation — prefer read-only interfaces on outputs."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "List mutation during foreach — failure mode",
+            "code": "List<int> nums = [1, 2, 3, 4, 5];\ntry\n{\n    foreach (int n in nums)\n    {\n        if (n % 2 == 0)\n            nums.Remove(n); // InvalidOperationException\n    }\n}\ncatch (InvalidOperationException ex)\n{\n    // \"Collection was modified; enumeration operation may not execute.\"\n}",
+            "explanation": "List<T> tracks a version counter. Mutating during foreach invalidates the enumerator. Use for-loop backwards, RemoveAll, or materialize first."
+          }
         }
       ]
     },
@@ -154,17 +163,47 @@
           "body": "Passing null into foreach and calling it an empty batch — null throws NullReferenceException. Using IEnumerable<T> in a tight inner loop where you needed IReadOnlyList<T> for Count and indexer. Mutating a List while foreach is running — the version counter throws InvalidOperationException."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "foreach is lowered to a try/finally that calls GetEnumerator(), then while (enumerator.MoveNext()) { var item = enumerator.Current; ... }. List<T>.GetEnumerator() returns a struct List<T>.Enumerator — when foreach is used directly on a concrete List, the JIT often avoids boxing. Returning IEnumerable<T> from a method forces interface dispatch and may box the struct enumerator on the heap. IEnumerable<T> is covariant (out T) — IEnumerable<string> is assignable to IEnumerable<object> because you only read. How to prove it in production: dotMemory or dotnet-gcdump showing boxed enumerator allocations when a hot path returns IEnumerable<T> instead of List<T> or ReadOnlySpan<T>."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Return type", "Caller gets", "Cost"],
+          "rows": [
+            ["IEnumerable<T>", "Walk only, may be deferred", "Interface dispatch; possible enumerator boxing"],
+            ["IReadOnlyList<T>", "Count + indexer + walk", "Materialized; no hidden enumeration"],
+            ["List<T>", "Full mutation API", "Leaks implementation; prefer IReadOnlyList on outputs"],
+            ["T[]", "Fixed buffer + walk", "Best when size is known; covariance trap on T[]"],
+            ["IAsyncEnumerable<T>", "Async pull stream", "Module 13 — different interface, not a foreach flag"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"IEnumerable means the data is in memory\" — it might be a deferred LINQ chain or yield iterator hitting the database on every MoveNext. Saying \"foreach is just syntactic sugar, no cost\" — interface dispatch and boxing matter on hot paths. Strong answer: IEnumerable for flexible inputs, IReadOnlyList when callers need Count/index, never mutate during foreach, await foreach is IAsyncEnumerable."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "foreach is MoveNext/Current, plus Dispose when the enumerator is disposable.",
-    "IEnumerable<T> is walkable, not necessarily a materialized list.",
-    "await foreach / IAsyncEnumerable<T> is module 13, not a foreach flag."
+    "foreach desugars to GetEnumerator, MoveNext, Current, and Dispose in a try/finally.",
+    "IEnumerable<T> promises walkability, not materialization — Count() may enumerate everything.",
+    "List<T>.Enumerator is a struct; returning IEnumerable<T> may box it on hot paths.",
+    "60s: foreach is MoveNext/Current. IEnumerable for walk-only inputs. IReadOnlyList when callers need Count and indexer. Mutating List during foreach throws. await foreach is IAsyncEnumerable — module 13.",
+    "Follow-up: why does List mutation during foreach throw? (version counter on the collection)"
   ],
   "commonPitfalls": [
-    "Passing a null list into foreach and calling it an empty batch.",
-    "Using IEnumerable<T> in a tight inner loop where you needed IReadOnlyList<T> for Count and indexer.",
-    "Mutating the List being enumerated."
+    "Saying IEnumerable means data is already in memory — deferred LINQ and yield iterators prove otherwise.",
+    "Strong answer: IEnumerable for walk-only API surface; IReadOnlyList when Count/indexer needed; never mutate during foreach.",
+    "Passing null into foreach — NullReferenceException, not an empty sequence.",
+    "Using IEnumerable<T> in a tight loop where IReadOnlyList<T> Count and indexer would avoid re-enumeration."
   ],
   "relatedTopicIds": [
     "csharp-08-iterators-yield",
@@ -195,6 +234,10 @@
     {
       "title": "Iterators overview",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/iterators"
+    },
+    {
+      "title": "dotnet-gcdump",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump"
     }
   ],
   "animationHint": "flow",

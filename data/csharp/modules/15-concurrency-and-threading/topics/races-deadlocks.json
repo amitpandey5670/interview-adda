@@ -118,6 +118,15 @@
             "code": "// BAD in multi-threaded RabbitMQ consumer:\nprivate readonly Dictionary<string, int> _counts = new();\n\npublic void Handle(string key)\n{\n    _counts.TryGetValue(key, out var c);\n    _counts[key] = c + 1; // not thread-safe\n}\n\n// Fix: ConcurrentDictionary or Channel aggregation",
             "explanation": "Dictionary is not thread-safe for concurrent writes. Use ConcurrentDictionary or message passing."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Sync-over-async deadlock pattern",
+            "code": "public string GetData()\n{\n    lock (_gate)\n    {\n        return _client.GetDataAsync().Result; // blocks pool thread inside lock\n    }\n}",
+            "explanation": "Classic deadlock under load: lock held while .Result blocks waiting for a continuation that needs the same pool thread."
+          }
         }
       ]
     },
@@ -146,17 +155,46 @@
           "body": "Assuming Dictionary is safe because reads are common. Different lock order in two methods. Using .Result after locking — blocks pool threads and worsens deadlocks."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: data races corrupt in-memory structures silently — no exception, wrong counts in metrics. Capture thread dumps during a freeze (dotnet-dump collect) and look for threads blocked on Monitor.Wait or Task.Wait — circular waits indicate deadlock. The .NET memory model guarantees visibility after lock release, Interlocked operations, and volatile reads/writes. Without them, CPU reordering and cache lines can expose torn reads. Prefer eliminating shared mutable state (Channels) over proving correctness with fences."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Bug", "Root cause", "Production fix"],
+          "rows": [
+            ["Lost update", "Non-atomic read-modify-write", "Interlocked or lock around invariant"],
+            ["Deadlock", "Circular lock wait or sync-over-async", "Fixed lock order; never .Result inside lock"],
+            ["Stale read", "Missing synchronization", "lock/Interlocked/volatile as appropriate"],
+            ["Dictionary corruption", "Concurrent write without coordination", "ConcurrentDictionary or Channel aggregation"],
+            ["Heisenbug", "Race depends on scheduling", "Stress test + ThreadPool logging under load"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying races only happen on multi-core — even time-sliced threads on one core interleave. Claiming try/catch fixes races — exceptions do not fire on lost updates. Blaming ConfigureAwait(false) for all deadlocks without mentioning lock ordering or .Result. Insisting Dictionary is fine if you 'mostly read' — concurrent writes corrupt internal buckets."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Races need shared mutable state without proper synchronization.",
-    "Deadlocks need circular lock waits — fix with ordering or fewer locks.",
-    "Prefer concurrent collections and Channels over hand-rolled locked dictionaries."
+    "A data race is unsynchronized concurrent access where at least one side writes; deadlocks are circular waits — often from inconsistent lock order or sync-over-async.",
+    "The .NET memory model publishes writes after lock exit and Interlocked; without synchronization, visibility and atomicity are not guaranteed.",
+    "In production, capture dotnet-dump thread stacks when the service freezes — blocked Monitor.Wait chains reveal deadlock; metric drift without exceptions suggests races.",
+    "60s: Races need shared mutable state without coordination. Fix with Interlocked, lock, or message passing. Deadlocks need circular waits — use fixed lock order. Never .Result inside lock. ConcurrentDictionary beats locked Dictionary.",
+    "Follow-up: how does the thread pool make sync-over-async deadlocks more likely under load?"
   ],
   "commonPitfalls": [
-    "Non-thread-safe collections in parallel consumers.",
-    "Inconsistent lock acquisition order.",
-    "Mixing lock with blocking async (.Result)."
+    "Saying 'my code is single-threaded enough' on ASP.NET Core gets you rejected — requests run on different pool threads concurrently.",
+    "Inconsistent lock acquisition order across two methods that take two locks.",
+    "Strong answer: 'Eliminate shared state with Channels. Fixed lock order when unavoidable. dotnet-dump for deadlocks. Interlocked for counters.'"
   ],
   "relatedTopicIds": [
     "csharp-15-locks-and-interlocked",
@@ -169,12 +207,22 @@
       "concept": "Event loop vs threads",
       "note": "JS avoids many races on the main thread but worker_threads and Atomics introduce the same concerns as C#.",
       "futureTopicSlug": "javascript/concurrency/races"
+    },
+    {
+      "language": "typescript",
+      "concept": "Promise deadlock patterns",
+      "note": "Awaiting inside a synchronous mutex callback in workers mirrors .Result inside lock — the waiter blocks the thread the continuation needs.",
+      "futureTopicSlug": "typescript/async/deadlocks"
     }
   ],
   "officialSources": [
     {
       "title": "Managed threading best practices",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/managed-threading-best-practices"
+    },
+    {
+      "title": "dotnet-dump",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-dump"
     }
   ],
   "scenarioTag": "rabbitmq",

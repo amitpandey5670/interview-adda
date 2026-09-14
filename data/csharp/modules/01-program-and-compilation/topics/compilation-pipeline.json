@@ -120,6 +120,15 @@
             "code": "dotnet build -c Release\nls bin/Release/net10.0/\n# Worker.dll  — IL assembly\n# Worker.deps.json — dependency manifest\n# Worker.runtimeconfig.json — runtime settings",
             "explanation": "dotnet build produces IL assemblies and manifests — not JavaScript. Compare this to tsc emitting .js files with no CLR metadata."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Tiered JIT behavior (conceptual)",
+            "code": "// First calls compile quickly at Tier 0/1 (less optimized).\n// Hot methods recompile at Tier 1 Optimized after enough calls.\n// Tiered PGO (.NET 7+) uses profile data from earlier tiers.\n\nfor (var i = 0; i < 10_000; i++)\n    HotPath(i); // JIT may promote this method to optimized tier",
+            "explanation": "Tiered compilation balances startup (fast first compile) with steady-state throughput (optimized re-JIT). Unlike V8's single-engine JIT story, CLR explicitly tiers methods."
+          }
         }
       ]
     },
@@ -150,17 +159,46 @@
           "body": "Saying C# is \"interpreted\" — it is compiled; JIT is a second compile, not line-by-line interpretation. Confusing C# language version (LangVersion) with Target Framework Moniker (TFM) — LangVersion controls syntax; net10.0 controls which runtime APIs exist. Assuming Native AOT is always on — SDK projects default to JIT unless you enable PublishAot."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: tiered JIT compiles hot methods twice — fast Tier 0/1 first, optimized Tier 1 after enough calls; Tiered PGO feeds profile data into the optimizer. Cold-start Lambdas pay first-tier JIT cost unless you use ReadyToRun (R2R) precompiled IL or Native AOT. Use DOTNET_TieredCompilation and DOTNET_TC_QuickJitForLoops env vars when diagnosing startup vs throughput tradeoffs. dotnet-trace with JIT events shows recompilation. BenchmarkDotNet warm-up phases exist because tier promotion changes numbers."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Mode", "Startup", "Peak throughput"],
+          "rows": [
+            ["Tiered JIT (default)", "Fast first compile", "Optimized after warm-up"],
+            ["ReadyToRun (R2R)", "Faster startup — partial native code", "Still some JIT for generics"],
+            ["Native AOT (PublishAot)", "Fastest cold start", "Less reflection/dynamic codegen"],
+            ["Single-tier JIT off", "Slower startup", "Stable perf immediately"],
+            ["Interpreter (rare)", "Slowest steady state", "Used in some diagnostics only"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying C# is interpreted line-by-line — Roslyn emits IL, JIT/AOT emits machine code. Claiming Native AOT has no downsides — reflection, dynamic codegen, and some libraries break. Confusing LangVersion with TFM. Benchmarking without JIT warm-up and calling first-run numbers 'production perf'."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "C# compile output is IL + metadata in an assembly; JIT or Native AOT produces CPU code.",
-    "Do not equate `import \"./worker.js\"` with referencing a .NET assembly.",
-    "AOT trades flexibility (reflection, runtime codegen) for startup and size — know when a consumer needs JIT instead."
+    "Roslyn compiles C# to IL + metadata; CLR JIT (tiered) or Native AOT compiles to machine code — never line-by-line interpretation.",
+    "Tiered JIT optimizes hot methods after warm-up; ReadyToRun and Native AOT trade flexibility for startup and predictable deploy size.",
+    "In production, measure cold start separately from steady state — first-tier JIT skews Lambda and container scale-out metrics.",
+    "60s: Source to IL at build. JIT tiers from quick to optimized. R2R precompiles some IL. Native AOT for smallest cold start. Warm up before benchmarking.",
+    "Follow-up: when would ReadyToRun beat full Native AOT?"
   ],
   "commonPitfalls": [
-    "Saying C# is \"interpreted.\" It is compiled; the JIT is a second compile, not a line-by-line interpreter.",
-    "Confusing the C# language version with the TFM. LangVersion is syntax; net10.0 is the runtime surface.",
-    "Assuming Native AOT is always on. SDK projects default to JIT unless you enable PublishAot (file-based apps enable it for publish)."
+    "Saying C# is 'interpreted' gets you rejected — IL plus JIT/AOT is compiled execution.",
+    "Confusing LangVersion with TFM — syntax vs runtime API surface.",
+    "Strong answer: 'Roslyn to IL. Tiered JIT for default apps. R2R or AOT when cold start matters. Benchmark after tier promotion.'"
   ],
   "relatedTopicIds": [
     "csharp-01-csharp-vs-js-ts",
@@ -175,6 +213,12 @@
       "concept": "ES modules vs assemblies",
       "note": "JavaScript modules are source or bytecode files the engine links at load time. .NET assemblies are IL plus metadata units versioned and loaded by the CLR.",
       "futureTopicSlug": "javascript/modules/esm"
+    },
+    {
+      "language": "typescript",
+      "concept": "tsc emit vs Roslyn",
+      "note": "tsc erases types to JavaScript the engine parses/JITs. Roslyn preserves types in IL metadata the CLR JIT tiers — fundamentally different pipeline.",
+      "futureTopicSlug": "typescript/compiler/emit"
     }
   ],
   "officialSources": [
@@ -185,6 +229,10 @@
     {
       "title": "Native AOT deployment",
       "url": "https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/"
+    },
+    {
+      "title": "Tiered compilation",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/runtime-config/optimization"
     }
   ],
   "animationHint": "flow"

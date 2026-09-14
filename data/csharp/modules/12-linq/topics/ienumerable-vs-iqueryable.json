@@ -178,18 +178,56 @@
           "body": "Believing AsQueryable() sends a List to SQL. Putting a statement lambda or local function in a provider Where. Turning this topic into an Entity Framework Core lecture — out of scope for this track. Forgetting that ToList in the middle of a remote chain pulls all matching rows into memory."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IEnumerable LINQ compiles lambdas to **Func** delegates and runs **LINQ to Objects** in-process — each operator adds iterator allocations. IQueryable compiles to **Expression** trees for a provider; translation limits are the interview focus, not EF mapping details. AsQueryable() on List<T> still executes locally after building a thin expression wrapper. ToList() and AsEnumerable() are **materialization walls**: everything after runs as Func-based LINQ to Objects on pulled data. Expression trees cannot contain statement bodies, await, or most local functions — custom instance methods in Where usually fail translation. On in-memory chains after materialization, **TryGetNonEnumeratedCount** helps avoid double enumeration; **PLINQ** (AsParallel) is a separate pointer for CPU-bound partitioning, not a provider feature. How to prove it in production: log provider SQL versus client-side filter ratio; catch NotSupportedException from untranslatable predicates before deploy."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Surface", "Lambda type", "Execution"],
+          "rows": [
+            ["IEnumerable<T>", "Func<T,bool> delegate", "In-process; full C#; iterator allocations"],
+            ["IQueryable<T>", "Expression<Func<T,bool>> tree", "Provider may translate; subset of C#"],
+            ["AsQueryable on List", "Expression then local compile", "Still in-memory — not SQL"],
+            ["AsEnumerable / ToList wall", "Switches to Func after pull", "Rich C# on materialized rows"],
+            ["AsParallel (PLINQ)", "Func on partitioned chunks", "CPU-bound in-memory only; not IQueryable"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Expression tree limits versus IEnumerable freedom",
+            "code": "// IEnumerable — any C# in the lambda:\nvar local = attempts.Where(a => CustomCurve(a.Score) > 0.8);\n\n// IQueryable — only translatable expression trees:\n// var remote = dbSet.Where(a => CustomCurve(a.Score) > 0.8); // often throws\n\nvar safe = dbSet.Where(a => a.Score >= 50).ToList() // provider translates\n    .Where(a => CustomCurve(a.Score) > 0.8);          // Func after wall\n\nstatic double CustomCurve(double s) => s / 100.0 * 1.2;",
+            "explanation": "The wall pattern is the senior interview answer: translatable predicates on IQueryable, then ToList, then full C# Func LINQ to Objects with iterator cost accepted on the smaller set."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying AsQueryable on List sends work to SQL — it does not. Turning the answer into an EF Core lecture instead of Func versus Expression. Putting custom methods in IQueryable Where and blaming the provider at runtime. Strong answer: IEnumerable Func in-process; IQueryable Expression for provider; ToList wall; PLINQ is separate in-memory opt-in."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "IEnumerable: Func delegates, process memory.",
-    "IQueryable: expression trees plus a provider; capabilities vary.",
-    "AsQueryable on a List is still in-memory.",
-    "AsEnumerable/ToList is the boundary after which C# runs locally."
+    "IEnumerable: Func delegates, LINQ to Objects in-process with iterator allocations per operator.",
+    "IQueryable: Expression trees plus provider translation — subset of C# in predicates.",
+    "ToList/AsEnumerable is the materialization wall; after it, full C# Func LINQ runs locally.",
+    "60s: IEnumerable compiles to Func and runs here. IQueryable builds Expression trees for a provider. AsQueryable on List is still local. ToList is the wall. PLINQ AsParallel is in-memory CPU opt-in, not remote translation.",
+    "Follow-up: why does a local function in IQueryable Where fail?"
   ],
   "commonPitfalls": [
-    "Believing AsQueryable sends a List to SQL.",
-    "Putting a statement lambda or local function in a provider Where.",
-    "Turning this topic into an EF Core session — out of scope for this track."
+    "Believing AsQueryable sends a List to SQL — rejected; it wraps Enumerable with expression nodes then runs locally.",
+    "Strong answer: only true IQueryable from a provider translates; List.AsQueryable is still in-process.",
+    "Putting a statement lambda or local function in a provider Where — expression trees reject most statement bodies.",
+    "Turning this into an EF Core mapping session — out of scope; know Func vs Expression and the wall."
   ],
   "relatedTopicIds": [
     "csharp-12-deferred-execution",
@@ -203,6 +241,12 @@
       "concept": "No expression-tree split",
       "note": "JS passes functions. There is no compiler-built AST for array.filter that a SQL engine consumes. ORMs in Node parse functions as strings or use a DSL. C# uniquely has Expression<T> in the language.",
       "futureTopicSlug": "javascript/functions/first-class"
+    },
+    {
+      "language": "typescript",
+      "concept": "ORM query builders versus arrays",
+      "note": "Prisma/Knex build query DSLs like IQueryable expression trees. Array.filter is always Func-like in-memory execution — no translation wall unless you use an ORM.",
+      "futureTopicSlug": "typescript/databases/query-builders"
     }
   ],
   "officialSources": [

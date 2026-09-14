@@ -118,6 +118,15 @@
             "code": "public void ParseRow(ReadOnlySpan<char> line)\n{\n    var builder = new StringBuilder(line.Length);\n    builder.Append(line);\n    // builder is reachable from stack root until method returns\n}",
             "explanation": "Locals in scope are roots. After return, builder becomes collectable if unreferenced."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Inspect heap with dotnet-gcdump",
+            "code": "dotnet-gcdump collect -p <pid>\ndotnet-gcdump report <dump>.gcdump --report heapstat\n# Shows live object counts — find static caches holding graphs",
+            "explanation": "A gcdump reveals which types dominate the heap and whether static roots keep objects alive after requests end."
+          }
         }
       ]
     },
@@ -162,22 +171,52 @@
           "body": "Static caches that never evict entries. Pinning more than necessary and fragmenting the heap. Assuming GC will collect an object still referenced from an event handler closure."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Mark-and-compact is a tracing collector: roots include thread stacks, CPU registers, static fields, GCHandles, and the finalizer queue. The mark phase walks the object graph; sweep frees unreachable objects; compact relocates SOH survivors and updates every interior pointer. Server GC runs concurrent marking on multi-core hosts; workstation GC favors lower pause for UI. Pinning prevents relocation — .NET 5+ moves pins to the POH. How to prove it in production: dotnet-gcdump shows live object graphs; a memory leak with flat request count usually means a hidden root (static cache, event handler, or undisposed handle)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Phase", "What happens", "Production impact"],
+          "rows": [
+            ["Root scan", "Stacks, statics, handles, registers", "Miss a root type and you misdiagnose leaks"],
+            ["Mark", "Trace reachable graph from roots", "Large live graphs extend pause time"],
+            ["Sweep", "Reclaim unmarked objects", "Finalizable objects survive one extra cycle"],
+            ["Compact (SOH)", "Move survivors, update refs", "Pinning blocks compaction around pinned gaps"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Describing GC as 'reference counting' or claiming cycles are never collected. Strong answer: tracing mark-and-compact from roots; cycles are fine; static/event roots are the usual leak cause."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "GC starts from roots: stacks, statics, handles.",
-    "Mark follows references; compact moves survivors on SOH.",
-    "Pinning blocks compaction for that object."
+    "Mark-and-compact traces from roots (stacks, statics, handles) to find live objects, then compacts SOH survivors.",
+    "Pinning blocks compaction for that object; prefer short-lived pins on the POH (.NET 5+).",
+    "In Redis cache services, audit static dictionaries and event handlers — they are the usual hidden roots.",
+    "60s: Roots are stacks, statics, handles. Mark traces the graph. Compact moves SOH survivors. Pinning blocks move. Cycles are OK — tracing handles them.",
+    "Follow-up: how does concurrent GC in server mode change pause characteristics?"
   ],
   "commonPitfalls": [
+    "Describing GC as reference counting — that gets you rejected because CLR uses tracing, not refcounting.",
+    "Strong answer: mark-and-compact from roots; cycles collected; leaks are usually hidden roots.",
     "Long-lived static dictionaries holding large values.",
-    "Forgetting to Free() a GCHandle.",
-    "Believing unreachable cyclic graphs need reference counting — CLR GC handles cycles."
+    "Forgetting to Free() a GCHandle — pinned object stays rooted until freed."
   ],
   "relatedTopicIds": [
     "csharp-14-stack-heap-layout",
     "csharp-14-generations-soh-loh",
-    "csharp-14-finalizers-vs-dispose"
+    "csharp-14-finalizers-vs-dispose",
+    "csharp-14-pinned-heap-and-weak-references"
   ],
   "jsTsCorrelations": [
     {
@@ -185,12 +224,22 @@
       "concept": "Reachability",
       "note": "JS engines also trace from roots. Closures and globals are common hidden roots in Node services.",
       "futureTopicSlug": "javascript/runtime/gc"
+    },
+    {
+      "language": "typescript",
+      "concept": "Event listener roots",
+      "note": "An event listener closure in Node keeps outer variables alive — same as a C# event handler holding a delegate that captures locals. Both are hidden GC roots.",
+      "futureTopicSlug": "typescript/runtime/gc-roots"
     }
   ],
   "officialSources": [
     {
       "title": "Fundamentals of garbage collection",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/fundamentals"
+    },
+    {
+      "title": "dotnet-gcdump diagnostic tool",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump"
     }
   ],
   "scenarioTag": "redis-cache",

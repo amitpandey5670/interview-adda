@@ -142,18 +142,54 @@
           "body": "Matching Scheme strings with different casing from the wire — normalize to a canonical case first. A discard arm that authenticates as guest. Mutating Roles on a shared AuthDecision across concurrent requests — copy with with instead. Matching Version: \"1.3\" when the LMS sends \"1.3.0\"."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: model auth providers as discriminated records with an explicit Scheme tag — the same design as TypeScript discriminated unions. Integration tests should deserialize every LMS payload shape (LTI 1.3, OIDC bearer, API key) and assert the switch returns the expected AuthDecision; feed an unknown Scheme and assert 401, not guest access. Log the unmatched token shape in the discard arm for security audits without leaking secrets."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Discriminated union records — TypeScript analogue in C#",
+            "code": "public abstract record AuthToken;\npublic sealed record LtiToken(string Issuer, string Version) : AuthToken;\npublic sealed record OidcBearer(DateTimeOffset Expires) : AuthToken;\npublic sealed record ApiKeyToken(string KeyId) : AuthToken;\n\nAuthDecision Decide(AuthToken token) => token switch\n{\n    LtiToken { Version: var v } when v.StartsWith(\"1.3\") => AllowLti(v),\n    OidcBearer { Expires: var exp } when exp > DateTimeOffset.UtcNow => AllowOidc(),\n    ApiKeyToken { KeyId: var id } => AllowApiKey(id),\n    _ => throw new UnauthorizedAccessException($\"unknown token shape: {token.GetType().Name}\")\n};",
+            "explanation": "Lines 1–4: closed hierarchy like TS union on kind. Line 7: positional + property patterns narrow like discriminated union narrowing. Line 11: discard throws — never silent guest."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Design", "Pros", "Cons"],
+          "rows": [
+            ["Record hierarchy + switch", "Exhaustive, testable", "More types than booleans"],
+            ["Property patterns on one DTO", "Fewer types", "Easy to miss field combinations"],
+            ["Scattered if (token.IsLti)", "Quick hack", "Combinatorial bugs in production"],
+            ["TS discriminated union", "Compile-time narrow", "Erased at runtime — C# keeps types"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "A _ arm that grants guest or admin access on unknown tokens. Matching Scheme strings without normalizing casing from the wire. Mutating Roles on a shared AuthDecision across concurrent requests instead of with snapshot. Saying C# has no equivalent to TypeScript discriminated unions — record hierarchies plus switch are the pattern."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Encode providers as data; switch on shape, not on scattered booleans.",
-    "Unknown or expired tokens throw or return a failed decision — never a privileged default.",
-    "when and helper predicates handle prefix versions that constants miss.",
-    "with copies the decision for extra roles without mutating the original."
+    "Model auth providers as discriminated records (LTI, OIDC, API key) — switch on shape like TypeScript union narrowing.",
+    "Unknown or expired tokens throw or return failed decision — never a privileged discard default.",
+    "In production, integration tests per wire shape plus one garbage payload prove the discard arm rejects.",
+    "60s: Record hierarchy = discriminated union. Switch expression narrows. when for version prefixes. with snapshots decisions. Discard throws on unknown.",
+    "Follow-up: how do property patterns differ from matching a single Kind discriminator field?"
   ],
   "commonPitfalls": [
-    "Matching Scheme strings with different casing from the wire.",
-    "A _ arm that authenticates as guest.",
-    "Mutating Roles on a shared AuthDecision across concurrent requests."
+    "A _ arm that authenticates as guest gets you rejected — unknown token must fail closed.",
+    "Matching Scheme strings with different casing from the wire without normalization.",
+    "Strong answer: 'Sealed record per provider. Switch narrows like TS union. Discard throws Unauthorized. with for immutable role updates under concurrency.'"
   ],
   "relatedTopicIds": [
     "csharp-11-switch-expressions",
@@ -166,8 +202,14 @@
     {
       "language": "typescript",
       "concept": "Discriminated union narrowing",
-      "note": "type Token = { kind: 'lti'; issuer: string } | { kind: 'bearer'; exp: number }. TypeScript narrows on kind. C# property patterns are the equivalent without a required tag if you match several fields.",
+      "note": "type Token = { kind: 'lti'; issuer: string } | { kind: 'bearer'; exp: number }. TypeScript narrows on kind. C# sealed record hierarchy + switch expression is the runtime-preserved equivalent — types survive after compile.",
       "futureTopicSlug": "typescript/types/discriminated-unions"
+    },
+    {
+      "language": "javascript",
+      "concept": "Tagged union with switch on shape",
+      "note": "JS uses if (token.kind === 'lti') chains without compile-time exhaustiveness. C# switch on record types gives CS8509 when you add a provider and forget an arm — critical for auth code paths.",
+      "futureTopicSlug": "javascript/objects/discriminators"
     }
   ],
   "officialSources": [

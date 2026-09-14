@@ -141,18 +141,54 @@
           "body": "Using _ => 0 as a silent default for token time-to-live or role assignment. Overlapping relational arms in the wrong order so a later arm never runs. Expecting fall-through like C or older JavaScript switch. Assuming enums are closed at run time — an enum can hold any int, so keep a discard arm."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: exhaustiveness is a compile-time contract — when you add a new enum member or auth scheme record, a missing switch arm becomes CS8509 or a nullable analysis warning. For enums cast from wire values, the compiler cannot prove closure — keep _ => throw new ArgumentOutOfRangeException(nameof(token), token, null). Roslyn unreachable-arm diagnostics (CS8510) catch overlapping relational patterns before code review. In integration tests, feed every known token shape and one garbage int to prove the discard arm throws instead of defaulting to admin."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exhaustiveness on closed records versus open enums",
+            "code": "public enum AuthScheme { Lti, Oidc, ApiKey }\n\n// Compiler-checked when all enum members covered:\nstring MapScheme(AuthScheme scheme) => scheme switch\n{\n    AuthScheme.Lti => \"lti\",\n    AuthScheme.Oidc => \"oidc\",\n    AuthScheme.ApiKey => \"apikey\"\n};\n\n// Runtime enum from wire — NOT closed; discard required:\nAuthDecision Decide(int rawScheme, Token token) => rawScheme switch\n{\n    1 => MapLti(token),\n    2 => MapOidc(token),\n    3 => MapApiKey(token),\n    _ => throw new ArgumentOutOfRangeException(nameof(rawScheme), rawScheme, \"unknown scheme\")\n};",
+            "explanation": "Line 5: compiler proves exhaustiveness on AuthScheme. Line 12: int from JSON can be any value — _ arm is mandatory; silent default would be a security bug."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Situation", "Exhaustiveness", "Safe pattern"],
+          "rows": [
+            ["Closed enum in code", "Compiler-enforced", "List every member; no discard needed"],
+            ["Enum/int from wire", "Not closed at runtime", "_ => throw ArgumentOutOfRangeException"],
+            ["Record union with tag", "Property patterns + discard", "Match Scheme field explicitly"],
+            ["Silent _ => default", "Compiles but dangerous", "Never for auth or TTL"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying C# enums are always exhaustively checked at runtime — any int can be cast to an enum. Using _ => 0 or _ => Guest for auth decisions. Not knowing first-match-wins means arm order is semantic. Expecting fall-through like JavaScript switch without break."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Switch expressions return a value and should be exhaustive (or use _).",
-    "First matching arm wins; order is part of the spec.",
-    "Enums are not closed at run time; keep a discard.",
-    "Throw on unknown auth schemes; never fall through to the privileged mode."
+    "Switch expressions return a value; the compiler checks exhaustiveness on closed types and warns on unreachable arms.",
+    "Enums from wire data are not closed — always keep _ => throw; never silent default for auth or TTL.",
+    "In production, add a new enum member and let CS8509 force you to update every switch before merge.",
+    "60s: Switch expression returns a value. First match wins. Compiler exhaustiveness on closed enums. Open wire values need discard throw. TypeScript never helper is the analogue.",
+    "Follow-up: what diagnostic do you get when an arm is subsumed by an earlier pattern?"
   ],
   "commonPitfalls": [
-    "Using _ => 0 as a silent default for token TTL or role.",
-    "Overlapping relational arms in the wrong order so a later arm never runs.",
-    "Expecting fall-through like C or older JS switch."
+    "Saying enums are closed at runtime gets you rejected — any int casts to enum; discard throw is mandatory on wire data.",
+    "Using _ => 0 as a silent default for token TTL or role assignment.",
+    "Strong answer: 'Closed enum — compiler enforces arms. Wire int — _ throws ArgumentOutOfRangeException. Auth never gets a privileged discard default.'"
   ],
   "relatedTopicIds": [
     "csharp-11-pattern-kinds",

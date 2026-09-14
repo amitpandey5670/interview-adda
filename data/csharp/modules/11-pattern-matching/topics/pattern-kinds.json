@@ -146,18 +146,54 @@
           "body": "Writing && inside a pattern instead of and. Matching [a, b] on an IEnumerable that is not a countable list — list patterns need an indexer sequence. Putting a var catch-all arm before specific arms, making later arms unreachable. Using constant \"1.3\" when the wire sends \"1.3.0\" — normalize or add a when guard."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: property patterns on records are how you implement discriminated unions without a single Kind field — match Scheme and Version together. List patterns on CSV import rows catch ragged shapes at parse time instead of IndexOutOfRangeException later. Roslyn CS8510 flags unreachable arms when a var or _ catch-all sits before specific property patterns — run dotnet build with warnings as errors in CI."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Property patterns as discriminated union without explicit tag",
+            "code": "public sealed record WireToken(string Scheme, string? Issuer, int? Exp);\n\nstring Classify(WireToken t) => t switch\n{\n    { Scheme: \"LTI\", Issuer: not null } => \"lti\",\n    { Scheme: \"Bearer\", Exp: > 0 } => \"oidc\",\n    { Scheme: \"ApiKey\" } => \"apikey\",\n    _ => throw new ArgumentException(\"unknown wire shape\", nameof(t))\n};\n\n// List pattern on CSV row — ragged import guard:\nbool IsValidRow(string[] cols) => cols switch\n{\n    [_, \"SKU\", .., var price] when decimal.TryParse(price, out _) => true,\n    _ => false\n};",
+            "explanation": "Line 5: property patterns match multiple fields like TS union without kind if Scheme is reliable. Line 12: list pattern with .. slice validates CSV shape before allocation."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern kind", "Use when", "Pitfall"],
+          "rows": [
+            ["Property on record", "Discriminated union by fields", "Overlapping arms — check order"],
+            ["Positional", "Deconstruct-friendly records", "Requires positional record syntax"],
+            ["List with ..", "CSV / ragged arrays", "Needs indexer sequence, not bare IEnumerable"],
+            ["Relational", "Score bands, TTL ranges", "Later arms unreachable if order wrong"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Using && inside a pattern instead of and. Matching list patterns on IEnumerable without an indexer. Putting var catch-all before specific property patterns. Confusing TypeScript destructuring (runtime, may be undefined) with C# list patterns (compile-checked, fails to next arm)."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Declaration patterns introduce a variable only on the success path.",
-    "Relational plus and/or/not express ranges; order of switch arms is semantic.",
-    "Property patterns match records without Deconstruct; positional patterns need it.",
-    "List patterns plus .. are for sequences whose shape varies, such as CSV."
+    "Pattern kinds — declaration, property, relational, list, logical — compose in switch arms; order is semantic.",
+    "Property patterns implement discriminated-union-style narrowing on records without a single tag field.",
+    "List patterns with .. guard CSV ragged rows; require countable indexer sequences.",
+    "60s: Property patterns = multi-field union narrow. List + .. for import shapes. and/or/not not &&. var catch-all last or CS8510 unreachable arm.",
+    "Follow-up: when is a positional pattern preferable to property patterns on a record?"
   ],
   "commonPitfalls": [
-    "Writing && inside a pattern instead of and.",
-    "Matching [a, b] on an IEnumerable that is not a list — list patterns need a countable indexer sequence.",
-    "Using var x as a catch-all before more specific arms, making them unreachable."
+    "Writing && inside a pattern instead of and gets you rejected — use and, or, not combinators.",
+    "Matching [a, b] on IEnumerable without indexer — list patterns need IList or array.",
+    "Strong answer: 'Property patterns for auth records. List patterns for CSV. Relational for score bands. Catch-all last. Discard throws on unknown.'"
   ],
   "relatedTopicIds": [
     "csharp-11-switch-expressions",
@@ -170,6 +206,12 @@
       "concept": "Destructuring arrays and objects",
       "note": "const [_, kind, ...rest] = row is runtime destructuring. C# list patterns are compile-checked matches that can fail to the next arm. JavaScript destructuring throws or yields undefined.",
       "futureTopicSlug": "javascript/syntax/destructuring"
+    },
+    {
+      "language": "typescript",
+      "concept": "Discriminated union field matching",
+      "note": "TS narrows on token.kind === 'lti'. C# property patterns match { Scheme: 'LTI', Issuer: not null } in one arm — multiple fields at once without a single required discriminator, though explicit tags are clearer.",
+      "futureTopicSlug": "typescript/types/discriminated-unions"
     }
   ],
   "officialSources": [

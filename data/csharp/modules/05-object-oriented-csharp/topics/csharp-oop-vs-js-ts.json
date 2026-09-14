@@ -163,16 +163,57 @@
           "body": "When debugging a .NET exception, `is IAttemptStore` and interface names appear in stack traces. A TypeScript interface name never appears at runtime because it was erased during compilation."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The fundamental split is **metadata preservation versus type erasure**. Roslyn emits Intermediate Language (IL) where type names, access modifiers, interface implementations, and virtual slots survive as Common Language Runtime (CLR) metadata. The Just-In-Time compiler (JIT) uses that metadata for `is`/`as` checks, virtual dispatch, and access enforcement. TypeScript erases interfaces, type aliases, and access modifiers — the emitted JavaScript is plain objects and functions. That means C# `private` is enforced at runtime; TypeScript `private` is a compile-time fiction. C# nominal typing rejects `CacheEntry entry = hint` even when shapes match; TypeScript structural typing allows it. C# has real value types (`struct`, `record struct`) that copy by value and can implement `IEquatable<T>` without heap allocation; JavaScript has no user-defined value types. How to prove it in production: a .NET stack trace shows `IAttemptStore.SaveAsync` and interface names; a Node.js stack trace shows function names only — no `IAttemptStore`. Use `obj is IAttemptStore` in C# for runtime type checks; in TypeScript you need `instanceof` on a class or duck-typing with no compiler guarantee."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Runtime behavior", "C# (CLR)", "JavaScript / TypeScript"],
+          "rows": [
+            ["Type survives compilation", "IL metadata loaded by CLR", "Erased — only constructors/functions remain"],
+            ["Interface type check", "`is IAttemptStore` at runtime", "Interfaces do not exist at runtime"],
+            ["Privacy", "CLR enforces access modifiers", "TS private erased; JS #field is per-instance"],
+            ["Equality in collections", "Equals + GetHashCode contract", "Map uses SameValueZero (like ===)"],
+            ["Virtual dispatch", "Fixed vtable slots (virtual/override)", "Mutable prototype chain lookup"],
+            ["Nominal vs structural", "Must declare relationship", "Compatible shapes assign freely"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Runtime interface check — no TypeScript equivalent",
+            "code": "interface IAttemptStore\n{\n    Task SaveAsync(Attempt attempt, CancellationToken ct);\n}\n\nsealed class SqlAttemptStore : IAttemptStore\n{\n    public Task SaveAsync(Attempt attempt, CancellationToken ct) => Task.CompletedTask;\n}\n\nobject service = new SqlAttemptStore();\n\n// CLR inspects metadata — works at runtime\nif (service is IAttemptStore store)\n{\n    await store.SaveAsync(new Attempt(\"a-1\"), CancellationToken.None);\n}\n\n// TypeScript equivalent does NOT exist for interfaces:\n// if (service instanceof IAttemptStore) — ReferenceError, interface erased",
+            "explanation": "Line 1: C# interface is a CLR contract with metadata. Line 12: `is IAttemptStore` checks the object's implemented interfaces at runtime — this appears in stack traces and exception messages. TypeScript interfaces vanish during compilation, so `instanceof` on an interface name is a ReferenceError. This is the single fact that explains every cross-language OOP difference on this page."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying TypeScript and C# OOP are the same because both have classes — the CLR keeps types, interfaces, and virtual slots; TypeScript erases them. Claiming TypeScript private is runtime-enforced — it is not; the bundle has no access restriction. Assuming structural TypeScript typing catches the same bugs as C# nominal typing — C# rejects shape-compatible but unrelated types at compile time. Saying JavaScript has virtual dispatch like C# — prototype lookup is mutable at runtime; C# vtable slots are fixed in metadata. Strong answer: CLR preserves metadata; TypeScript erases types; that drives privacy, interfaces, equality, value types, and nominal typing."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "C# accessibility and interfaces survive as metadata; TypeScript types erase.",
-    "C# is nominally typed at runtime; TypeScript is structural at compile time.",
-    "Value types and virtual slots have no honest JavaScript equivalent."
+    "C# types survive as CLR metadata (IL); TypeScript types erase — interfaces, access modifiers, and type aliases vanish in the JavaScript output.",
+    "C# is nominally typed at runtime (must declare relationship); TypeScript is structurally typed at compile time (compatible shapes assign freely).",
+    "In production, .NET stack traces show interface names like IAttemptStore; Node.js traces show function names only — no erased TypeScript interface.",
+    "60s: CLR keeps types; TypeScript erases them. C# private is runtime-enforced; TS private is compile-time only. is IAttemptStore works at runtime; TS interfaces do not exist at runtime. C# has value types and Equals/GetHashCode; JS has === reference equality. Nominal vs structural is the API-boundary difference.",
+    "Follow-up: give an example where TypeScript structural typing allows an assignment C# would reject at compile time."
   ],
   "commonPitfalls": [
-    "Calling TypeScript private the same as C# private.",
-    "Assuming a TypeScript interface will exist in a stack trace."
+    "Saying TypeScript private equals C# private — that gets rejected because TS private is erased and has no runtime enforcement.",
+    "Strong answer: CLR metadata enforces access, interfaces, and virtual slots; TypeScript types exist only at compile time.",
+    "Assuming a TypeScript interface name appears in a runtime stack trace — it was erased during compilation.",
+    "Treating JavaScript prototype lookup as equivalent to C# virtual dispatch — prototypes are mutable; CLR vtable slots are fixed in metadata."
   ],
   "relatedTopicIds": [
     "csharp-04-access-modifiers",

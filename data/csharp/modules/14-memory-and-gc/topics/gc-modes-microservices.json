@@ -11,7 +11,7 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Workstation garbage collection uses one heap and favors lower latency for desktop apps. Server garbage collection creates one heap per logical processor for higher throughput in services. In containers, set GCHeapHardLimit or GCHeapHardLimitPercent so the runtime does not assume all host RAM is available. DATAS (Dynamic Adaptation To Application Sizes) adjusts heap size based on actual memory pressure in modern .NET."
+          "text": "Workstation garbage collection uses one heap and favors lower pause latency for interactive desktop apps — background GC runs concurrently while the app thread continues. Server garbage collection creates one heap per logical processor for higher throughput in multi-threaded services; collections can run in parallel across heaps. In containers, set GCHeapHardLimit or GCHeapHardLimitPercent so the runtime does not assume all host RAM is available. DATAS (Dynamic Adaptation To Application Sizes, enabled via System.GC.DynamicAdaptationMode) shrinks heaps when load is light and grows under pressure — ideal for variable-traffic APIs."
         },
         {
           "type": "glossary",
@@ -119,6 +119,15 @@
             "code": "dotnet-counters monitor --process-id <pid> \\\n  System.Runtime[alloc-rate,gen-0-gc-count,gen-2-gc-count,gc-heap-size]",
             "explanation": "Watch allocation rate and collection counts under load before changing GC modes."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Compare server vs workstation pause times",
+            "code": "dotnet-counters monitor -p <pid> \\\n  System.Runtime[time-in-gc,gc-heap-size,% time in gc since last gc]\n# Server GC: higher throughput, longer individual pauses on multi-core\n# Workstation GC: shorter pauses, lower throughput on many-core hosts",
+            "explanation": "Measure pause characteristics before switching GC modes. Server GC trades per-pause latency for aggregate throughput."
+          }
         }
       ]
     },
@@ -147,17 +156,46 @@
           "body": "Calling GC.Collect() in request handlers. Running workstation GC on a 16-core API pod. Omitting heap limits in memory-constrained containers. Changing GC mode without measuring pause times and throughput."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Server GC allocates one heap per logical processor and can collect heaps in parallel — best for throughput on multi-core ASP.NET hosts. Workstation GC uses a single heap with background/concurrent collection — best for UI apps needing shorter individual pauses. DATAS (Dynamic Adaptation To Application Sizes) lets the runtime shrink heaps during low traffic and expand under load, reducing idle memory in Kubernetes. Container tuning: GCHeapHardLimitPercent caps managed heap relative to cgroup limit. How to prove it in production: dotnet-counters time-in-gc and gc-heap-size before and after enabling DATAS or changing GC mode; fix alloc-rate first."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Mode", "Heaps", "Best for", "Risk"],
+          "rows": [
+            ["Server GC", "One per logical CPU", "ASP.NET APIs, high concurrency", "Longer individual pauses on full GC"],
+            ["Workstation GC", "Single heap", "Desktop UI, low-core containers", "Lower throughput on 8+ core servers"],
+            ["DATAS enabled", "Dynamic heap sizing", "Variable-traffic microservices", "Heap growth lag on sudden spikes"],
+            ["GC.Collect in code", "Forced full collection", "Almost never in app code", "STW pauses, fights the runtime"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Recommending GC.Collect() in request handlers or workstation GC on a 16-core API without measuring. Strong answer: server GC + container heap limit + DATAS; fix allocations before tuning modes."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "ASP.NET Core defaults to server GC for throughput.",
-    "Containers need heap hard limits aligned with cgroup memory.",
-    "Fix allocation rate before tweaking GC; never Collect in the hot path."
+    "Server GC uses one heap per logical processor for throughput; workstation GC uses one heap for lower per-pause latency.",
+    "DATAS shrinks heaps under light load — enable via System.GC.DynamicAdaptationMode for variable-traffic APIs.",
+    "In Kubernetes, set GCHeapHardLimitPercent to match cgroup memory minus native overhead; never GC.Collect in requests.",
+    "60s: ASP.NET defaults server GC. Containers need heap hard limits. DATAS adapts heap size. Fix alloc-rate before changing modes. Never Collect in hot path.",
+    "Follow-up: when would you choose workstation GC in a containerized API?"
   ],
   "commonPitfalls": [
-    "GC.Collect() sprinkled in business code.",
-    "No heap limit in Kubernetes.",
-    "Switching to workstation GC on servers without a reason."
+    "GC.Collect() in request handlers — gets you rejected because it forces STW pauses and fights the runtime heuristics.",
+    "Strong answer: server GC + heap hard limit + DATAS; measure with dotnet-counters; fix allocation traps first.",
+    "No heap limit in Kubernetes — process OOM-killed while GC thinks it has gigabytes.",
+    "Switching to workstation GC on a 16-core server without measuring throughput regression."
   ],
   "relatedTopicIds": [
     "csharp-14-generations-soh-loh",
@@ -171,6 +209,12 @@
       "concept": "Heap limits",
       "note": "Node uses --max-old-space-size. .NET uses GCHeapHardLimitPercent and respects cgroups in modern runtimes.",
       "futureTopicSlug": "javascript/runtime/memory-limits"
+    },
+    {
+      "language": "typescript",
+      "concept": "Worker thread isolates",
+      "note": "Each Node worker has a separate V8 isolate with its own heap — like server GC's per-heap model, but without DATAS or container-aware tuning knobs.",
+      "futureTopicSlug": "typescript/runtime/worker-heaps"
     }
   ],
   "officialSources": [

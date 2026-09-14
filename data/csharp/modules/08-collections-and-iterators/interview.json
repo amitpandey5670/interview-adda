@@ -4,39 +4,93 @@
   "items": [
     {
       "question": "List<T> versus array versus Dictionary — how do you choose?",
-      "answer": "Array when the length is known and will not change (a decoded SQS batch you will not grow). List<T> when you append. Dictionary when the operation is lookup by key (Redis-style cache, auth tenant map). HashSet when the question is membership. Queue when order is FIFO and you drain from the front.",
+      "answer": "Array when the length is known and will not change (a decoded SQS batch you will not grow). List<T> when you append. Dictionary when the operation is lookup by key (Redis-style cache, auth tenant map). HashSet when the question is membership. Queue when order is FIFO and you drain from the front. Pre-size Dictionary with expected count to avoid resize GC spikes.",
       "followUps": [
         "Why is List<T> not a concurrent structure?",
-        "When would you use ImmutableArray instead?"
+        "When would you use FrozenDictionary instead?"
       ],
-      "sixtySeconds": "Array = fixed. List = grow. Dictionary = key. HashSet = unique. Queue = FIFO. None of them replace Channel for multi-producer work."
+      "sixtySeconds": "Array = fixed. List = grow. Dictionary = key with comparer and capacity hint. HashSet = unique. Queue = FIFO. None replace Channel for multi-producer work or Redis for cross-process."
+    },
+    {
+      "question": "What happens internally when a Dictionary grows beyond its load factor?",
+      "answer": "Dictionary doubles its bucket array and rehashes every existing entry into the new buckets. Each resize is a gen-0 allocation plus O(n) rehash work. Without a capacity hint, inserting 100k items triggers roughly log₂(100k) resizes. In production, pass the expected count to the constructor and watch gen-0-gc-count with dotnet-counters during bulk loads.",
+      "followUps": [
+        "What is the default load factor?",
+        "How does IEqualityComparer affect bucket placement?"
+      ],
+      "sixtySeconds": "Load factor ~72%. Exceed it → double buckets, rehash all entries. Pre-size with expected count. Bad comparer or mutable keys break lookups silently."
+    },
+    {
+      "question": "Why does Dictionary need IEqualityComparer and when do you supply one?",
+      "answer": "Dictionary places entries using GetHashCode for bucket index and Equals for chain collision resolution. If those disagree, lookups fail. string keys default to EqualityComparer<string>.Default (ordinal). HTTP headers need StringComparer.OrdinalIgnoreCase. Struct keys need a custom comparer because the default struct equality uses reflection. Always pass the same comparer to Dictionary and HashSet.",
+      "followUps": [
+        "What happens if a key's hash code changes after insert?",
+        "How does this compare to JavaScript Map equality?"
+      ],
+      "sixtySeconds": "GetHashCode picks bucket, Equals resolves collisions. Supply comparer for case-insensitive strings and struct keys. Keys must be immutable after insert. JS Map uses SameValueZero; C# is configurable."
     },
     {
       "question": "What does foreach actually call?",
-      "answer": "It obtains an enumerator via GetEnumerator (instance or extension), then loops on MoveNext and Current. Types need not implement IEnumerable if they have the right pattern. A null collection throws NullReferenceException. await foreach is the IAsyncEnumerable path — module 13.",
+      "answer": "It obtains an enumerator via GetEnumerator (instance or extension), then loops on MoveNext and Current inside a try/finally that calls Dispose. Types need not implement IEnumerable if they have the right pattern. List<T>.Enumerator is a struct — returning IEnumerable<T> from a method may box it. A null collection throws NullReferenceException. await foreach is the IAsyncEnumerable path — module 13.",
       "followUps": [
         "What happens if you mutate a List while foreach is running?",
-        "Why can foreach use a struct enumerator?"
+        "Why can foreach use a struct enumerator without boxing?"
       ],
-      "sixtySeconds": "foreach is MoveNext/Current. Null throws. Mutation of List invalidates the enumerator. Async version is later."
+      "sixtySeconds": "foreach is MoveNext/Current/Dispose. Null throws. List mutation invalidates enumerator via version counter. Struct enumerator boxes only when returned as IEnumerable."
     },
     {
       "question": "Why can yield return surprise you in a CSV importer?",
-      "answer": "The method returns immediately with an iterator object. The file is not read until foreach. A second foreach opens the file again. Exceptions surface at MoveNext, not at the call. If you need a snapshot, call ToList once.",
+      "answer": "The method returns immediately with an iterator object. The file is not read until foreach. A second foreach opens the file again. Exceptions surface at MoveNext, not at the call. The compiler generates a state machine class on the heap. If you need a snapshot, call ToList once.",
       "followUps": [
         "What does yield break do?",
         "Can you mix yield return and return in the same method?"
       ],
-      "sixtySeconds": "yield is deferred. Two enumerations, two passes. ToList to materialize. Do not hold a live SqlDataReader across both."
+      "sixtySeconds": "yield is deferred state machine. Two enumerations, two passes. ToList to materialize. Exceptions at MoveNext, not call site. Do not hold SqlDataReader across both passes."
     },
     {
       "question": "Are collection expressions lazy like LINQ?",
-      "answer": "No. Microsoft documents that a collection expression always creates a collection holding every element, even if the target type is IEnumerable<T>. Use them for literals and spreads, not for infinite sequences.",
+      "answer": "No. Microsoft documents that a collection expression always creates a collection holding every element, even if the target type is IEnumerable<T>. [..File.ReadLines(\"huge.csv\")] loads the entire file into memory. Use them for literals and spreads of already-materialized data, not for infinite or streaming sequences.",
       "followUps": [
         "When were they introduced?",
         "Can they initialize Span<T>?"
       ],
-      "sixtySeconds": "C# 12. Eager. Can target arrays, List, Span, interfaces. Not a LINQ query."
+      "sixtySeconds": "C# 12. Eager. Can target arrays, List, Span, interfaces. Not a LINQ query. Never spread a deferred IEnumerable over a large file."
+    },
+    {
+      "question": "When would you use FrozenDictionary over Dictionary?",
+      "answer": "When data is loaded once at startup and read millions of times — feature flags, route tables, tenant allow-lists. ToFrozenDictionary does extra build-time work (perfect/minimal hashing) for faster TryGetValue. It is read-only: on config reload, build a new frozen snapshot and swap the reference. It is in-process only — not Redis.",
+      "followUps": [
+        "How does FrozenDictionary differ from ImmutableDictionary?",
+        "Is ConcurrentDictionary a good substitute for read-only flags?"
+      ],
+      "sixtySeconds": "Frozen = static lookup table, max read speed, build once. Immutable = versioned snapshots with structural sharing. Neither crosses process boundaries. ConcurrentDictionary is for writes, not read-only flags."
+    },
+    {
+      "question": "Your teammate wrote a custom AsyncQueue with lock and Queue<T>. What do you say?",
+      "answer": "Name Channel<T> from System.Threading.Channels. It provides bounded capacity with backpressure, async waiting via ReadAsync/WriteAsync, and SingleReader/SingleWriter optimizations. A hand-rolled lock + Queue lacks backpressure and async integration. If the data must survive process restarts or cross Lambdas, it is SQS — not any in-process collection.",
+      "followUps": [
+        "When is a custom collection justified?",
+        "What about ConcurrentQueue for this scenario?"
+      ],
+      "sixtySeconds": "In-process async pipe → Channel<T>. Durable cross-service → SQS. Custom collection only when you can name an invariant BCL cannot express, like a fixed-capacity circular buffer with overwrite."
+    },
+    {
+      "question": "How do C# Dictionary and HashSet compare to JavaScript Map and Set at runtime?",
+      "answer": "JS Map uses SameValueZero equality — objects compared by reference, NaN equals NaN. C# Dictionary uses IEqualityComparer — configurable, required for struct keys. JS object literals coerce all keys to strings; Dictionary keeps int, Guid, and struct keys natively. JS Set is like HashSet but without a custom comparer. Neither JS Map nor Set is thread-safe; C# has ConcurrentDictionary for multi-writer scenarios.",
+      "followUps": [
+        "When would you use a JS object instead of Map?",
+        "What about Record<string, T> in TypeScript?"
+      ],
+      "sixtySeconds": "Map ≈ Dictionary with configurable equality. Set ≈ HashSet. Objects coerce keys to strings — not a real hash map. C# struct keys need IEqualityComparer. Concurrent variants only in C#."
+    },
+    {
+      "question": "An API returns IEnumerable<Order> and the caller calls Count() then foreach. What is wrong?",
+      "answer": "If the IEnumerable is deferred — yield, LINQ, or database-backed — Count() enumerates the entire sequence once and foreach does it again. That is two full passes, possibly two database round-trips. Return IReadOnlyList<Order> if the data is materialized, or document that the sequence is single-pass. If the caller needs both count and iteration, materialize once with ToList.",
+      "followUps": [
+        "What return type would you use for a paginated API?",
+        "How does this differ from IAsyncEnumerable?"
+      ],
+      "sixtySeconds": "IEnumerable may be deferred. Count + foreach = two passes. Return IReadOnlyList when materialized. ToList once if caller needs multiple walks. IAsyncEnumerable is async pull — module 13."
     }
   ]
 }

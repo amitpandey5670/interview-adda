@@ -120,6 +120,15 @@
             "code": "var primes = Enumerable.Range(2, 100_000)\n    .AsParallel()\n    .WithDegreeOfParallelism(Environment.ProcessorCount)\n    .Where(IsPrime)\n    .ToList();",
             "explanation": "PLINQ parallelizes the Where filter. Only worth it for large sequences and non-trivial predicates."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ReaderWriterLockSlim for read-heavy cache",
+            "code": "private readonly ReaderWriterLockSlim _configLock = new();\nprivate Dictionary<string, string> _config = new();\n\npublic string GetSetting(string key)\n{\n    _configLock.EnterReadLock();\n    try { return _config[key]; }\n    finally { _configLock.ExitReadLock(); }\n}\n\npublic void Reload(Dictionary<string, string> next)\n{\n    _configLock.EnterWriteLock();\n    try { _config = next; }\n    finally { _configLock.ExitWriteLock(); }\n}",
+            "explanation": "Many concurrent readers share the read lock; reload takes an exclusive write lock. Prefer ConcurrentDictionary when writes are frequent — RW lock wins on rare bulk reloads."
+          }
         }
       ]
     },
@@ -149,17 +158,47 @@
           "body": "Task.Run for trivial work — overhead exceeds benefit. PLINQ on ten items. Blocking .Result on pool threads causing starvation. Using Parallel when work is I/O-bound — use async instead."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: the thread pool uses hill-climbing to adjust worker count — blocking sync I/O on pool threads raises ThreadPool Queue Length and delays async continuations. Use dotnet-counters (System.Runtime threadpool-queue-length, threadpool-thread-count) during load tests. ReaderWriterLockSlim allows many readers or one writer — good for config snapshots reloaded rarely; ConcurrentDictionary beats it when entries mutate continuously. Task Parallel Library (TPL) work steals through the pool; nested Parallel.ForEach without MaxDegreeOfParallelism can oversubscribe CPU."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["API", "Pool impact", "When to choose"],
+          "rows": [
+            ["Task.Run", "Queues CPU work; consumes pool thread", "Offload CPU from ASP.NET request thread"],
+            ["Parallel.ForEach", "Partitions work; can oversubscribe", "Large in-memory batches with expensive per-item CPU"],
+            ["PLINQ", "Same as Parallel under the hood", "LINQ-style filters on big sequences"],
+            ["ReaderWriterLockSlim", "Blocks readers/writers on same lock object", "Rare bulk reload; many concurrent readers"],
+            ["ConcurrentDictionary", "Fine-grained internal locking", "Per-key updates; cache maps; single-flight tables"],
+            ["async/await I/O", "Releases pool thread during wait", "Redis, HTTP, SQS — not Task.Run wrappers"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Task.Run on every controller action 'to be async' — adds pool scheduling without freeing threads during I/O. Using ReaderWriterLockSlim for a hot per-request cache with constant writes — write lock convoys destroy throughput. PLINQ on small collections because 'parallel is faster'. Not knowing pool starvation shows up as rising latency on unrelated endpoints."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Thread pool reuses threads; Task.Run is for CPU-bound work off the caller thread.",
-    "async/await is for I/O; do not confuse with data parallelism.",
-    "PLINQ and Parallel need enough work to justify thread coordination cost."
+    "Thread pool reuses worker threads; Task.Run and Parallel move CPU-bound work off the caller; async/await frees threads during I/O waits.",
+    "ReaderWriterLockSlim fits read-heavy, rarely reloaded snapshots; ConcurrentDictionary fits per-key churn — wrong choice causes write-lock convoys.",
+    "In production, monitor threadpool-queue-length with dotnet-counters when latency spikes — blocking .Result or sync I/O on pool threads starves continuations.",
+    "60s: async for I/O. Task.Run/Parallel/PLINQ for CPU-bound batches. RW lock for rare bulk reload with many readers. Profile pool queue before adding parallelism.",
+    "Follow-up: why does nested Parallel.ForEach without MaxDegreeOfParallelism hurt more than help?"
   ],
   "commonPitfalls": [
-    "Task.Run wrapping already-async I/O.",
-    "Unbounded Parallel.ForEach on millions of tiny items.",
-    "Blocking waits that starve the pool."
+    "Saying 'Task.Run makes code async' gets you rejected — it queues CPU work; only true async I/O releases the thread during wait.",
+    "ReaderWriterLockSlim on a per-request mutable map — writers block all readers constantly.",
+    "Strong answer: 'Pool threads are shared. CPU work via Task.Run with cancellation. RW lock only for rare reloads. dotnet-counters for queue length under load.'"
   ],
   "relatedTopicIds": [
     "csharp-13-why-async",
@@ -174,6 +213,12 @@
       "concept": "worker_threads",
       "note": "Node worker_threads are the JS analogue for CPU parallelism. The main thread event loop is closer to async I/O in C#.",
       "futureTopicSlug": "javascript/concurrency/worker-threads"
+    },
+    {
+      "language": "typescript",
+      "concept": "Promise.all vs pool scheduling",
+      "note": "Promise.all composes concurrent I/O on one thread. C# Task.WhenAll also composes waits but pool threads execute continuations — blocking one blocks unrelated work.",
+      "futureTopicSlug": "typescript/async/concurrency"
     }
   ],
   "officialSources": [
@@ -184,6 +229,10 @@
     {
       "title": "Parallel LINQ (PLINQ)",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/parallel-linq-plinq"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "scenarioTag": "csv-import"

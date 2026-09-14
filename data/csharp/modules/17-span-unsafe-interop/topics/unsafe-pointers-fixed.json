@@ -147,17 +147,54 @@
           "body": "Long-lived pinned handles — heap fragmentation. Returning pointer from method after fixed ends — use-after-free. Spreading unsafe through business layers instead of one interop shim."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: pinning large byte[] for an entire HTTP request shows as POH (Pinned Object Heap) growth in dotnet-gcdump — keep fixed blocks scoped to the native call. AllowUnsafeBlocks should be enabled only on the interop project, not the whole solution. LibraryImport with Span often eliminates hand-written fixed entirely; unsafe is the escape hatch when SkiaSharp or legacy SDKs demand raw pointers."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "fixed block scoped to native call — prefer Span when possible",
+            "code": "public static unsafe void CopyToNative(ReadOnlySpan<byte> source, byte* dest, int len)\n{\n    fixed (byte* p = source)\n    {\n        Buffer.MemoryCopy(p, dest, len, len);\n    } // p invalid after block — same as detached ArrayBuffer\n}\n\n// Prefer when BCL accepts Span:\n// LibraryImport stub taking Span<byte> avoids manual fixed",
+            "explanation": "Line 3: fixed pins only inside block. Line 6: pointer invalid after brace — use-after-free if dest outlives block. Line 9: LibraryImport + Span is the modern default."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Tool", "Pin duration", "Prefer when"],
+          "rows": [
+            ["fixed statement", "Block scope", "Legacy SDK needs byte*"],
+            ["GCHandle.Alloc", "Until freed", "Longer pin — avoid if possible"],
+            ["LibraryImport + Span", "Call duration auto", "New interop default"],
+            ["unsafe everywhere", "Team risk", "Never — one shim project"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Returning a pointer from a method after fixed ends. AllowUnsafeBlocks on the entire solution. Pinning a large array for the whole request. Not knowing pinning blocks GC compaction and causes fragmentation. Spreading unsafe through business layers instead of one interop box."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "unsafe enables pointers; fixed pins objects during native calls.",
-    "Pinning prevents compaction — keep fixed blocks short.",
-    "Prefer Span and LibraryImport over hand-written unsafe when possible."
+    "unsafe and fixed pin managed objects for native pointers — pointer invalid after fixed block ends.",
+    "Pinning prevents heap compaction — keep fixed blocks short; POH growth in gcdump signals long pins.",
+    "Prefer LibraryImport with Span over hand-written fixed for new interop.",
+    "60s: unsafe in one shim project. fixed pins for call scope only. Span/LibraryImport first. Never return pointer after fixed. POH fragmentation from long pins.",
+    "Follow-up: when is GCHandle preferable to fixed?"
   ],
   "commonPitfalls": [
-    "Pointer used after fixed block ends.",
-    "AllowUnsafeBlocks on entire solution unnecessarily.",
-    "Pinning large arrays for entire request lifetime."
+    "Pointer used after fixed block ends gets you rejected — same as detached ArrayBuffer use-after-free.",
+    "AllowUnsafeBlocks on entire solution instead of isolated interop project.",
+    "Strong answer: 'One unsafe shim. fixed scoped to call. LibraryImport+Span default. gcdump POH for long-pin leaks. Business code stays safe.'"
   ],
   "relatedTopicIds": [
     "csharp-17-pinvoke-awareness",
@@ -170,6 +207,12 @@
       "concept": "Native addons",
       "note": "Node N-API uses C++ pointers. C# unsafe is the in-language way to do similar pinning before calling native code.",
       "futureTopicSlug": "javascript/native/node-api"
+    },
+    {
+      "language": "javascript",
+      "concept": "ArrayBuffer detachment",
+      "note": "Using a Uint8Array after its ArrayBuffer is detached is use-after-free. fixed block end in C# is the same lifetime rule — pointer must not escape the pin scope.",
+      "futureTopicSlug": "javascript/buffers/arraybuffer"
     }
   ],
   "officialSources": [

@@ -4,39 +4,84 @@
   "items": [
     {
       "question": "What is LINQ, and how do query syntax and method syntax relate?",
-      "answer": "LINQ is a set of operators and language clauses that query any IEnumerable or IQueryable source with compile-time types. Query expressions (from/where/select) are translated by the compiler into method calls such as Where and Select. There is no performance difference from that translation. Operators without a keyword (Count, ToList, SelectMany's more exotic overloads) stay as methods. You can mix both in one statement.",
+      "answer": "LINQ queries any IEnumerable or IQueryable source with compile-time types. Query expressions compile to the same extension methods as method chains — identical IL and iterator allocations. Operators without keywords (Count, TryGetNonEnumeratedCount, ToList) stay as methods. Neither spelling talks to SQL unless the source is IQueryable from a provider.",
       "followUps": [
-        "Which operators have no query-syntax keyword?",
-        "Does query syntax allocate extra compared with methods?"
+        "Does let add cost?",
+        "Which style do you prefer for joins?"
       ],
-      "sixtySeconds": "Language queries over sequences. Query syntax is sugar for the same methods. Mix when a keyword does not exist."
+      "sixtySeconds": "Same operators, same cost. Query is sugar. Methods for Count and operators without keywords."
     },
     {
       "question": "Explain deferred execution and a hot-path bug you have seen.",
-      "answer": "Declaring a query does not run it. Each enumeration re-executes against the current source. On an attempt-submit reporting path, a Where on a shared list that you then Count() and later foreach will see two different snapshots, and Count already walked the filter once. ToList once, then share the list. Closing over a mutable filter flag that changes between enumerations is the same class of bug. OrderBy buffers; chaining Where after OrderBy still waits until enumeration.",
+      "answer": "A query variable stores a plan. Each enumeration re-runs the chain and allocates iterators (WhereIterator, Func delegates). Count then foreach on the same IEnumerable is two passes — on a live submit buffer, results differ between passes. ToList once to snapshot. TryGetNonEnumeratedCount avoids a full walk for Count on List/array when you also need to iterate.",
       "followUps": [
-        "Streaming versus non-streaming operators?",
-        "What does multiple enumeration of an IEnumerable from a live queue look like?"
+        "What allocates in a three-operator chain?",
+        "Streaming versus buffering operators?"
       ],
-      "sixtySeconds": "Plan versus run. Each foreach re-runs. ToList to freeze. Count then foreach is two passes."
+      "sixtySeconds": "Plan versus run. Each foreach re-runs and allocates. ToList to freeze. Count then foreach is two passes."
+    },
+    {
+      "question": "What is TryGetNonEnumeratedCount and when does it help?",
+      "answer": "Extension method that returns true when the underlying source already knows Count — List<T>, arrays, ICollection — without enumerating a deferred chain. Returns false for pure Where/Select pipelines; then materialize with ToList if you need both count and iteration. Avoids double enumeration on hot reporting paths.",
+      "followUps": [
+        "What happens when it returns false?",
+        "Is it the same as ICollection.Count?"
+      ],
+      "sixtySeconds": "True when source knows count without walking deferred chain. False on pure LINQ plan — then ToList once."
     },
     {
       "question": "IEnumerable versus IQueryable — what actually differs?",
-      "answer": "IEnumerable operators take Func delegates and run in process (LINQ to Objects). IQueryable operators take Expression<Func<...>> trees. A provider may rewrite the tree to SQL, to a search DSL, or it may throw. Calling AsQueryable on a List<T> still executes with Enumerable after a thin wrapper — it is not a database. Interview level stops here: know that statement lambdas, local functions, and many newer C# features are not in expression trees. This track does not teach Entity Framework Core mapping.",
+      "answer": "IEnumerable operators take Func delegates and run LINQ to Objects in-process with iterator allocations. IQueryable operators take Expression<Func<...>> trees; a provider may translate to SQL or throw. AsQueryable on List<T> still runs locally. ToList/AsEnumerable is the materialization wall — after it, full C# Func LINQ runs on pulled data.",
       "followUps": [
-        "What happens if you call ToList in the middle of an IQueryable chain?",
-        "Why might a provider throw on a custom instance method in a Where?"
+        "Why do local functions fail in IQueryable Where?",
+        "What does Expression.Compile do?"
       ],
-      "sixtySeconds": "Delegates in memory versus expression trees for a provider. AsQueryable on a list is still in-memory."
+      "sixtySeconds": "Func in memory versus Expression for provider. ToList is the wall. AsQueryable on List is still local."
     },
     {
       "question": "What does SelectMany buy you that Select does not?",
-      "answer": "Select maps one-to-one. SelectMany maps one-to-many and concatenates. Nested from clauses, flattening attempt.Answers per exam, and joining a jagged CSV line into cells are SelectMany. The result length is the sum of inner lengths, not the outer count. Interviewers use it to see if you confuse it with Select of a collection that you then nest-foreach.",
+      "answer": "Select maps one-to-one. SelectMany maps one-to-many and flattens — two from clauses in query syntax. Select of a collection yields IEnumerable<TInner> nested; SelectMany yields flat TInner. GroupBy after SelectMany buffers the entire flattened sequence before first yield.",
       "followUps": [
         "How do you keep the outer element while flattening?",
-        "Join versus GroupJoin versus SelectMany?"
+        "SelectMany with index overload?"
       ],
-      "sixtySeconds": "SelectMany flattens. Two from clauses. Length is sum of inners."
+      "sixtySeconds": "SelectMany flattens. Two from clauses. Length is sum of inners, not outer count."
+    },
+    {
+      "question": "Which operators stream versus buffer?",
+      "answer": "Where, Select, SelectMany, Take stream as they read — still one iterator object per operator. OrderBy, GroupBy, Reverse buffer the entire source before first yield. Knowing the difference prevents assuming GroupBy is cheap streaming on large attempt lists.",
+      "followUps": [
+        "Does OrderBy allocate the full sorted buffer?",
+        "Join behavior?"
+      ],
+      "sixtySeconds": "Where/Select stream. OrderBy/GroupBy buffer all first. Plan hot paths accordingly."
+    },
+    {
+      "question": "When is LINQ to Objects the right choice versus IQueryable?",
+      "answer": "CSV import, Redis JSON, File.ReadLines after ToList, and any data already in memory — full C# in Func lambdas. IQueryable is for translatable predicates on remote stores. Copy-pasting in-memory LINQ to IQueryable fails at runtime with NotSupportedException. Materialize with ToList, then enrich with StringComparison and custom methods.",
+      "followUps": [
+        "What predicates often fail translation?",
+        "When do you AsEnumerable mid-chain?"
+      ],
+      "sixtySeconds": "In-memory data = LINQ to Objects. Remote = translatable IQueryable. ToList wall before rich C#."
+    },
+    {
+      "question": "What iterator allocations should you worry about on a submit path?",
+      "answer": "Each deferred operator wraps the previous in a new iterator and captures lambdas as delegates — three operators means three iterator layers plus delegate allocations. Struct enumerators box when API returns IEnumerable<T>. Fixes: fold filters into one Where, ToList once at boundary, TryGetNonEnumeratedCount for count, or for-loop/Span after measurement. dotMemory shows WhereIterator and Func allocations.",
+      "followUps": [
+        "Is LINQ always slower than foreach?",
+        "When do you escape to Span?"
+      ],
+      "sixtySeconds": "Each operator adds iterator + delegate. Snapshot once. Measure with dotMemory before micro-optimizing."
+    },
+    {
+      "question": "When would you mention PLINQ (AsParallel)?",
+      "answer": "Only as a measured opt-in for CPU-bound aggregation on a large in-memory snapshot — after ToList, when profiling shows single-threaded LINQ is the bottleneck. AsParallel partitions locally; ordering is nondeterministic unless AsOrdered. Not for IQueryable, not for small collections, not the first answer to deferred execution bugs. Pointer only in this module.",
+      "followUps": [
+        "PLINQ versus Task.Parallel.ForEach?",
+        "Does AsParallel reduce iterator allocations?"
+      ],
+      "sixtySeconds": "PLINQ is measured CPU-bound opt-in on in-memory snapshots. Not default. Not for IQueryable."
     }
   ]
 }

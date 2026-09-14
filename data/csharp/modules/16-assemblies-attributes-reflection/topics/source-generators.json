@@ -118,6 +118,15 @@
             "code": "// Generator might emit:\n// partial class MessageRouter { void Route(OrderCreatedEvent e) => _order.Handle(e); }\n\n_messageRouter.Route(deserializedEvent); // compile-time typed",
             "explanation": "Hand-written code calls generated partial methods — refactor-safe unlike string reflection."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "DynamicallyAccessedMembers for trim-safe reflection",
+            "code": "public static T Deserialize<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T>(\n    string json)\n    where T : new()\n{\n    // Trimming analyzer preserves T's properties because of the annotation\n    return JsonSerializer.Deserialize<T>(json)!;\n}",
+            "explanation": "DynamicallyAccessedMembers tells the trimmer and Native AOT which metadata to keep when reflection or serializers touch T at runtime."
+          }
         }
       ]
     },
@@ -147,17 +156,46 @@
           "body": "Editing generated files manually — they regenerate on build. Generator project not referenced as analyzer. Debugging without looking at generated .g.cs in obj folder."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: source generators run at compile time — zero per-request cost. Inspect obj/generated for .g.cs output when debugging. IIncrementalGenerator caches syntax steps for faster rebuilds on large solutions. DynamicallyAccessedMembers annotates reflection entry points so trimming and Native AOT preserve required metadata; without roots, publish succeeds but runtime throws MissingMethodException. Prefer JsonSerializerContext over reflection serializers on SQS hot paths — measurable CPU drop in dotnet-counters."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Build cost", "Runtime cost"],
+          "rows": [
+            ["Reflection serializer", "Low build", "High per message — trim unsafe"],
+            ["Source generator context", "Higher compile", "Near hand-written speed — AOT safe"],
+            ["DynamicallyAccessedMembers", "Analyzer warnings", "Preserves metadata for guarded reflection"],
+            ["LibraryImport generator", "Compile P/Invoke", "No runtime marshalling stub alloc"],
+            ["Hand-written partial", "Maintenance burden", "Fastest when stable"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Calling source generators 'macros' without mentioning Roslyn IIncrementalGenerator. Ignoring DynamicallyAccessedMembers when claiming reflection works with Native AOT. Editing .g.cs files in obj. Not knowing generators execute in the analyzer process — they cannot access run-time Redis or file I/O."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Source generators emit C# at compile time — no run-time reflection cost.",
-    "JsonSerializerContext and LibraryImport are built-in generator consumers.",
-    "Prefer generators over reflection on hot paths and for Native AOT."
+    "Source generators emit C# during compilation via IIncrementalGenerator — no runtime reflection cost on hot paths.",
+    "DynamicallyAccessedMembers roots types for trimmers and Native AOT when limited reflection remains necessary.",
+    "In production, compare CPU on SQS deserialize before/after JsonSerializerContext — generators win on volume.",
+    "60s: Generators add .g.cs at compile time. JsonSerializerContext and LibraryImport are built-in. Use DynamicallyAccessedMembers for trim-safe reflection. Never edit generated files.",
+    "Follow-up: how does IIncrementalGenerator differ from the old ISourceGenerator API?"
   ],
   "commonPitfalls": [
-    "Hand-editing generated files.",
-    "Missing analyzer reference in csproj.",
-    "Generator not incremental — slow builds on large solutions."
+    "Hand-editing generated .g.cs files gets you rejected — changes vanish on next build.",
+    "Reflection serializer on hot path without trim annotations — Native AOT publish breaks silently at runtime.",
+    "Strong answer: 'Generator for compile-time code. DynamicallyAccessedMembers for remaining reflection. Profile deserialize CPU after switching from reflection.'"
   ],
   "relatedTopicIds": [
     "csharp-16-reflection",
@@ -170,12 +208,22 @@
       "concept": "OpenAPI codegen",
       "note": "openapi-typescript and similar tools mirror source generators — schema drives generated types and clients at build time.",
       "futureTopicSlug": "typescript/tooling/codegen"
+    },
+    {
+      "language": "javascript",
+      "concept": "Build-time bundler codegen",
+      "note": "Webpack/babel plugins emit helper code at build time like Roslyn generators, but JS still interprets or JITs the output — C# generators feed the same Roslyn compile to IL.",
+      "futureTopicSlug": "javascript/tooling/babel-plugins"
     }
   ],
   "officialSources": [
     {
       "title": "Source generators overview",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/roslyn-sdk/source-generators-overview"
+    },
+    {
+      "title": "Trimming and DynamicallyAccessedMembers",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/deploying/trimming/trimming-concepts"
     }
   ],
   "scenarioTag": "sqs-consumer",

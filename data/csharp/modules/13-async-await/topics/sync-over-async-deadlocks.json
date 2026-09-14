@@ -1,0 +1,288 @@
+{
+  "id": "csharp-13-sync-over-async-deadlocks",
+  "slug": "sync-over-async-deadlocks",
+  "title": "Sync-over-async deadlocks (.Result, .Wait) and thread-pool starvation",
+  "moduleId": "csharp-13-async-await",
+  "order": 9,
+  "hook": "Calling .Result or .Wait() on a Task blocks the current thread until the Task finishes. On a UI thread or thread-pool under load, that is how deadlocks and starvation happen — even in ASP.NET Core.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Sync-over-async means blocking a thread waiting for an async operation to complete — typically via task.Result, task.Wait(), or task.GetAwaiter().GetResult(). The async method's continuation may need the blocked thread (SynchronizationContext deadlock) or a free pool thread (starvation). ASP.NET Core has no request SynchronizationContext, so the classic UI deadlock does not apply — but blocking still holds a pool thread for the entire I/O wait, which under concurrent load exhausts the pool before the CPU is saturated."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Sync-over-async",
+              "plainDefinition": "Blocking a thread to wait for an async operation instead of awaiting it.",
+              "example": "var data = GetDataAsync().Result; // blocks caller thread",
+              "longForm": "Sync-over-async"
+            },
+            {
+              "term": "Thread-pool starvation",
+              "plainDefinition": "All pool threads are blocked waiting; new work queues up with idle CPUs.",
+              "example": "100 concurrent requests each calling .Result on HTTP — pool exhausted.",
+              "longForm": "Thread-pool starvation"
+            },
+            {
+              "term": "GetAwaiter().GetResult()",
+              "plainDefinition": "Blocking wait that unwraps AggregateException like .Result but works on void-returning async.",
+              "example": "SomeAsync().GetAwaiter().GetResult();",
+              "longForm": "GetAwaiter().GetResult()"
+            },
+            {
+              "term": "Sync context deadlock",
+              "plainDefinition": "Blocked thread is the only thread the continuation can run on.",
+              "example": "UI thread blocked in .Result; continuation needs UI thread.",
+              "longForm": "Sync context deadlock"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A library method that calls .Result internally works in a unit test but deadlocks in WinForms or classic ASP.NET. In ASP.NET Core, the same pattern does not deadlock but caps throughput: each blocked request holds a Kestrel thread-pool thread for the full Redis or HTTP latency. At 200 concurrent requests with 50 ms I/O, you need 200 blocked threads — the pool grows slowly (hill-climbing) and requests queue with processors idle. Production incidents from sync-over-async show up as rising queue depth in dotnet-counters, not as a hung UI."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "The fix is always async all the way",
+          "body": "Make the caller async and await. If you truly cannot (legacy Main, COM interop), use GetAwaiter().GetResult() only at the top-level entry point — never deep in a library called from many contexts."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Two failure modes",
+          "items": [
+            {
+              "title": "SynchronizationContext deadlock",
+              "body": "UI or legacy ASP.NET thread calls .Result. Async continuation tries to post back to that thread. Thread is blocked. Deadlock."
+            },
+            {
+              "title": "Thread-pool starvation",
+              "body": "Many pool threads block in .Wait() on I/O. Pool cannot grow fast enough. New work queues. Latency spikes."
+            },
+            {
+              "title": "Hill-climbing delay",
+              "body": ".NET thread pool injects threads slowly. A burst of blocking calls creates a window where everything waits."
+            },
+            {
+              "title": "Fix",
+              "body": "async/await all the way. Libraries use ConfigureAwait(false). Never .Result in shared code."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Sync-over-async failure paths",
+            "source": "flowchart TD\n  B[Caller blocks on Result or Wait] --> C{SynchronizationContext?}\n  C -->|UI / legacy ASP.NET| D[Continuation needs same thread]\n  D --> X[DEADLOCK]\n  C -->|ASP.NET Core — no context| E[Thread held for full I/O wait]\n  E --> F[Pool threads exhausted]\n  F --> G[STARVATION — requests queue]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Classic UI deadlock — stack trace pattern",
+            "code": "// WinForms — DEADLOCK\nprivate void btnLoad_Click(object sender, EventArgs e)\n{\n    label.Text = LoadFromApiAsync().Result; // blocks UI thread\n}\n\nprivate async Task<string> LoadFromApiAsync()\n{\n    return await http.GetStringAsync(url);\n    // continuation posts to UI SynchronizationContext\n}\n\n// Stack trace shows:\n// at System.Threading.Tasks.Task.Wait()\n// at Form1.btnLoad_Click\n// at System.Windows.Forms.Control.Invoke(...)\n// at System.Threading.SynchronizationContext.Send(...)",
+            "explanation": "The UI thread is inside Wait/Result. The continuation is queued to SynchronizationContext.Send on the same thread. Neither can proceed — classic deadlock stack."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ASP.NET Core starvation — no deadlock, still broken",
+            "code": "// Controller — does NOT deadlock in Core, but starves the pool\n[HttpGet(\"session/{id}\")]\npublic IActionResult GetSession(string id)\n{\n    // Blocks a pool thread for entire Redis + HTTP latency\n    var data = _service.LoadSessionAsync(id).Result;\n    return Ok(data);\n}\n\n// Under 200 concurrent requests:\n// - 200 threads blocked in Result\n// - New requests queue in Kestrel\n// - CPU utilization stays low\n// - dotnet-counters: ThreadPool Queue Length spikes",
+            "explanation": "No SynchronizationContext means no classic deadlock. But each .Result holds a thread for the full wait — scalability collapses under load."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Library anti-pattern that poisons callers",
+            "code": "// BAD — library blocks internally\npublic string GetToken(string sessionId)\n{\n    return FetchTokenAsync(sessionId).GetAwaiter().GetResult();\n}\n\n// GOOD — expose async surface; let caller decide\npublic Task<string> GetTokenAsync(string sessionId, CancellationToken ct)\n    => FetchTokenAsync(sessionId, ct);\n\n// If you MUST block at the top level only (legacy Main):\npublic static void Main(string[] args)\n{\n    RunAsync(args).GetAwaiter().GetResult();\n}",
+            "explanation": "Libraries that block internally force every caller into sync-over-async. Top-level Main is the only acceptable GetResult site."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnose starvation with dotnet-counters",
+            "code": "// Terminal: watch pool health under load test\n// dotnet-counters monitor --counters System.Runtime\n//   --counters ThreadPool ThreadPool ThreadCount\n//   --counters ThreadPool ThreadPool QueueLength\n//   --counters ThreadPool ThreadPool CompletedWorkItemCount\n\n// Healthy async API: ThreadCount stays modest, QueueLength near zero\n// Sync-over-async: ThreadCount climbs, QueueLength spikes,\n//   CompletedWorkItemCount stalls while requests queue",
+            "explanation": "How to prove it in production: rising ThreadPool QueueLength with low CPU is the signature of sync-over-async or blocking I/O on pool threads."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Blocking async results across runtimes",
+          "headers": [
+            "Aspect",
+            "C# .Result / .Wait()",
+            "JavaScript"
+          ],
+          "rows": [
+            [
+              "Blocking equivalent",
+              ".Result, .Wait(), GetAwaiter().GetResult()",
+              "No safe sync wait — deasync hacks only"
+            ],
+            [
+              "Deadlock model",
+              "SynchronizationContext thread capture",
+              "Single thread — blocking blocks everything"
+            ],
+            [
+              "Scalability impact",
+              "Pool thread held per blocked call",
+              "Event loop frozen — all requests stall"
+            ],
+            [
+              "Exception wrapping",
+              ".Wait() throws AggregateException",
+              "N/A — must await or .catch()"
+            ],
+            [
+              "Detection",
+              "dotnet-counters ThreadPool QueueLength",
+              "Event loop lag, no concurrent requests progress"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Claiming ASP.NET Core is 'safe' for .Result because there is no deadlock — starvation is still catastrophic. Using .Result in a library because 'the caller is async anyway.' Wrapping blocking I/O in Task.Run and then calling .Result — still wastes a thread. Assuming Task.Wait with a timeout avoids deadlock — the continuation may still never run on a captured context."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: capture a stack trace during an incident — blocked threads show System.Threading.Tasks.Task.InternalWait or Task.GetResultCore. Pair with dotnet-counters ThreadPool QueueLength and ThreadPool ThreadCount. Under a load test, sync-over-async produces climbing thread count with flat CPU. The fix is never 'increase MinThreads' as the first response — that masks the problem. Async all the way, or isolate blocking to a dedicated thread (BackgroundService with a blocking consumer) with explicit capacity limits."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Symptom",
+            "Root cause",
+            "Fix"
+          ],
+          "rows": [
+            [
+              "UI frozen, both threads waiting",
+              "Sync context deadlock",
+              "await on UI; ConfigureAwait(false) in library"
+            ],
+            [
+              "Core API slow under load, low CPU",
+              "Pool starvation from .Result",
+              "async controllers and services"
+            ],
+            [
+              "Occasional hang in test, fine locally",
+              "Context-dependent deadlock",
+              "Never .Result in shared library code"
+            ],
+            [
+              "AggregateException in logs",
+              ".Wait() instead of await",
+              "await to get inner exception"
+            ],
+            [
+              "Thread count keeps growing",
+              "Hill-climbing responding to blocks",
+              "Remove blocking; do not just raise MinThreads"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'ASP.NET Core has no SynchronizationContext so .Result is fine.' It is not — you starve the pool. Saying 'I use .Result for simplicity' without acknowledging scalability cost. Recommending ThreadPool.SetMinThreads as the primary fix instead of removing sync-over-async. Not being able to read a deadlock stack trace showing SynchronizationContext.Send blocked inside Task.Wait."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Sync-over-async blocks a thread for the full async wait — .Result, .Wait(), and GetAwaiter().GetResult().",
+    "Classic deadlock needs SynchronizationContext; ASP.NET Core gets starvation instead — still catastrophic under load.",
+    "In production, watch dotnet-counters ThreadPool QueueLength spike with low CPU — the signature of sync-over-async.",
+    "60s: Never .Result in libraries. UI deadlock is context capture plus blocked thread. Core starves the pool without deadlocking. Fix: async all the way. Prove with dotnet-counters and stack traces showing Task.Wait.",
+    "Follow-up: when is GetAwaiter().GetResult() acceptable — only at process entry points like Main?"
+  ],
+  "commonPitfalls": [
+    "Saying '.Result is fine in ASP.NET Core' gets you rejected — pool starvation caps throughput with idle CPUs.",
+    "Using .Result in a shared library because tests pass — production WinForms or high-concurrency Core will fail differently.",
+    "Strong answer: 'I async all the way. .Result causes context deadlock on UI or pool starvation in Core. I diagnose with ThreadPool QueueLength in dotnet-counters.'"
+  ],
+  "relatedTopicIds": [
+    "csharp-13-why-async",
+    "csharp-13-configureawait",
+    "csharp-13-task-completion-source",
+    "csharp-15-thread-pool-task-parallel",
+    "csharp-15-races-deadlocks"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Blocking the event loop",
+      "note": "JS has no .Result — but sync fs.readFileSync or a tight while loop inside async code blocks the single thread for everyone. C# sync-over-async blocks one pool thread per call; the damage scales with concurrency, not a single loop.",
+      "futureTopicSlug": "javascript/async/event-loop"
+    },
+    {
+      "language": "typescript",
+      "concept": "No synchronous Promise unwrap",
+      "note": "TypeScript/JavaScript forces you to await or use .then — there is no GetResult(). C#'s .Result is a footgun that TS avoids by design. The C# equivalent of blocking the event loop is blocking every pool thread.",
+      "futureTopicSlug": "typescript/async/await"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Async/Await - Best practices in asynchronous programming",
+      "url": "https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming"
+    },
+    {
+      "title": "dotnet-counters diagnostic tool",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

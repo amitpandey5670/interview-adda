@@ -37,6 +37,60 @@
         "Should you ack a message you cancelled midway?"
       ],
       "sixtySeconds": "Pass the host token down. Cooperative only. On shutdown, stop the loop; do not nack cancellation as failure unless the business says so."
+    },
+    {
+      "question": "Your WinForms app freezes when a button handler calls LoadDataAsync().Result. Walk through the deadlock.",
+      "answer": "The UI thread blocks inside Result waiting for the Task. The async method's continuation tries to resume on the UI thread via SynchronizationContext.Send because ConfigureAwait(true) is the default. The UI thread is blocked in Result, so the continuation cannot run. Neither side can proceed. The stack trace shows Task.Wait or get_Result on the button click handler and SynchronizationContext.Send in the continuation. Fix: await in the handler, or ConfigureAwait(false) in the library if it does not touch UI.",
+      "followUps": [
+        "Does ASP.NET Core have the same deadlock?",
+        "What does the stack trace look like for pool starvation instead?"
+      ],
+      "sixtySeconds": "UI thread blocked in Result. Continuation needs UI thread via SynchronizationContext. Deadlock. Fix: await or ConfigureAwait false in library."
+    },
+    {
+      "question": "An ASP.NET Core API is slow under load but CPU is only 15%. Controllers call .Result internally. What is happening?",
+      "answer": "ASP.NET Core has no request SynchronizationContext, so there is no classic deadlock — but each .Result holds a pool thread for the full I/O latency. Under 200 concurrent requests, 200 threads block in Result while new requests queue in Kestrel. The thread pool grows slowly via hill-climbing. dotnet-counters shows ThreadPool QueueLength climbing with flat CPU. The fix is async controllers and services all the way — not raising MinThreads as the primary response.",
+      "followUps": [
+        "How do you diagnose this with dotnet-counters?",
+        "When is GetAwaiter().GetResult() acceptable?"
+      ],
+      "sixtySeconds": "No deadlock in Core but pool starvation. Each Result holds a thread for full I/O wait. Queue length spikes, CPU idle. Fix: async all the way."
+    },
+    {
+      "question": "When would you use TaskCompletionSource instead of returning a Task from an async method?",
+      "answer": "When the completion signal comes from outside the async method — a callback-based SDK, a WebSocket event, or racing a timeout against an HTTP call. TCS creates a Task you complete with TrySetResult, TrySetException, or TrySetCanceled. Use TrySet when timeout and success race. RunContinuationsAsynchronously prevents the callback thread from running heavy continuations inline. For single-flight cache deduplication, store a TCS-backed Task in ConcurrentDictionary per key.",
+      "followUps": [
+        "What happens if you call SetResult twice?",
+        "How is TCS different from Task.FromResult?"
+      ],
+      "sixtySeconds": "TCS bridges callbacks to await. TrySet for racing completions. RunContinuationsAsynchronously for callback threads. Task.FromResult when value is already known."
+    },
+    {
+      "question": "You need to stream a 10 GB CSV import without loading it all into memory. IAsyncEnumerable or List?",
+      "answer": "IAsyncEnumerable with await foreach processes one row per MoveNextAsync — memory stays constant regardless of file size. Use yield return between awaits in an async IAsyncEnumerable method. Wire [EnumeratorCancellation] so host shutdown stops the iterator. If the next step needs the full dataset for a sort, streaming buys nothing — just load it. For producer-faster-than-consumer with bounded backpressure, consider Channel<T> instead.",
+      "followUps": [
+        "What does forgetting EnumeratorCancellation cause?",
+        "When is Channel<T> better than IAsyncEnumerable?"
+      ],
+      "sixtySeconds": "IAsyncEnumerable streams with constant memory. await foreach pulls. EnumeratorCancellation for shutdown. ToListAsync defeats streaming. Channels for push backpressure."
+    },
+    {
+      "question": "A candidate says Task is just a JavaScript Promise. What is wrong with that answer?",
+      "answer": "The programmer model is similar — await pauses, composes, and resumes — but the scheduling engine differs. JS Promise continuations are microtasks on a single thread. C# Task continuations run on thread-pool threads and may hop threads unless SynchronizationContext marshals back. Promise.all maps to Task.WhenAll for concurrent waits, not CPU parallelism. JS has no ValueTask. AbortController is the practical analog of CancellationToken, not a field on Promise.",
+      "followUps": [
+        "Can C# async methods block the event loop like JS?",
+        "What is the JS equivalent of ConfigureAwait?"
+      ],
+      "sixtySeconds": "Same syntax, different scheduler. JS microtasks one thread. C# pool threads. WhenAll equals Promise.all. No ConfigureAwait in JS. ValueTask has no JS equivalent."
+    },
+    {
+      "question": "How does the compiler implement async/await under the hood?",
+      "answer": "The compiler rewrites the method into a struct or class implementing IAsyncStateMachine. Locals that appear to live on the stack are hoisted as fields. At each await, if the Task is incomplete, the state machine captures its state and returns the Task to the caller. When I/O completes, a continuation calls MoveNext to resume at the next state. The state machine may be boxed to the heap per invocation. ValueTask and IValueTaskSource optimize the sync-complete path by avoiding Task allocation.",
+      "followUps": [
+        "When does the state machine get boxed?",
+        "What is the difference between IAsyncStateMachine and IAsyncEnumerable's iterator?"
+      ],
+      "sixtySeconds": "Compiler generates IAsyncStateMachine. Locals hoisted. await parks state, frees thread. Continuation calls MoveNext. May box per call. ValueTask skips Task alloc on sync path."
     }
   ]
 }

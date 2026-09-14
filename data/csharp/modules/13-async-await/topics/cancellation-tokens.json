@@ -124,6 +124,15 @@
             "code": "await using var registration = cancellationToken.Register(() =>\n{\n    socket.Close(); // abort a raw socket on cancellation\n});\n\nawait ProcessWithSocketAsync(socket, cancellationToken);",
             "explanation": "token.Register runs a callback when cancellation fires. Useful for resources that do not have built-in token support."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode: treating shutdown as poison",
+            "code": "catch (Exception ex)\n{\n    // WRONG during deploy — requeues a good message as poison\n    await _sqs.DeleteMessageAsync(queueUrl, receiptHandle);\n    _logger.LogError(ex, \"Poison message\");\n}\n\n// RIGHT — distinguish cancellation from failure\ncatch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n{\n    _logger.LogInformation(\"Shutdown — exiting receive loop\");\n    break;\n}\ncatch (Exception ex)\n{\n    _logger.LogError(ex, \"Processing failed\");\n    throw; // host nacks or sends to DLQ",
+            "explanation": "During Kubernetes rolling deploy, StoppingToken fires. Catching it as a generic Exception and nacking wastes messages and triggers false poison alerts."
+          }
         }
       ]
     },
@@ -178,21 +187,75 @@
           "body": "Catching Exception and nacking cancellation as a poison message during deploy. Forgetting to pass the token into nested Redis and HTTP calls. Leaking CancellationTokenSource instances in a high-throughput loop. Passing CancellationToken.None in a public library method unless the operation truly cannot stop."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: during a Kubernetes rolling deploy, watch whether in-flight SQS messages get nacked as poison when StoppingToken fires — that is a cancellation-handling bug, not a message failure. Use IHostApplicationLifetime.ApplicationStopping to trace token propagation. Linked sources with CancelAfter prevent a hung Receive from blocking shutdown past the grace period. CancellationTokenSource implements IDisposable — leak them in a tight loop and gen-2 grows."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Token strategy",
+            "Use case",
+            "Pitfall"
+          ],
+          "rows": [
+            [
+              "Host StoppingToken",
+              "Process lifetime / SIGTERM",
+              "Must pass to every await in the loop"
+            ],
+            [
+              "CancelAfter timeout",
+              "Per-operation deadline",
+              "Do not confuse with host shutdown"
+            ],
+            [
+              "CreateLinkedTokenSource",
+              "Combine host + timeout",
+              "Dispose the linked source — IDisposable"
+            ],
+            [
+              "ThrowIfCancellationRequested",
+              "CPU loops between I/O",
+              "I/O APIs observe token automatically"
+            ],
+            [
+              "token.Register callback",
+              "Raw socket or native handle",
+              "Callback must be thread-safe and fast"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying cancellation is preemptive like Thread.Abort — it is cooperative; the code must observe the token. Nacking a message as poison when OperationCanceledException fires during deploy. Not linking host token with per-receive timeout — a hung receive blocks shutdown. Creating a new CancellationTokenSource per message without disposing it."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Cancellation is cooperative: unused tokens do nothing.",
-    "Link host lifetime tokens with per-operation timeouts.",
-    "Distinguish shutdown cancellation from timeout when deciding ack versus nack."
+    "CancellationToken is a cooperative flag — nothing stops until code checks the token or passes it to an await.",
+    "Link host StoppingToken with per-operation CancelAfter so hung receives do not block SIGTERM grace period.",
+    "In production, distinguish OperationCanceledException from host shutdown versus timeout-only when deciding ack versus nack.",
+    "60s: Cancellation is cooperative. Pass host token to every await. Link with timeout via CreateLinkedTokenSource. Catch OperationCanceledException separately. Dispose linked sources. Never nack deploy cancellation as poison.",
+    "Follow-up: what happens to an in-flight HTTP call when StoppingToken fires mid-request?"
   ],
   "commonPitfalls": [
-    "Catching Exception and nacking cancellation as a poison message during deploy.",
-    "Forgetting to pass the token into nested Redis and HTTP calls.",
-    "Leaking CancellationTokenSource instances in a 999-message/second loop."
+    "Saying 'Cancel() aborts the thread' gets you rejected — cancellation is cooperative, not preemptive.",
+    "Catching Exception and nacking cancellation as poison during deploy — treats graceful shutdown as failure.",
+    "Strong answer: 'I pass StoppingToken through the receive loop, link with timeout, catch OperationCanceledException separately, and dispose linked sources.'"
   ],
   "relatedTopicIds": [
     "csharp-13-why-async",
     "csharp-13-async-exceptions",
+    "csharp-13-task-completion-source",
     "csharp-15-high-concurrency-scenario"
   ],
   "jsTsCorrelations": [
@@ -201,11 +264,21 @@
       "concept": "AbortController",
       "note": "AbortSignal is the JS cousin: fetch observes it, CPU loops must poll aborted. C# tokens also multicast to many operations through linked sources.",
       "futureTopicSlug": "javascript/async/abortcontroller"
+    },
+    {
+      "language": "typescript",
+      "concept": "AbortSignal.timeout()",
+      "note": "TypeScript 5.2+ adds AbortSignal.timeout(ms) — similar to CancellationTokenSource.CancelAfter. C# linking multiple tokens is more explicit with CreateLinkedTokenSource.",
+      "futureTopicSlug": "typescript/async/abortcontroller"
     }
   ],
   "officialSources": [
     {
       "title": "Cancellation in managed threads",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads"
+    },
+    {
+      "title": "Cooperative cancellation",
       "url": "https://learn.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads"
     }
   ],

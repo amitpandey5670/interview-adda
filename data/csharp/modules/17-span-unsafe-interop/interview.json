@@ -12,6 +12,15 @@
       "sixtySeconds": "Span slices without alloc. string for stored text. Memory for async fields."
     },
     {
+      "question": "How does Span relate to JavaScript ArrayBuffer and TextEncoder?",
+      "answer": "ArrayBuffer is a byte slab; Uint8Array.subarray shares backing without copy — like Span.Slice. TextEncoder.encodeInto writes UTF-8 into an existing buffer without allocating — like Encoding.UTF8.GetBytes into a byte span. Detached ArrayBuffer after postMessage transfer is the JS analogue of returning an ArrayPool array while a Span still references it — use-after-free in both ecosystems.",
+      "followUps": [
+        "ReadOnlySpan<char> versus Uint8Array for auth tokens?",
+        "When do you promote span parse result to string?"
+      ],
+      "sixtySeconds": "ArrayBuffer backing. subarray equals Slice. encodeInto equals UTF-8 into span. Detached equals pool return trap."
+    },
+    {
       "question": "When is stackalloc appropriate for CSV import?",
       "answer": "When you have a proven maximum line length and the scratch fits safely on the stack — typically hundreds of chars, not megabytes. Parse with span walks instead of Split. For rows or files exceeding stack limits, stream with StreamReader and use ArrayPool for large buffers to avoid Large Object Heap churn. Validate line length before stackalloc.",
       "followUps": [
@@ -30,6 +39,15 @@
       "sixtySeconds": "Native memory outside GC. Dispose now. Finalizer too late for bitmaps."
     },
     {
+      "question": "Why prefer LibraryImport over DllImport for new interop?",
+      "answer": "LibraryImport source generation emits marshalling stubs at compile time — trim-safe and Native AOT friendly. DllImport relies on runtime marshalling tables that trimming can break. LibraryImport accepts Span<byte> for short pin duration. Still respect charset, calling convention, and Dispose on wrapper types like SkiaSharp. Isolate raw declarations in one shim project.",
+      "followUps": [
+        "What breaks under PublishTrimmed with DllImport?",
+        "When is hand-written unsafe still needed?"
+      ],
+      "sixtySeconds": "LibraryImport compile-time stub. Trim AOT safe. Span short pin. DllImport legacy."
+    },
+    {
       "question": "What is the minimum you need to know about P/Invoke?",
       "answer": "It is the boundary to native DLLs. Marshaling converts strings and arrays to native layout. Use official NuGet wrappers when they exist. For new declarations prefer LibraryImport source generation. Respect calling convention and charset. Pin or use Span only for the call duration. You are not writing a C++ shop — isolate interop in a small shim.",
       "followUps": [
@@ -37,6 +55,33 @@
         "How does pinning affect GC compaction?"
       ],
       "sixtySeconds": "P/Invoke is native boundary. Wrappers preferred. Short pin. LibraryImport modern path."
+    },
+    {
+      "question": "When is unsafe and fixed still justified?",
+      "answer": "When LibraryImport plus Span cannot express the signature and a legacy SDK demands raw pointers. Keep AllowUnsafeBlocks on the interop project only. fixed pins only inside the block — pointer invalid after the brace, same lifetime rule as detached ArrayBuffer. Long pins show as Pinned Object Heap growth in dotnet-gcdump. Prefer one shim, not unsafe through business layers.",
+      "followUps": [
+        "GCHandle versus fixed?",
+        "Can Span eliminate fixed entirely?"
+      ],
+      "sixtySeconds": "unsafe in one shim. fixed scoped to call. POH growth signals long pin. Span first."
+    },
+    {
+      "question": "How do you prove a span refactor reduced allocations?",
+      "answer": "Run dotnet-counters System.Runtime gen-0-gc-count on staging before and after replacing Substring chains with AsSpan plus TryParse on auth headers. For CSV, BenchmarkDotNet MemoryDiagnoser comparing string.Split versus span field walk on a million-row fixture. Claims without measurement fail senior review — same as requiring BenchmarkDotNet before ValueTask adoption.",
+      "followUps": [
+        "What counter shows LOH pressure?",
+        "When does span not help?"
+      ],
+      "sixtySeconds": "dotnet-counters gen-0. BenchmarkDotNet MemoryDiagnoser. Before after Substring removal."
+    },
+    {
+      "question": "You stored Span in a class field to cache a slice — why does it not compile?",
+      "answer": "Span is a ref struct — stack-only, cannot be boxed or stored on the heap. Use Memory<T> for fields and async paths, then call .Span when you need a view. Crossing await requires Memory conversion. This is why JavaScript can hold Uint8Array references on objects but C# splits Span versus Memory for lifetime safety.",
+      "followUps": [
+        "ref struct rules in C# 14?",
+        "MemoryPool versus ArrayPool?"
+      ],
+      "sixtySeconds": "ref struct stack only. Memory for fields and async. Span from Memory.Span at use site."
     }
   ]
 }

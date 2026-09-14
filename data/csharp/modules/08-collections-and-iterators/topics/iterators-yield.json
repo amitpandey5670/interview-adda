@@ -124,6 +124,15 @@
             "code": "IEnumerable<string[]> rows = ReadCsvRows(\"attempts.csv\");\nList<string[]> snapshot = rows.ToList(); // reads entire file once\n\nforeach (string[] row in snapshot) Import(row);\nforeach (string[] row in snapshot) Audit(row); // same data, no re-read",
             "explanation": "ToList() forces full enumeration and stores every item in memory. Use this when you know you will walk the data more than once."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exception surfaces at MoveNext, not at call",
+            "code": "IEnumerable<string[]> ReadBadCsv(string path)\n{\n    using var reader = File.OpenText(path);\n    string? line = reader.ReadLine();\n    yield return line!.Split(','); // throws if file empty\n}\n\ntry\n{\n    var rows = ReadBadCsv(\"empty.csv\"); // no exception yet\n    foreach (var row in rows)          // NullReferenceException here\n        Import(row);\n}\ncatch (NullReferenceException) { /* caller's stack, not iterator's */ }",
+            "explanation": "Iterator exceptions appear at the consumer's MoveNext call site, not where you invoked the iterator method. Stack traces confuse interviewers and production on-call engineers alike."
+          }
         }
       ]
     },
@@ -154,17 +163,47 @@
           "body": "Disposing the StreamReader before the caller enumerates — the iterator needs the stream alive. Using yield to wrap a List you already built — you added a state machine for no benefit. Assuming iterator exceptions happen at the call site — they surface at MoveNext when the consumer pulls the next item."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The compiler transforms a yield method into a nested class implementing IEnumerator<T> with a state field (0 = start, -1 = done, N = resume point), local variable copies, and a switch on state in MoveNext. Each yield return becomes a state transition; yield break sets state to -1. The iterator object is a heap allocation even before the first MoveNext. How to prove it in production: BenchmarkDotNet comparing yield-based CSV read versus ReadLines + ToList; dotnet-counters gen-0-gc-count when callers enumerate the same IEnumerable twice instead of materializing once."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Memory", "When not to use"],
+          "rows": [
+            ["yield return", "One item at a time, low peak memory", "Caller will enumerate twice or needs Count"],
+            ["ToList() snapshot", "Full materialization, O(n) memory", "Infinite or very large streams where streaming wins"],
+            ["IAsyncEnumerable", "Async pull, one item at a time", "Sync-only callers — use yield or List"],
+            ["LINQ deferred chain", "Composed iterators, no work until MoveNext", "Side effects or I/O hidden in Select/Where"],
+            ["yield over existing List", "Extra state machine allocation", "List already in memory — return the List directly"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"yield is free — it is just lazy\" — it allocates a state machine class on the heap. Saying \"I'll call Count() then foreach\" on a database-backed iterator — that is two full passes. Strong answer: yield for streaming large inputs once; ToList when multiple passes needed; IAsyncEnumerable for async pull (module 13)."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "yield return is deferred; the method body runs during enumeration.",
-    "Two foreach calls mean two executions; ToList if you need a snapshot.",
-    "IAsyncEnumerable / await foreach is module 13."
+    "yield return compiles to a state machine class; the method body runs lazily on MoveNext.",
+    "Each foreach creates a new enumerator and re-executes from the start — ToList for snapshots.",
+    "Iterator exceptions surface at MoveNext in the caller's stack, not at the iterator method call.",
+    "60s: yield is deferred execution via a compiler-generated state machine. Stream large CSV once with yield. Materialize with ToList if you enumerate twice. Async streams are IAsyncEnumerable — module 13.",
+    "Follow-up: can you mix yield return and return in the same method? (no — compiler error)"
   ],
   "commonPitfalls": [
-    "Disposing the StreamReader before the caller enumerates.",
-    "Using yield to wrap a List you already built — you added a state machine for no benefit.",
-    "Assuming iterator exceptions happen at the call site."
+    "Saying yield is free — it allocates a heap state machine even before the first MoveNext.",
+    "Strong answer: yield for single-pass streaming; ToList when multiple enumerations needed; never Count() then foreach on I/O-backed sequences.",
+    "Disposing StreamReader before the caller enumerates — iterator needs the stream alive.",
+    "Using yield to wrap a List already in memory — adds state machine overhead for zero benefit."
   ],
   "relatedTopicIds": [
     "csharp-08-ienumerable-foreach",
@@ -201,6 +240,10 @@
     {
       "title": "Iterators (programming guide)",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/programming-guide/concepts/iterators"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
     }
   ],
   "animationHint": "timeline",

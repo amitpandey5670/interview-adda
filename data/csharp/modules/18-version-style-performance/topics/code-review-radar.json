@@ -59,12 +59,14 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Senior review pass",
+          "title": "Senior review pass — expanded checklist",
           "items": [
-            { "title": "Async and cancellation", "body": "await through stack; token passed to SQS/HTTP." },
-            { "title": "Concurrency", "body": "Shared dictionaries, locks, stampede patterns." },
-            { "title": "Memory", "body": "LINQ materialize, string concat, Dispose native." },
-            { "title": "API and nulls", "body": "public surface, nullable honesty, validation." }
+            { "title": "1. Correctness and security", "body": "Auth on every endpoint. Input validation at boundary. No secrets in logs. Poison message handling with dead-letter." },
+            { "title": "2. Async and cancellation", "body": "No .Result/.Wait. CancellationToken through SQS receive, HTTP, DB. OperationCanceledException handled on drain." },
+            { "title": "3. Concurrency", "body": "No lock across await. ConcurrentDictionary or channels for shared state. Cache stampede — single-flight or lock per key." },
+            { "title": "4. Memory and native", "body": "No ToList/string concat per message. Span/TryParse on hot paths. using on SkiaSharp/streams. ArrayPool return discipline." },
+            { "title": "5. API and nullability", "body": "public types intentional. No null-forgiving without invariant. ApiCompat on libraries." },
+            { "title": "6. Performance evidence", "body": "Claims need BenchmarkDotNet or dotnet-counters — not vibes. ValueTask only with measured sync-complete path." }
           ]
         },
         {
@@ -135,17 +137,56 @@
           "body": "Nitpicking naming while missing .Result on hot path. Approving public types without API check. Ignoring allocation in code that runs per message on SQS."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: run the expanded checklist in order — security/correctness before naming. For SQS consumers, grep for .Result, missing CancellationToken, and ToList inside the receive loop. dotnet-counters on staging: thread-pool queue length + gen-0 rate validate allocation fixes. Interview 'review this code' slides: name the smell, cite the module fix, and state what you would measure before approving."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Expanded radar — cache stampede and allocation flags",
+            "code": "// FLAG 1: sync-over-async on Redis hot path\nvar user = _cache.GetUserAsync(id).Result;\n\n// FLAG 2: alloc per SQS message\nvar rows = msg.Body.Split(',').Select(x => x.Trim()).ToList();\n\n// FLAG 3: lock across await — deadlock risk\nlock (_gate) { await _db.SaveAsync(entity); }\n\n// FIXES: await + token, span parse + record struct row, ConcurrentDictionary + per-key gate",
+            "explanation": "Lines 2–8: three high-priority smells from the expanded checklist with module-linked fixes — async (13), span (17), concurrency (15)."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Priority", "Smell", "Fix module"],
+          "rows": [
+            ["1 Security", "Open endpoint, secret in log", "Auth + structured logging"],
+            ["2 Async", ".Result, no CancellationToken", "Module 13 async-await"],
+            ["3 Concurrency", "lock across await, raw Dictionary", "Module 15 threading"],
+            ["4 Memory", "Substring/Split per message", "Module 17 span"],
+            ["5 API", "public type leak, null!", "Module 16 ApiCompat"],
+            ["6 Perf claim", "ValueTask without benchmark", "BenchmarkDotNet proof"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Nitpicking variable names while missing .Result on the hot path. Approving SQS handler without CancellationToken. Ignoring per-message ToList allocation. Reviewing style before correctness and security. Not connecting a smell to a concrete fix from the curriculum."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Review correctness, concurrency, memory, API, security — in that priority.",
-    "Flag sync-over-async, lock across I/O, and allocation in loops immediately.",
-    "Connect smells to module fixes you already know."
+    "Senior code review order: security/correctness → async/cancellation → concurrency → memory/native → API/nulls → measured perf.",
+    "Flag sync-over-async, lock across await, and per-message allocation before style nits.",
+    "Expanded checklist: poison messages, cache stampede, SkiaSharp using, ApiCompat on libraries.",
+    "60s: Correctness first. No Result. Token through SQS. Concurrent collections. Span not Split. using native. BenchmarkDotNet for perf claims.",
+    "Follow-up: how do you handle a poison SQS message without infinite retry?"
   ],
   "commonPitfalls": [
-    "Style comments without production risk assessment.",
-    "Missing cancellation in queue handlers.",
-    "Approving null-forgiving without invariant proof."
+    "Nitpicking naming while missing .Result on hot path gets you rejected in review interviews.",
+    "Missing cancellation in queue handlers — no graceful drain on deploy.",
+    "Strong answer: 'Six-step radar. Name smell, cite module fix, say what metric proves it — gen-0, thread-pool depth, or BenchmarkDotNet.'"
   ],
   "relatedTopicIds": [
     "csharp-18-csharp-8-to-14-map",
@@ -158,6 +199,12 @@
       "concept": "PR review checklist",
       "note": "Same radar: async correctness, type honesty, resource cleanup — different syntax, same senior instincts.",
       "futureTopicSlug": "typescript/review"
+    },
+    {
+      "language": "javascript",
+      "concept": "Event loop blocking",
+      "note": "sync fs.readFileSync in an Express handler is the JS analogue of .Result — blocks the loop like thread-pool starvation. C# review radar maps directly: non-blocking I/O, cancellation on shutdown, no alloc in per-request hot path.",
+      "futureTopicSlug": "javascript/event-loop/blocking"
     }
   ],
   "officialSources": [

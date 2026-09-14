@@ -160,16 +160,56 @@
           "body": "`record struct` cannot inherit from another `record struct` or class. Only `record class` supports inheritance between records. Plan your type hierarchy accordingly."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The compiler synthesizes `Equals`, `GetHashCode`, `==`, `!=`, and `IEquatable<T>` for records using every **included** member — positional parameters, init properties, and base record properties in an inheritance chain. Two `AuthToken` instances on different heap addresses compare equal when every included member matches; that is why records work as dictionary keys and test fixtures without hand-written equality. `with`-expressions perform a **nondestructive copy**: the compiler generates a clone method that copies all included members and overlays the named changes, preserving the runtime type in hierarchies (`derived with { X = 1 }` stays `Derived`). `record struct` avoids a heap allocation for small bundles like cache keys but still gets synthesized equality — use `readonly record struct` to prevent accidental mutation. How to prove it in production: unit test `Assert.Equal(token1, token2)` across two `new` instances with identical claims; put the same record in a `Dictionary` and look up with a different instance — a miss means equality or hashing broke."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Type choice", "Benefit", "Cost"],
+          "rows": [
+            ["record class (positional)", "Generated equality, with, ToString, Deconstruct", "Heap allocation; not for identity entities"],
+            ["record struct", "Value equality without heap object", "Cannot inherit; copies on every pass-by-value"],
+            ["class with manual Equals", "Full control over identity vs value semantics", "Easy to break the Equals/GetHashCode pair"],
+            ["Mutable record (set accessors)", "Legal syntax", "Dictionary key safety lost; equality can change after insert"],
+            ["record inheritance", "Base members included in synthesized equality", "with and equality include base properties — surprises if base is large"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Record equality in a dictionary — the production proof",
+            "code": "record AuthToken(string Subject, string Issuer, DateTimeOffset ExpiresAt);\n\nvar cache = new Dictionary<AuthToken, string>();\nvar original = new AuthToken(\"user-9\", \"https://auth.example\",\n    DateTimeOffset.UtcNow.AddHours(1));\ncache[original] = \"session-abc\";\n\n// Different heap object, same values — lookup must succeed\nvar lookup = new AuthToken(original.Subject, original.Issuer, original.ExpiresAt);\nConsole.WriteLine(cache[lookup]); // session-abc\n\n// with creates a new unequal instance — correct miss\nvar refreshed = original with { ExpiresAt = DateTimeOffset.UtcNow.AddHours(8) };\nConsole.WriteLine(cache.ContainsKey(refreshed)); // False",
+            "explanation": "Line 1: compiler generates matching Equals and GetHashCode from all positional members. Lines 4–6: insert with one instance. Lines 9–10: a second `new` with identical values finds the entry — value equality, not reference. Lines 13–14: `with` changes `ExpiresAt`, so the refreshed token is a different key. This is the behavior Redis DTOs and auth tokens rely on in tests and caches."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying records are just classes with less syntax — they synthesize equality, hashing, with, Deconstruct, and ToString. Claiming `with` mutates the original — it creates a new instance. Using a record for an entity with database identity (`Attempt` with mutable Score) — reference equality on a class is the right model. Putting a mutable record (with `set`) in a Dictionary — mutation after insert orphans the entry. Strong answer: record for immutable DTOs with value equality; class for identity entities; readonly record struct for small cache keys; equality is compiler-generated and must stay paired with hashing."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "record class: heap object, value equality. record struct: copy, value equality.",
-    "with is nondestructive copy, not mutation.",
-    "Positional records generate constructor, init properties, Deconstruct, ToString."
+    "record class: heap object with compiler-synthesized value equality; record struct: stack copy with the same equality generation.",
+    "Use records for immutable DTOs (auth tokens, Redis shapes); use classes when identity and mutable state matter (Attempt with Id).",
+    "In production, two `new AuthToken(...)` instances with identical claims must find the same Dictionary slot — if not, equality generation was broken or the record was mutated.",
+    "60s: Records synthesize Equals, GetHashCode, with, Deconstruct, and ToString. Value equality across different heap objects. with is nondestructive copy. record struct for small cache keys without heap allocation. Never use mutable set accessors on dictionary keys.",
+    "Follow-up: how does record inheritance include base properties in synthesized equality?"
   ],
   "commonPitfalls": [
-    "Using a mutable record as a dictionary key.",
-    "Expecting record inheritance to work on record struct."
+    "Saying with mutates the original — that gets rejected because with always returns a new instance.",
+    "Strong answer: records generate a consistent Equals/GetHashCode pair; use them for immutable DTOs, not identity entities with mutable state.",
+    "Using a mutable record (set accessors) as a dictionary key — mutation after insert changes the hash and orphans the entry.",
+    "Expecting record struct to support inheritance — only record class inherits, and base members participate in equality."
   ],
   "relatedTopicIds": [
     "csharp-05-equality-and-hashing",

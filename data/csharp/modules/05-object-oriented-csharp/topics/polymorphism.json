@@ -124,6 +124,15 @@
             "code": "abstract class TokenParser\n{\n    public AuthToken Parse(string raw)\n    {\n        Validate(raw);\n        return ParseCore(raw);\n    }\n\n    private void Validate(string raw)\n    {\n        if (string.IsNullOrWhiteSpace(raw))\n            throw new ArgumentException(\"Token required\");\n    }\n\n    protected abstract AuthToken ParseCore(string raw);\n}",
             "explanation": "Line 3: public `Parse` is the Template Method — shared algorithm. Line 5: `Validate` is private — not overridable. Line 12: `ParseCore` is `protected abstract` — the variation point for derived types. This is a practical, small virtual surface."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Covariant return types (C# 9+)",
+            "code": "abstract class HandlerFactory\n{\n    public virtual Handler Create() => new Handler(\"base\");\n}\n\nsealed class LtiFactory : HandlerFactory\n{\n    // Override may return a MORE derived type than the base virtual method.\n    public override LtiHandler Create() => new LtiHandler(\"lti\");\n}\n\nHandlerFactory f = new LtiFactory();\nHandler h = f.Create(); // runtime type is LtiHandler\nLtiHandler lti = ((LtiFactory)f).Create(); // no cast needed on the override",
+            "explanation": "Since C# 9, an override can return a type derived from the base return type. The method table slot still dispatches to LtiFactory.Create, but callers through HandlerFactory see Handler. Covariance applies to return types only — parameter types are not covariant on overrides."
+          }
         }
       ]
     },
@@ -160,16 +169,56 @@
           "body": "After renaming a base method, the compiler may accept `new` instead of `override` if the base method is not virtual. The code compiles but dispatch breaks silently. Always check whether the base member is virtual before choosing `new` vs `override`."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Virtual dispatch walks the object's method table (vtable) at run time: the call site loads the slot for the compile-time member, then the Common Language Runtime (CLR) resolves it against the actual type. The Just-In-Time (JIT) compiler can **devirtualize** when it proves the receiver type — sealed classes, sealed override, or a local variable of a concrete type may inline the target and skip the indirect call. Covariant returns (C# 9+) let an override return a more derived type without changing the vtable slot semantics. The constructor trap is real: if a base constructor calls a virtual method, the derived override runs before derived field initializers finish, so the override may read default(T) fields. How to prove it in production: BenchmarkDotNet comparing sealed versus unsealed hot paths, or a debugger breakpoint on the derived override fired from the base constructor stack frame."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Design choice", "Benefit", "Cost"],
+          "rows": [
+            ["virtual / override surface", "Extensible polymorphism for genuine is-a", "Compatibility contract; harder to change later"],
+            ["sealed override / sealed class", "Enables JIT devirtualization and inlining", "No further specialization"],
+            ["new (member hiding)", "Rename without touching base slot", "Dispatch through base type ignores derived member"],
+            ["Covariant return on override", "Callers get narrower type without extra cast", "Only return types; not parameters"],
+            ["Virtual call from base ctor", "Template Method pattern temptation", "Derived override sees uninitialized derived state"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Constructor virtual call — the production bug",
+            "code": "abstract class Base\n{\n    protected Base()\n    {\n        Log(); // virtual call from ctor — dangerous\n    }\n\n    protected virtual void Log() => Console.WriteLine(\"base\");\n}\n\nsealed class Derived : Base\n{\n    private readonly string _tenant = \"acme\";\n\n    protected override void Log() =>\n        Console.WriteLine(_tenant.Length); // _tenant still null/default!\n\n    // Fix: make Log non-virtual and call it from Derived ctor after fields init,\n    // or use an Initialize() called by factory after construction.\n}",
+            "explanation": "Base constructor runs before Derived field initializers. The override of Log executes with _tenant still at its default (null for a reference type). Strong teams keep base constructors free of virtual calls or use factory methods that call Init() after full construction."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"virtual and override are just like JavaScript prototype assignment\" — C# has explicit slots, sealed override, and covariant returns. Claiming virtual calls are always slow — sealed types and devirtualization often eliminate the indirect call. Saying new and override are interchangeable — calling through the base type proves they are not. Strong answer: virtual opens a vtable slot; override replaces it; new hides; sealed enables devirtualization; never call virtual methods from base constructors."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "virtual/override is runtime dispatch; new is hiding.",
-    "You cannot override a non-virtual instance method.",
-    "sealed override stops the slot from opening again."
+    "virtual/override is runtime vtable dispatch; new is compile-time hiding that does not replace the slot.",
+    "sealed override and sealed classes let the JIT devirtualize and inline hot paths.",
+    "Covariant returns (C# 9+) allow an override to return a more derived type than the base virtual method.",
+    "60s: Polymorphism is vtable dispatch. override replaces the slot; new hides. sealed enables devirtualization. Covariant returns since C# 9. Never call virtual methods from base constructors — derived override runs before derived fields initialize.",
+    "Follow-up: how would you prove devirtualization or measure virtual call cost on a hot auth handler path?"
   ],
   "commonPitfalls": [
-    "Calling virtual methods from constructors — derived override runs before derived initialization completes.",
-    "Using new by accident after a refactor that should have been override."
+    "Saying new and override behave the same through a base reference — that answer gets rejected because dispatch proves otherwise.",
+    "Strong answer: override replaces the vtable slot; new creates a separate member visible only on the derived static type.",
+    "Calling virtual methods from base constructors — derived override runs before derived field initializers complete.",
+    "Assuming every virtual call pays full indirect cost — sealed types and JIT devirtualization often eliminate it."
   ],
   "relatedTopicIds": [
     "csharp-05-inheritance",

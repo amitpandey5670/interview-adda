@@ -124,6 +124,15 @@
             "code": "// C#\nvar cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));\nvar data = await httpClient.GetStringAsync(url, cts.Token);\n\n// JavaScript equivalent:\n// const controller = new AbortController();\n// setTimeout(() => controller.abort(), 30_000);\n// const data = await fetch(url, { signal: controller.signal });",
             "explanation": "AbortController is the practical JS analog of CancellationToken, not a hidden field on Promise. Both are cooperative — the operation must observe the signal."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Microtask ordering vs C# continuation scheduling",
+            "code": "// JavaScript — microtasks drain before next macrotask\nconsole.log('1');\nPromise.resolve().then(() => console.log('2 microtask'));\nsetTimeout(() => console.log('3 macrotask'), 0);\nconsole.log('4');\n// Output: 1, 4, 2, 3\n\n// C# — continuation may run on any pool thread\nawait Task.Delay(1);\nConsole.WriteLine($\"Thread: {Thread.CurrentThread.ManagedThreadId}\");\n// Thread ID may differ from the caller's thread",
+            "explanation": "JS Promise callbacks are microtasks serialized on one thread. C# Task continuations are scheduled on the thread pool and may hop threads — the fundamental scheduling difference."
+          }
         }
       ]
     },
@@ -188,21 +197,80 @@
           "body": "Claiming C# await uses a microtask queue. Using Task.Result in a WhenAll continuation and thinking it is as safe as awaiting. Equating Node worker_threads with C# async/await. Saying 'Task is just a Promise' without noting the different execution engine."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: the scheduling difference matters when you have thread-affine resources. A JS Promise continuation always runs on the same thread — safe for DOM access. A C# Task continuation may run on any pool thread — you need SynchronizationContext for UI or capture state explicitly. Under high concurrency, C# can use multiple cores for independent Task continuations; JS microtasks are always serialized on one thread until you add Worker threads."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Concept",
+            "JavaScript",
+            "C# Task"
+          ],
+          "rows": [
+            [
+              "Scheduler",
+              "Microtask queue, single thread",
+              "Thread pool, optional SynchronizationContext"
+            ],
+            [
+              "Parallel CPU",
+              "Worker threads (separate)",
+              "Task.Run / Parallel (same process)"
+            ],
+            [
+              "Combine waits",
+              "Promise.all",
+              "Task.WhenAll"
+            ],
+            [
+              "First to finish",
+              "Promise.race",
+              "Task.WhenAny"
+            ],
+            [
+              "Sync-complete optimization",
+              "None",
+              "ValueTask struct"
+            ],
+            [
+              "Cancellation",
+              "AbortSignal per API",
+              "CancellationToken everywhere"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'Task is just a Promise' without explaining the scheduler difference. Claiming C# async uses a microtask queue like JS. Equating worker_threads with async/await — workers are a separate JS thread, like Task.Run in C#. Not knowing that Promise.all and Task.WhenAll overlap waits but do not parallelize CPU on a single chain."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Promise continuations are microtasks on one thread; Task continuations are pool threads unless marshaled.",
-    "Promise.all ≈ Task.WhenAll; neither is data parallelism.",
-    "AbortController is the practical JS analog of CancellationToken, not a hidden field on Promise."
+    "Promise and Task share the programmer model but differ in scheduling: microtasks on one JS thread versus pool threads in .NET.",
+    "Promise.all ≈ Task.WhenAll for concurrent waits; neither parallelizes CPU on a single sequential chain.",
+    "In production, C# continuations may hop threads — capture state explicitly; JS never hops the main thread without Workers.",
+    "60s: Same await syntax, different engines. JS microtasks on one thread. C# continuations on pool threads unless SynchronizationContext marshals. WhenAll equals Promise.all. AbortController equals CancellationToken. ValueTask has no JS equivalent.",
+    "Follow-up: why can C# scale I/O concurrency better than single-threaded Node for CPU-light workloads?"
   ],
   "commonPitfalls": [
-    "Claiming C# await uses a microtask queue.",
-    "Using Task.Result in a WhenAll continuation and thinking it is as safe as awaiting (it is OK after WhenAll completes, but the style hides faults if WhenAll is skipped).",
-    "Equating Node worker_threads with C# async/await."
+    "Saying 'Task is just a Promise' without mentioning scheduler differences gets you rejected at senior level.",
+    "Claiming C# await uses a microtask queue — it uses thread-pool continuations, not the JS event loop.",
+    "Strong answer: 'Same model, different scheduler. JS microtasks on one thread. C# pool threads with optional context capture. WhenAll equals Promise.all. Neither parallelizes CPU.'"
   ],
   "relatedTopicIds": [
     "csharp-13-why-async",
     "csharp-13-task-async-await",
+    "csharp-13-sync-over-async-deadlocks",
     "csharp-15-thread-pool-task-parallel"
   ],
   "jsTsCorrelations": [
@@ -223,6 +291,10 @@
     {
       "title": "Asynchronous programming with async and await",
       "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "title": "Task asynchronous programming model",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/task-asynchronous-programming-model"
     }
   ],
   "animationHint": "compare",

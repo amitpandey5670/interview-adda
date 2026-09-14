@@ -1,0 +1,233 @@
+{
+  "id": "csharp-14-pinned-heap-and-weak-references",
+  "slug": "pinned-heap-and-weak-references",
+  "title": "Pinned Object Heap and weak references (interop and caches)",
+  "moduleId": "csharp-14-memory-and-gc",
+  "order": 9,
+  "hook": "Pinning tells the garbage collector not to move an object during compaction — essential for native interop. Since .NET 5, pinned objects live on the Pinned Object Heap (POH) instead of fragmenting the Small Object Heap (SOH). Weak references let caches hold objects without preventing collection.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "GCHandle.Alloc(obj, GCHandleType.Pinned) or the fixed keyword pins a managed object so its address stays stable for native code. Before .NET 5, pins blocked SOH compaction; now pins go to the Pinned Object Heap (POH). WeakReference and ConditionalWeakTable let you reference objects without keeping them alive — ideal for caches that should not prevent garbage collection."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "POH",
+              "shortForm": "POH",
+              "longForm": "Pinned Object Heap",
+              "plainDefinition": "Dedicated heap segment for pinned objects introduced in .NET 5.",
+              "example": "A pinned byte[] for P/Invoke lives on the POH, not the SOH."
+            },
+            {
+              "term": "GCHandle",
+              "longForm": "Garbage Collection Handle",
+              "plainDefinition": "A strong or weak handle that roots or pins a managed object.",
+              "example": "GCHandle.Alloc(arr, GCHandleType.Pinned) for interop."
+            },
+            {
+              "term": "WeakReference",
+              "longForm": "Weak reference",
+              "plainDefinition": "A reference that does not prevent the target from being collected.",
+              "example": "Cache entry that drops when memory pressure rises."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Long-lived pins fragment the heap and increase pause times. Weak references solve the cache-dilemma: you want fast lookup but should not root large graphs forever. ConditionalWeakTable attaches metadata to objects without extending their lifetime — used internally by the runtime for COM interop and dynamic proxies."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Pin sparingly",
+          "body": "Pin for the shortest time needed and Free the GCHandle immediately after native code finishes. Prefer MemoryMarshal.GetArrayDataReference or NativeMemory for advanced scenarios in modern .NET."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Pin and weak-reference lifecycle",
+          "items": [
+            {
+              "title": "Allocate managed array",
+              "body": "byte[] or other blittable type on the managed heap."
+            },
+            {
+              "title": "Pin with GCHandle or fixed",
+              "body": "Object moves to POH (.NET 5+); address stable for native call."
+            },
+            {
+              "title": "Call native code",
+              "body": "Pass IntPtr from AddrOfPinnedObject to P/Invoke."
+            },
+            {
+              "title": "Free handle",
+              "body": "handle.Free() unpins; object becomes collectable again."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "POH and weak references",
+            "source": "flowchart TD\n  A[Managed byte array] -->|GCHandle.Pinned| B[POH segment]\n  B --> C[Stable address for P/Invoke]\n  C -->|handle.Free| D[Eligible for GC]\n  E[WeakReference cache] -->|Target alive| F[Return cached object]\n  E -->|Target collected| G[Cache miss, reload]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Pin with GCHandle for P/Invoke",
+            "code": "var buffer = new byte[256];\nvar handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);\ntry\n{\n    IntPtr ptr = handle.AddrOfPinnedObject();\n    NativeMethods.ProcessBuffer(ptr, buffer.Length);\n}\nfinally\n{\n    handle.Free(); // unpin immediately\n}",
+            "explanation": "Pin only for the native call duration. Free in finally to avoid leaking pinned objects."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "fixed keyword for short pins",
+            "code": "void HashBytes(byte[] data)\n{\n    fixed (byte* ptr = data)\n    {\n        // ptr is stable for this block\n        uint hash = Crc32(ptr, data.Length);\n    }\n    // pin released when fixed block exits\n}",
+            "explanation": "fixed is syntactic sugar for pinning within a scope. Requires unsafe context."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "WeakReference cache",
+            "code": "private readonly Dictionary<string, WeakReference<ImageData>> _cache = new();\n\npublic ImageData? GetImage(string key)\n{\n    if (_cache.TryGetValue(key, out var weak) && weak.TryGetTarget(out var img))\n        return img;\n    var loaded = LoadFromDisk(key);\n    _cache[key] = new WeakReference<ImageData>(loaded);\n    return loaded;\n}",
+            "explanation": "WeakReference lets GC collect ImageData under memory pressure. Cache entry becomes a miss and reloads."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Monitor pinned object impact",
+            "code": "dotnet-counters monitor -p <pid> \\\n  System.Runtime[gc-heap-size,poh-size,time-in-gc]\n# Rising poh-size with flat throughput → audit pin duration",
+            "explanation": "Track POH growth in .NET 5+ apps with heavy interop. Long-lived pins inflate poh-size."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Pinning and weak refs",
+          "headers": ["Concept", "C# POH / weak refs", "JavaScript"],
+          "rows": [
+            ["Pinning", "GCHandle, fixed, POH segment", "No direct equivalent; ArrayBuffer is managed by engine"],
+            ["Weak cache", "WeakReference<T>, ConditionalWeakTable", "WeakMap keys are weak; WeakRef for values"],
+            ["Interop stability", "AddrOfPinnedObject for P/Invoke", "Native addons use external buffers or N-API"],
+            ["Lifetime control", "handle.Free() unpins deterministically", "WeakRef deref may return undefined after GC"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Pinning objects for the entire process lifetime. Forgetting to Free GCHandle. Using WeakReference without checking TryGetTarget. Pinning non-blittable types for interop."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Before .NET 5, a pinned object in the SOH created an immovable hole that blocked compaction around it — the classic fragmentation problem. .NET 5 introduced the Pinned Object Heap (POH) so pins are segregated. WeakReference<T> does not root its target; under memory pressure the target is collected and TryGetTarget returns false. ConditionalWeakTable attaches satellite data keyed by object identity without extending key lifetime — used for runtime extensibility. How to prove it in production: dotnet-counters poh-size in interop-heavy services; dotnet-gcdump to find long-lived GCHandle roots."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Mechanism", "Benefit", "Cost"],
+          "rows": [
+            ["GCHandle.Pinned", "Stable address for native code", "POH not compacted; Free late = leak"],
+            ["fixed keyword", "Scoped pin, no handle object", "Requires unsafe; scope-limited"],
+            ["WeakReference cache", "Cache without preventing GC", "Cache miss latency on collection"],
+            ["ConditionalWeakTable", "Metadata without rooting key", "Only weak keys; no enumeration"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Pinning for the entire app lifetime or confusing WeakReference with a strong cache. Strong answer: pin shortest duration, Free handle in finally, use WeakReference for optional caches that should yield under pressure."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Pinning prevents compaction; .NET 5+ places pins on the POH instead of fragmenting the SOH.",
+    "Free GCHandle in finally — long-lived pins inflate poh-size and pause times.",
+    "Use WeakReference for image/metadata caches that should not prevent GC under memory pressure.",
+    "60s: Pin for interop via GCHandle or fixed. POH since .NET 5. Free immediately. WeakReference for caches that yield to GC. ConditionalWeakTable for satellite data.",
+    "Follow-up: how does ConditionalWeakTable differ from Dictionary with WeakReference values?"
+  ],
+  "commonPitfalls": [
+    "Pinning for the entire process lifetime — gets you rejected because POH fragmentation still hurts pause times.",
+    "Strong answer: pin shortest scope, Free in finally, WeakReference for optional caches.",
+    "Forgetting to Free() a GCHandle — object stays pinned and rooted until freed.",
+    "Using WeakReference without TryGetTarget — target may have been collected."
+  ],
+  "relatedTopicIds": [
+    "csharp-14-roots-mark-compact",
+    "csharp-14-generations-soh-loh",
+    "csharp-14-finalizers-vs-dispose",
+    "csharp-14-array-pool-and-memory-pool",
+    "csharp-17-span-memory"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "WeakRef and WeakMap",
+      "note": "JS WeakRef is like WeakReference — deref may return undefined after GC. WeakMap keys are weakly held. C# WeakReference<T> is explicit with TryGetTarget.",
+      "futureTopicSlug": "javascript/runtime/weak-references"
+    },
+    {
+      "language": "typescript",
+      "concept": "FinalizationRegistry vs GCHandle",
+      "note": "TypeScript FinalizationRegistry runs callbacks after GC — non-deterministic. C# GCHandle.Pinned gives a stable address now; Free is deterministic cleanup.",
+      "futureTopicSlug": "typescript/runtime/interop"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Pinned object heap",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/pinned-object-heap"
+    },
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    }
+  ],
+  "scenarioTag": "redis-cache"
+}

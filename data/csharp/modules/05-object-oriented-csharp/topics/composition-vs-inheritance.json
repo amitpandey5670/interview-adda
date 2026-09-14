@@ -153,16 +153,56 @@
           "body": "If you subclass just to override one method, consider a strategy object or delegate instead. In C#, every subclass consumes your single base-class slot and adds a compatibility promise."
         }
       ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Design interviews test whether you can **refactor a brittle hierarchy into composable parts** without breaking callers. The Liskov Substitution Principle (LSP) says a derived type must honor the base contract — if `OidcHandler` throws where `AuthHandler` promised success, inheritance was the wrong tool. Composition follows the Dependency Inversion Principle (DIP): high-level `AttemptWorker` depends on `IAttemptStore`, not `SqlAttemptStore`. In C# you get **one** base-class slot — wasting it on infrastructure (`BaseService`) blocks a future genuine is-a (like `TokenParser`). Inheritance also ships a **virtual surface** every derived type inherits; changing the base recompiles and retests every child. How to prove it in production: count how many files change when you rename a `protected` helper on `BaseService` versus swapping an `IAttemptStore` registration in `Program.cs`. The composition change is one line in the host; the inheritance change is a cascade across every derived service."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Design choice", "Benefit", "Cost"],
+          "rows": [
+            ["Constructor injection of interfaces", "Swap Redis/SQL/RabbitMQ without subclassing", "More registrations at the composition root"],
+            ["Abstract base + sealed leaves", "Shared Template Method for closed provider set", "Virtual surface is a forever compatibility contract"],
+            ["Strategy/delegate instead of override", "One behavior change without new subclass", "Caller must wire the strategy explicitly"],
+            ["BaseService inheritance", "Fast to write the first service", "Every child inherits logging, HTTP, cache — LSP violations multiply"],
+            ["Interfaces for cross-cutting roles", "Many capabilities without a second base", "Explicit interface implementation when names collide"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Design interview refactor — hierarchy to composition",
+            "code": "// BEFORE: inheritance couples every notifier to SMTP details\nabstract class BaseNotifier\n{\n    protected abstract Task SendCoreAsync(string to, string body);\n    public Task SendAsync(string to, string body) => SendCoreAsync(to, body);\n}\nclass SmtpNotifier : BaseNotifier { /* ... */ }\n\n// AFTER: composition — swap channel without subclassing\ninterface INotifier { Task SendAsync(string to, string body, CancellationToken ct); }\nsealed class SmtpNotifier(IEmailClient client) : INotifier\n{\n    public Task SendAsync(string to, string body, CancellationToken ct) =>\n        client.SendAsync(to, body, ct);\n}\n\n// Host wires the implementation; worker depends on INotifier only\nbuilder.Services.AddSingleton<INotifier, SmtpNotifier>();",
+            "explanation": "Lines 2–6: inheritance shares an algorithm but couples every notifier to the base constructor chain. Lines 9–14: composition extracts `INotifier` — the worker depends on the contract. Line 17: swapping to `SqsNotifier` is a one-line DI registration, not a new subclass hierarchy. This is the refactor pattern senior design interviews expect."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"inheritance is always bad\" or \"inheritance is always good\" — both miss the tradeoff. Claiming C# supports multiple base classes — it does not. Proposing `BaseService` with logging, HTTP, and cache for every microservice — that is the anti-pattern interviewers flag immediately. Strong answer: compose infrastructure through interfaces at the composition root; inherit only for genuine is-a with a small sealed hierarchy; one base class is precious — do not waste it on cross-cutting concerns."
+        }
+      ]
     }
   ],
   "interviewTakeaways": [
-    "Composition is has-a via constructor injection; inheritance is is-a with one base class.",
-    "Microservices stay composition-heavy; class hierarchies stay small and in-process.",
-    "Interfaces are how C# adds extra capabilities without a second base class."
+    "Composition is has-a via constructor injection; inheritance is is-a with one base class and a virtual compatibility surface.",
+    "Prefer composition when behavior varies by replaceable infrastructure (store, bus, notifier); inherit for closed polymorphic families (auth handlers).",
+    "In production, swapping an interface registration in Program.cs is one line; changing a protected base helper recompiles every derived service.",
+    "60s: Compose collaborators through interfaces at the composition root. Inherit only for genuine is-a with a small sealed hierarchy. C# gives one base class — do not waste it on BaseService. LSP: derived types must honor the base contract. Design interviews want you to refactor deep hierarchies into INotifier-style composition.",
+    "Follow-up: refactor a BaseService with logging, HTTP, and cache into constructor-injected interfaces without breaking callers."
   ],
   "commonPitfalls": [
-    "BaseService that becomes a dumping ground for logging, HTTP, and caching.",
-    "Subclassing to tweak one method when a delegate or strategy object would do."
+    "Saying inheritance is always wrong or always right — that shallow answer gets rejected because LSP and closed handler hierarchies exist.",
+    "Strong answer: compose infrastructure; inherit for sealed polymorphic families; one base class is a scarce resource in C#.",
+    "BaseService that accumulates logging, HTTP, caching, and database helpers — every derived service inherits baggage it never asked for.",
+    "Subclassing to override one method when a strategy delegate or interface would swap behavior without consuming the base-class slot."
   ],
   "relatedTopicIds": [
     "csharp-05-inheritance",
