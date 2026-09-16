@@ -1,0 +1,246 @@
+{
+  "id": "dotnet-09-repository-vs-direct-dbcontext",
+  "slug": "repository-vs-direct-dbcontext",
+  "title": "Repository pattern versus direct DbContext (when each helps)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 7,
+  "hook": "Wrapping DbContext in IRepository<Order> does not magically improve testability — EF Core DbContext is already mockable. The real question is whether the abstraction earns its keep or just adds indirection.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The repository pattern hides data access behind an interface like IOrderRepository with methods GetByIdAsync, ListAsync, AddAsync. Direct DbContext usage injects AppDbContext into handlers or application services and writes LINQ inline. EF Core's DbContext already implements repository and unit-of-work patterns — Microsoft guidance for most apps: use DbContext directly unless you have a specific reason for abstraction. Generic IRepository<T> with GetAll() often becomes a leaky CRUD wrapper that fights LINQ expressiveness. Useful abstractions: query objects, specification pattern, or domain-specific repositories with meaningful methods."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Repository pattern",
+              "longForm": "Repository design pattern",
+              "plainDefinition": "Abstraction over data access that exposes collection-like or domain-specific query methods.",
+              "example": "public interface IOrderRepository { Task<Order?> GetByIdAsync(Guid id); }"
+            },
+            {
+              "term": "Unit of work",
+              "longForm": "Unit of work pattern",
+              "plainDefinition": "Single transaction boundary coordinating multiple repository writes — DbContext is the unit of work.",
+              "example": "SaveChangesAsync commits all pending changes in one transaction."
+            },
+            {
+              "term": "Generic repository",
+              "longForm": "Generic repository interface",
+              "plainDefinition": "IRepository<T> with CRUD — often criticized as redundant over DbSet<T>.",
+              "example": "Task<T?> GetByIdAsync(int id); IQueryable<T> GetAll();"
+            },
+            {
+              "term": "Specification pattern",
+              "longForm": "Specification query pattern",
+              "plainDefinition": "Encapsulates query logic in reusable, composable objects.",
+              "example": "new ActiveOrdersSpec().Apply(db.Orders)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "This is a culture-war topic on r/dotnet and a common LeetCode system design follow-up. Interviewers test whether you parrot patterns blindly or choose based on testability, team boundaries, and query complexity. Wrong answer: 'always use repository for clean architecture.' Right answer: 'DbContext is the unit of work; I add abstraction when query logic repeats, when swapping data stores, or when domain language needs hiding — not a generic CRUD wrapper.'"
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Testing without repository",
+          "body": "Use InMemory provider, SQLite in-memory, or Testcontainers with WebApplicationFactory — test against real EF behavior. Mocking DbContext is painful and tests nothing about SQL translation."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Decision flow: repository or DbContext?",
+          "items": [
+            {
+              "title": "Start with DbContext",
+              "body": "Default for ASP.NET Core APIs — inject AppDbContext, LINQ in application services."
+            },
+            {
+              "title": "Extract when logic repeats",
+              "body": "Same complex query in 5 handlers → private method, specification, or domain repository."
+            },
+            {
+              "title": "Avoid generic IRepository<T>",
+              "body": "GetAll() returning IQueryable leaks EF; CRUD methods duplicate DbSet."
+            },
+            {
+              "title": "Meaningful interfaces",
+              "body": "IOrderRepository.GetPendingForFulfillmentAsync() expresses domain intent."
+            },
+            {
+              "title": "Test with real provider",
+              "body": "Integration tests over SQLite/Testcontainers — not mock repository."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Layering options",
+            "source": "flowchart TB\n  H[Minimal API / Controller] --> S[Application Service]\n  S --> DC[AppDbContext direct\\nrecommended default]\n  S --> R[Domain Repository\\nwhen query logic is complex]\n  R --> DC\n  S -.-> BAD[Generic IRepository T\\nCRUD wrapper\\navoid unless justified]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Direct DbContext — recommended default",
+            "code": "public sealed class OrderService(AppDbContext db)\n{\n    public async Task<OrderSummaryDto?> GetSummaryAsync(Guid id, CancellationToken ct)\n        => await db.Orders.AsNoTracking()\n            .Where(o => o.Id == id)\n            .Select(o => new OrderSummaryDto(o.Id, o.Total, o.Status))\n            .FirstOrDefaultAsync(ct);\n\n    public async Task ShipAsync(Guid id, CancellationToken ct)\n    {\n        var order = await db.Orders.AsTracking().FirstAsync(o => o.Id == id, ct);\n        order.Status = OrderStatus.Shipped;\n        await db.SaveChangesAsync(ct);\n    }\n}",
+            "explanation": "Application service owns use-case logic; DbContext owns persistence. No extra interface layer. LINQ stays expressive and refactorable."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Domain-specific repository — when it earns its keep",
+            "code": "public interface IOrderReadRepository\n{\n    Task<PagedResult<OrderListDto>> GetPendingFulfillmentAsync(\n        FulfillmentFilter filter, CancellationToken ct);\n}\n\npublic sealed class EfOrderReadRepository(AppDbContext db) : IOrderReadRepository\n{\n    public async Task<PagedResult<OrderListDto>> GetPendingFulfillmentAsync(\n        FulfillmentFilter filter, CancellationToken ct)\n    {\n        var query = db.Orders.AsNoTracking()\n            .Where(o => o.Status == OrderStatus.Paid)\n            .Where(o => o.WarehouseId == filter.WarehouseId);\n        // complex sorting, cursor pagination, projection — encapsulated once\n        ...\n    }\n}",
+            "explanation": "Repository with domain-named methods hides complex query composition. Not generic CRUD — specific read model for one bounded context."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Anti-pattern — generic repository leaking IQueryable",
+            "code": "// AVOID unless you have strong team conventions\npublic interface IRepository<T> where T : class\n{\n    IQueryable<T> GetAll(); // leaks EF to callers — N+1 and provider coupling\n    Task<T?> GetByIdAsync(object id);\n    void Add(T entity);\n    void Remove(T entity);\n}\n\n// Callers do repo.GetAll().Where(...) — repository adds zero value over DbSet",
+            "explanation": "Generic repository duplicating DbSet with IQueryable escape hatch provides no encapsulation. Microsoft EF docs recommend against this for new projects."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Integration testing without mocking repository",
+            "code": "public class OrderApiTests : IClassFixture<WebApplicationFactory<Program>>\n{\n    [Fact]\n    public async Task Get_order_returns_summary()\n    {\n        await using var factory = new WebApplicationFactory<Program>()\n            .WithWebHostBuilder(b => b.ConfigureServices(s =>\n            {\n                s.RemoveAll<DbContextOptions<AppDbContext>>();\n                s.AddDbContext<AppDbContext>(o => o.UseSqlite(\"DataSource=:memory:\"));\n            }));\n\n        var client = factory.CreateClient();\n        var response = await client.GetAsync(\"/api/orders/\" + Guid.NewGuid());\n        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);\n    }\n}",
+            "explanation": "Test full stack with real EF provider (SQLite in-memory or Testcontainers PostgreSQL). Proves SQL translation and mapping — mock repository cannot."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Data access layering",
+          "headers": ["Approach", ".NET EF Core", "NestJS", "Express"],
+          "rows": [
+            ["Default", "DbContext in service", "Prisma/TypeORM in service", "Prisma client in route handler"],
+            ["Repository layer", "Optional domain repo", "@Injectable() custom repo", "Manual repository module"],
+            ["Generic CRUD repo", "Discouraged", "Discouraged", "Common anti-pattern"],
+            ["Testing", "WebApplicationFactory + SQLite", "Test module override", "Supertest + test DB"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "IRepository<T> for every entity — ceremony without value. Repository per DbSet but sharing one DbContext — just use DbContext. Mocking IRepository in unit tests while never testing LINQ — false confidence. Repository returning IQueryable to 'stay flexible' — couples callers to EF."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: measure whether repository layer reduces duplicate query bugs or just adds files. Code review: complex LINQ should live in one place — repository, specification, or private static query method. CQRS split: write side uses DbContext/aggregates; read side uses Dapper or raw SQL views with IOrderReadRepository — legitimate abstraction boundary. Open generic IRepository<> registration with Scrutor is acceptable only when team has strict rules against IQueryable leakage."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "When to abstract",
+          "headers": ["Situation", "Recommendation", "Why"],
+          "rows": [
+            ["Simple CRUD API", "Direct DbContext", "EF is already the abstraction"],
+            ["Repeated complex queries", "Specification or read repository", "DRY without generic CRUD"],
+            ["Swapping data store", "Meaningful interface per aggregate", "Rare — EF provider swap is easier"],
+            ["Clean Architecture mandate", "Domain repo with intent methods", "Not IRepository<T> GetAll"],
+            ["CQRS read models", "Separate query service/repo", "Dapper/SQL behind interface"],
+            ["Unit test speed", "Integration tests over mocks", "Mocks hide query bugs"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Insisting repository is always required for 'clean code.' Cannot explain DbContext is unit-of-work. Saying mock repository is sufficient testing for EF. Not knowing Microsoft's official stance: skip repository unless you need it."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "DbContext is already repository + unit of work — direct injection is Microsoft's recommended default for most APIs.",
+    "When to abstract: complex repeated queries, CQRS read models, domain-specific method names — not generic IRepository<T> CRUD.",
+    "Production tip: integration test with SQLite/Testcontainers; avoid mocking DbContext; encapsulate query logic in specifications.",
+    "60s: I inject DbContext into application services by default. Repository when query logic is complex or read model is separate. Generic IRepository is an anti-pattern — leaks IQueryable. Test with real EF provider, not mock repo.",
+    "Follow-up: how does CQRS change your data access layering?"
+  ],
+  "commonPitfalls": [
+    "Always use repository 'for testability' gets you rejected — mock repo does not test LINQ or SQL.",
+    "IRepository.GetAll().Where() — zero encapsulation over DbSet.",
+    "Strong answer: 'DbContext direct for most endpoints. Domain-named repository for complex reads or CQRS. Integration tests with Testcontainers. Abstraction earns its keep when it hides complexity, not CRUD.'"
+  ],
+  "introducedIn": "EF Core 1.0; community guidance evolved toward direct DbContext",
+  "relatedTopicIds": [
+    "dotnet-09-ef-core-basics",
+    "dotnet-05-di-fundamentals",
+    "dotnet-12-integration-testing"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS repository providers",
+      "note": "NestJS @InjectRepository(Entity) is framework-mandated — closer to EF DbSet than custom IRepository. Custom repos in NestJS should still be domain-specific, not generic findAll.",
+      "futureTopicSlug": "typescript/nestjs/typeorm-repository"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express data access layering",
+      "note": "Express has no standard — teams split routes/services/db modules manually. The EF debate maps to whether you wrap Prisma client in a repository class or call prisma.order.findMany directly in handlers.",
+      "futureTopicSlug": "javascript/express/layering"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "DbContext as unit of work",
+      "url": "https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/"
+    },
+    {
+      "title": "Testing EF Core applications",
+      "url": "https://learn.microsoft.com/en-us/ef/core/testing/"
+    },
+    {
+      "title": "Architectural principles",
+      "url": "https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures"
+    }
+  ],
+  "animationHint": "flow"
+}

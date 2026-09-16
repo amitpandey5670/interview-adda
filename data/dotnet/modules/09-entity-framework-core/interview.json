@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-09-entity-framework-core",
+  "title": "Entity Framework Core interview drills",
+  "items": [
+    {
+      "question": "Explain DbContext lifetime in ASP.NET Core and why it must not be singleton or shared across threads.",
+      "answer": "AddDbContext registers DbContext as scoped — one instance per HTTP request scope, disposed when the request completes. DbContext holds a change tracker, connection state, and is explicitly not thread-safe: parallel operations cause InvalidOperationException ('second operation on this context'). Singleton DbContext is never valid — connections are pooled via DbContextOptions (singleton), but the context instance is not. Background services (singleton) must use IServiceScopeFactory.CreateAsyncScope() per work item to get a fresh scoped DbContext. Production proof: dotnet-counters Microsoft.EntityFrameworkCore ActiveDbContexts should approximate concurrent in-flight requests, not stay at 1 under load.",
+      "followUps": [
+        "What is IDbContextFactory and when would you use it?",
+        "How does captive dependency relate to DbContext?"
+      ],
+      "sixtySeconds": "DbContext scoped per request. Not thread-safe. Never singleton. Background work uses IServiceScopeFactory per job. ActiveDbContexts counter proves correct lifetime under load."
+    },
+    {
+      "question": "When do you use AsNoTracking versus change tracking, and what is the production impact?",
+      "answer": "Change tracking builds an identity map and snapshots original values so SaveChangesAsync can emit UPDATE for modified properties — required for write paths. AsNoTracking returns detached entities with lower memory and CPU overhead — use for all read-only GET endpoints. Best practice: Select projection to DTO (never tracks) or global QueryTrackingBehavior.NoTracking with explicit AsTracking() on mutations. Production impact: list endpoints returning thousands of tracked entities cause measurable Gen2 GC pressure. Prove with load tests and dotnet-counters tracked-entities counter staying near zero on GET-only workloads.",
+      "followUps": [
+        "How do you update an entity loaded with AsNoTracking?",
+        "What is AsNoTrackingWithIdentityResolution?"
+      ],
+      "sixtySeconds": "Tracking for writes — SaveChanges detects changes. AsNoTracking for reads — less memory. Project to DTO is best. Global NoTracking default, AsTracking on PATCH. Load test proves GC savings."
+    },
+    {
+      "question": "What is the N+1 query problem in EF Core and how do Include, AsSplitQuery, and projection compare?",
+      "answer": "N+1 occurs when one query loads N parent rows and N additional queries load related data — common with lazy loading or explicit loops over navigation properties. Detection: SQL logging, MiniProfiler, or Application Insights dependency count per request (alert if >5 SQL calls on a list endpoint). Fixes ranked: (1) Select projection to DTO — one SQL query with exact columns, best for APIs; (2) Include/ThenInclude for small entity graphs; (3) AsSplitQuery when multiple collection Includes would cause cartesian explosion in a single JOIN. Index foreign keys used in joins. Compiled queries cache plans for hot identical projections.",
+      "followUps": [
+        "What is cartesian explosion with two collection Includes?",
+        "How does lazy loading cause N+1 in serialization?"
+      ],
+      "sixtySeconds": "N+1 is 1 plus N queries. Detect in SQL logs. Projection to DTO best. Include for graphs. AsSplitQuery for multi-collection. Index FKs. Alert on SQL count per request."
+    },
+    {
+      "question": "Compare offset and cursor pagination in EF Core. What are the total count tradeoffs?",
+      "answer": "Offset pagination uses Skip((page-1)*size).Take(size) — simple, supports arbitrary page numbers, but O(offset) cost on deep pages because the database scans skipped rows. Cursor (keyset) pagination uses WHERE sortKey > @cursor ORDER BY sortKey TAKE size — constant time per page regardless of depth, ideal for feeds and mobile infinite scroll. Requires stable sort with tie-breaker (CreatedAt, Id). Total count via CountAsync powers 'page X of Y' but doubles database work — full scan or index scan on every list request. Production choices: omit count for feeds; cache count with TTL for admin; approximate count for dashboards. Always OrderBy before paginate; composite index on (filter, sort, id).",
+      "followUps": [
+        "How do you encode an opaque cursor token?",
+        "When is offset pagination still acceptable?"
+      ],
+      "sixtySeconds": "Offset simple, slow deep. Cursor constant time, no arbitrary page jump. COUNT expensive — skip, cache, or approximate. Stable sort with Id tie-breaker. Index filter plus sort columns."
+    },
+    {
+      "question": "How does optimistic concurrency work with RowVersion and what HTTP status should the API return?",
+      "answer": "Configure byte[] RowVersion with IsRowVersion() — SQL Server auto-updates on every row change. On SaveChangesAsync, EF generates UPDATE ... WHERE Id=@id AND RowVersion=@original. If another transaction modified the row, zero rows match and DbUpdateConcurrencyException is thrown. API should return HTTP 409 Conflict with RFC 7807 Problem Details, not 500. Client contract: GET returns RowVersion (or ETag); PUT/PATCH must send the token from last read. Client flow: reload, merge changes, retry. For PostgreSQL use xmin concurrency token. Monitor 409 rate — high rate on hot rows may need pessimistic locking or CHECK constraints (e.g., Stock >= 0).",
+      "followUps": [
+        "How does concurrency work with Attach and AsNoTracking?",
+        "When is pessimistic locking appropriate?"
+      ],
+      "sixtySeconds": "RowVersion in WHERE on UPDATE. Zero rows updated equals conflict. DbUpdateConcurrencyException maps to 409. Client reloads with new token. Not 500. Monitor 409 rate on hot resources."
+    },
+    {
+      "question": "Should you use the repository pattern with EF Core? Defend your answer.",
+      "answer": "Microsoft guidance: DbContext already implements repository and unit-of-work patterns — inject DbContext directly into application services for most APIs. Generic IRepository<T> with GetAll() returning IQueryable adds indirection without encapsulation — callers just do repo.GetAll().Where() which is DbSet with extra steps. Justified abstractions: domain-specific repositories with intent-revealing methods (GetPendingFulfillmentAsync), specification pattern for reusable query logic, or CQRS read repositories backed by Dapper/SQL. Testing: integration tests with SQLite in-memory or Testcontainers — mocking IRepository does not validate LINQ translation or SQL shape. Choose abstraction when it hides complexity, not for ceremonial clean architecture.",
+      "followUps": [
+        "How does CQRS change your data access layering?",
+        "What is the specification pattern?"
+      ],
+      "sixtySeconds": "DbContext is UoW plus repo — direct injection default. No generic IRepository CRUD. Domain repo for complex reads. Integration test with real EF. Abstraction when it earns its keep."
+    },
+    {
+      "question": "You see 50 SQL queries for GET /api/orders returning 50 rows. Diagnose and fix.",
+      "answer": "Classic N+1: one query for orders plus one per related entity (Customer, Lines, etc.) from lazy loading or loop-based loading. Diagnose: enable EF LogTo in staging, TagWith on query, or Application Insights dependency count. Fix priority: rewrite as Select projection to OrderListDto with nested Customer.Name and line counts in one LINQ query — single SQL round trip, exact columns. Alternative: Include(o => o.Customer) for reference navigation; AsSplitQuery() if multiple collections. Add AsNoTracking. Verify: integration test asserting query count <= 2. Index Orders.CustomerId. Load test before/after — p95 should drop dramatically.",
+      "followUps": [
+        "Would AutoMapper ProjectTo fix this automatically?",
+        "What if the client needs full nested graphs?"
+      ],
+      "sixtySeconds": "50 SQL on 50 rows is N+1. Log SQL per request. Fix with Select projection to DTO. Include if small graph. Index FK. Assert query count in integration test."
+    },
+    {
+      "question": "Explain compiled queries and when they help EF Core performance.",
+      "answer": "EF.CompileAsyncQuery caches the query expression compilation and SQL generation for a fixed query shape — avoids re-parsing the expression tree on every call. Use for proven hot paths with identical structure: GetOrderById, GetActiveProductsForTenant. Tradeoffs: fixed shape (parameters yes, dynamic filters no), must recompile if model changes, less readable than inline LINQ. Does not replace index tuning or fixing N+1 — it reduces CPU on the client side. Combine with AsNoTracking and projection. Measure with dotnet-trace before adopting — only worth it when profiling shows significant time in query compilation.",
+      "followUps": [
+        "How does EF Core 8+ parameterized collection translation help?",
+        "What is the difference between compiled query and raw SQL?"
+      ],
+      "sixtySeconds": "CompileAsyncQuery caches plan for fixed-shape hot queries. Good for GetById patterns. Not a substitute for indexes or projection. Profile first — client-side CPU savings."
+    },
+    {
+      "question": "What index recommendations matter most for EF Core Web API performance?",
+      "answer": "Index every foreign key column used in Include joins and WHERE filters — missing FK index turns nested loop joins into scans. Composite indexes matching query shape: (Status, CreatedAt DESC, Id DESC) for filtered sorted pagination. Covering indexes when SELECT columns are predictable — include commonly projected columns. Unique indexes on natural keys. Avoid over-indexing write-heavy tables — each index slows INSERT/UPDATE. Use EF Fluent API HasIndex() in migrations; verify with EXPLAIN ANALYZE in staging. EF logging shows slow queries; Application Insights flags dependency duration outliers. Concurrency tokens do not need separate indexes — they are in WHERE with primary key.",
+      "followUps": [
+        "How do filtered indexes help?",
+        "What is the difference between clustered and non-clustered for EF?"
+      ],
+      "sixtySeconds": "Index FKs. Composite index on filter plus sort plus tie-breaker Id. Verify with EXPLAIN. HasIndex in migrations. Do not over-index write paths. Covering indexes for hot projections."
+    },
+    {
+      "question": "ActiveDbContexts is stuck at 1 during a load test with 100 concurrent users. What is wrong?",
+      "answer": "Definitive captive DbContext: one scoped instance shared across all requests instead of one per request. Root causes: DbContext registered as singleton; singleton service (BackgroundService, cache, middleware) captured AppDbContext in constructor; static field holding DbContext; single IServiceScope for entire worker lifetime. Symptoms: cross-tenant data leaks, ObjectDisposedException, 'second operation on this context' under concurrency. Fix: ensure AddDbContext (scoped default), grep singleton classes for DbContext in constructor, use IServiceScopeFactory.CreateScope() per work item, InvokeAsync injection for middleware. Enable ValidateOnBuild and ValidateScopes in CI. After fix, ActiveDbContexts should track concurrent requests during load test.",
+      "followUps": [
+        "How does this relate to the captive dependency trap in DI?",
+        "What dotnet-counters command do you run?"
+      ],
+      "sixtySeconds": "ActiveDbContexts equals 1 under concurrency equals captive DbContext. Should match concurrent requests. Grep singleton ctors. Fix IServiceScopeFactory. ValidateScopes in CI."
+    }
+  ]
+}

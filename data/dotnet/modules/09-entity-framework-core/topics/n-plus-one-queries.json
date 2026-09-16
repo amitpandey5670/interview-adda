@@ -1,0 +1,247 @@
+{
+  "id": "dotnet-09-n-plus-one-queries",
+  "slug": "n-plus-one-queries",
+  "title": "N+1 queries (Include, split queries, projection)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 4,
+  "hook": "You load 100 orders in one query, then loop and load each customer in a separate query — that is the N+1 problem. One round trip becomes 101. EF Core fixes it with Include, split queries, or better yet, projection.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The N+1 query problem happens when code executes one query to load a parent collection (N items), then N additional queries inside a loop to load related data — typically one per row. In EF Core this often appears as lazy loading (navigation property access after the initial query) or explicit db.Customers.Find inside a foreach. Fixes: eager loading with Include/ThenInclude, AsSplitQuery to avoid cartesian explosion, or projection with Select to fetch only needed columns in one SQL statement. Projection is usually the best choice for APIs returning DTOs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "N+1",
+              "longForm": "N plus one query problem",
+              "plainDefinition": "One query for the list plus N queries for related data — scales linearly with row count.",
+              "example": "1 query for orders + 100 queries for customers = 101 round trips."
+            },
+            {
+              "term": "Include",
+              "longForm": "Eager loading Include",
+              "plainDefinition": "Eager-loads a navigation property in the same or follow-up SQL query.",
+              "example": ".Include(o => o.Customer).Include(o => o.Lines)"
+            },
+            {
+              "term": "Split query",
+              "longForm": "Split query execution",
+              "plainDefinition": "AsSplitQuery() runs separate SQL per collection instead of one JOIN with duplicate rows.",
+              "example": ".Include(o => o.Lines).AsSplitQuery()"
+            },
+            {
+              "term": "Cartesian explosion",
+              "longForm": "Cartesian product explosion",
+              "plainDefinition": "Single JOIN multiplying rows when multiple Includes are used — huge result sets.",
+              "example": "Order with 10 lines and 5 tags → 50 rows per order in one JOIN."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "N+1 is invisible in development with 10 rows but kills production APIs at scale — database round-trip latency multiplies. It is a top EF Core interview question on Reddit and LeetCode system design threads. Interviewers want: how you detect it (SQL logging, MiniProfiler, Application Insights), how you fix it (Include vs projection tradeoffs), and when split queries help. Saying 'use Include always' without mentioning cartesian explosion or over-fetching columns gets you rejected."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Lazy loading in APIs",
+          "body": "Lazy loading triggers N+1 when serialization accesses navigation properties. Disable lazy loading in Web APIs unless you fully control the object graph. Prefer explicit Include or projection."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From N+1 to one query",
+          "items": [
+            {
+              "title": "Detect the pattern",
+              "body": "Log SQL or use MiniProfiler — see repeated SELECT with different parameter values in a loop."
+            },
+            {
+              "title": "Option A: Include",
+              "body": "Add .Include(o => o.Customer) — EF generates JOIN or split queries."
+            },
+            {
+              "title": "Option B: Split query",
+              "body": "Multiple Includes on collections? Add AsSplitQuery() to avoid cartesian product."
+            },
+            {
+              "title": "Option C: Projection (preferred)",
+              "body": "Select to DTO with nested properties — one SQL with only needed columns."
+            },
+            {
+              "title": "Verify",
+              "body": "Re-run with logging — exactly one or predictable number of queries per request."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "N+1 vs Include vs projection",
+            "source": "flowchart TB\n  N1[\"N+1: 1 + N queries\"] --> BAD[101 round trips\\nfor 100 orders]\n  INC[\"Include: JOIN or split\"] --> MID[1-3 queries\\nmay over-fetch columns]\n  PROJ[\"Select DTO projection\"] --> GOOD[1 query\\nexact columns\\nbest for APIs]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "N+1 anti-pattern — lazy navigation access",
+            "code": "// BAD: N+1 — 1 query for orders, N for customers\nvar orders = await db.Orders.AsNoTracking().Take(100).ToListAsync(ct);\nvar dtos = orders.Select(o => new OrderDto(\n    o.Id,\n    o.Total,\n    o.Customer.Name)); // Customer not loaded — lazy load or null\n\n// BAD: explicit loop query\nforeach (var order in orders)\n{\n    order.Customer = await db.Customers.FindAsync(order.CustomerId); // N queries\n}",
+            "explanation": "Each navigation access or loop iteration fires another SQL round trip. With 100 orders this is 101 database calls. Classic production outage pattern after data grows."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Include and AsSplitQuery for graphs",
+            "code": "// Single JOIN — OK for reference (many-to-one)\nvar orders = await db.Orders\n    .AsNoTracking()\n    .Include(o => o.Customer)\n    .Where(o => o.Status == OrderStatus.Pending)\n    .ToListAsync(ct);\n\n// Multiple collections — use split query to avoid cartesian explosion\nvar ordersWithLines = await db.Orders\n    .AsNoTracking()\n    .Include(o => o.Lines)\n    .Include(o => o.Discounts)\n    .AsSplitQuery()\n    .Where(o => o.Id == orderId)\n    .FirstAsync(ct);",
+            "explanation": "Include on reference navigation uses JOIN. Multiple collection Includes without split query multiply rows. AsSplitQuery issues separate SQL per collection — 3 queries but each efficient."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Projection — preferred for API responses",
+            "code": "var dtos = await db.Orders\n    .AsNoTracking()\n    .Where(o => o.Status == OrderStatus.Pending)\n    .Select(o => new OrderListDto(\n        o.Id,\n        o.Total,\n        o.CreatedAt,\n        o.Customer.Name,\n        o.Lines.Count,\n        o.Lines.Select(l => new LineDto(l.Sku, l.Quantity)).ToList()))\n    .ToListAsync(ct);",
+            "explanation": "Select translates nested properties to SQL subqueries/joins. Returns exactly what the API needs — no full entity graphs, no tracking, typically one query. Best default for list endpoints."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — detect N+1 in staging",
+            "code": "// Enable sensitive SQL logging in Development/Staging\nbuilder.Services.AddDbContext<AppDbContext>(o =>\n{\n    o.UseNpgsql(conn);\n    o.EnableSensitiveDataLogging();\n    o.LogTo(Console.WriteLine, LogLevel.Information);\n});\n\n// Or use EF Core tagged queries + Application Insights\n// Alert: > 5 SQL commands per GET /api/orders request\n\n// MiniProfiler / EF Core interceptors:\npublic class QueryCountInterceptor : DbCommandInterceptor\n{\n    public static int Count;\n    public override InterceptionResult<DbDataReader> ReaderExecuting(...)\n    { Interlocked.Increment(ref Count); return base.ReaderExecuting(...); }\n}",
+            "explanation": "Log SQL per request in staging. Integration test: assert query count ≤ 2 for list endpoint. Production: Application Insights dependency count per request; alert on spikes. QueryCountInterceptor useful in CI."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "N+1 across ORMs",
+          "headers": ["Fix", "EF Core", "TypeORM", "Prisma"],
+          "rows": [
+            ["Eager load", "Include / ThenInclude", "relations: ['customer']", "include: { customer: true }"],
+            ["Avoid cartesian", "AsSplitQuery()", "QueryBuilder separate queries", "Separate findMany calls"],
+            ["Best API pattern", "Select projection to DTO", "getRawMany with joins", "select: { customer: { select: { name } } }"],
+            ["Detection", "LogTo / MiniProfiler", "logging: true", "Prisma query log"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "AutoMapper ProjectTo without verifying SQL shape — can still N+1. Include on list of 10k rows — over-fetches all columns. Multiple collection Includes without AsSplitQuery — cartesian explosion memory spike. Fixing N+1 with Include when projection would return 5 fields from a 30-column table."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights 'dependency count' per endpoint — GET /api/orders should show 1-2 SQL dependencies, not 50+. EF Core LogTo with query tags (TagWith) maps SQL to routes. Load test with realistic row counts — p95 latency cliff often correlates with N+1. Index recommendations: foreign keys used in Include joins (CustomerId on Orders) — missing index makes N+1 worse even after fix. dotnet-trace with Microsoft-EntityFrameworkCore-Relational provider events shows query count per request."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Include vs projection tradeoffs",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["Include + entities", "Simple for small graphs; reuse entity logic", "Over-fetches columns; tracking if not AsNoTracking"],
+            ["Include + AsSplitQuery", "Avoids cartesian on multi-collection", "Multiple round trips (usually 2-4)"],
+            ["Select projection", "One query; exact shape; best for APIs", "More mapping code; complex graphs need careful LINQ"],
+            ["Compiled query + projection", "Cached plan for hot list endpoint", "Fixed shape; harder to change"],
+            ["Data loader / batching", "GraphQL-style batch IN clause", "Extra infrastructure; not built into EF"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Only answer 'use Include' without mentioning projection or split queries. Not knowing how to detect N+1 in production logs. Saying lazy loading is fine in REST APIs. Unable to explain cartesian explosion with two collection Includes."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "N+1 = 1 query for parents + N queries for children — common with lazy loading or loops; fix with Include, AsSplitQuery, or Select projection.",
+    "When not to use Include alone: large lists, multiple collections (cartesian explosion), or when you only need a few columns — use projection.",
+    "Production tip: alert on SQL count per request; index FK columns; TagWith queries; load test with realistic N.",
+    "60s: N+1 is repeated queries in a loop or lazy navigation. Detect via SQL logging. Fix: projection to DTO best for APIs; Include for small graphs; AsSplitQuery for multiple collections. Index foreign keys.",
+    "Follow-up: how does compiled query help N+1 hot paths?"
+  ],
+  "commonPitfalls": [
+    "Include-only answer without projection gets you rejected — senior APIs should project to DTOs, not return full tracked graphs.",
+    "Two collection Includes without AsSplitQuery — cartesian explosion O(rows × lines × tags).",
+    "Strong answer: 'I detect N+1 via SQL log count per request. List endpoints use Select projection — one query, exact columns. Graph loads use Include + AsSplitQuery. I index FK columns and load test at production row counts.'"
+  ],
+  "introducedIn": "EF Core 1.0; AsSplitQuery in EF Core 5.0",
+  "relatedTopicIds": [
+    "dotnet-09-tracking-vs-notracking",
+    "dotnet-09-ef-core-basics",
+    "csharp-12-ienumerable-vs-iqueryable",
+    "dotnet-09-pagination-patterns"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Prisma include vs select",
+      "note": "Prisma include loads relations (like EF Include); select narrows columns (like EF projection). Prisma select is the N+1-safe default for APIs — same recommendation as EF Select to DTO.",
+      "futureTopicSlug": "typescript/prisma/select-include"
+    },
+    {
+      "language": "javascript",
+      "concept": "GraphQL DataLoader",
+      "note": "GraphQL N+1 is solved with DataLoader batching — batches N Find calls into one WHERE IN query. EF projection achieves similar in one round trip without extra infrastructure.",
+      "futureTopicSlug": "javascript/graphql/dataloader"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Eager loading related data",
+      "url": "https://learn.microsoft.com/en-us/ef/core/querying/related-data/"
+    },
+    {
+      "title": "Single vs split queries",
+      "url": "https://learn.microsoft.com/en-us/ef/core/querying/single-split-queries"
+    },
+    {
+      "title": "Efficient querying",
+      "url": "https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "csv-import"
+}

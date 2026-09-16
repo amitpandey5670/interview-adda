@@ -1,0 +1,248 @@
+{
+  "id": "dotnet-09-ef-core-basics",
+  "slug": "ef-core-basics",
+  "title": "EF Core basics for APIs (DbContext, DbSet, LINQ)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 1,
+  "hook": "Entity Framework Core (EF Core) is the Object-Relational Mapper (ORM) that lets your Web API talk to a database using C# classes and LINQ instead of raw SQL strings. DbContext is the gateway — DbSet properties are your tables.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Entity Framework Core (EF Core) maps C# entity classes to database tables and translates LINQ queries into Structured Query Language (SQL). DbContext is the unit of work — it holds DbSet<T> properties (one per table), tracks changes, and executes SaveChangesAsync to persist. In ASP.NET Core Web APIs, you register DbContext with AddDbContext<AppDbContext>() and inject it into handlers or services. LINQ queries on DbSet return IQueryable<T>, which EF Core translates to SQL at execution time (ToListAsync, FirstOrDefaultAsync, etc.)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "EF Core",
+              "longForm": "Entity Framework Core",
+              "plainDefinition": "Microsoft's cross-platform ORM for .NET. Maps C# classes to relational database tables.",
+              "example": "builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlServer(conn));"
+            },
+            {
+              "term": "DbContext",
+              "longForm": "Database Context",
+              "plainDefinition": "The main EF Core class that manages database connections, change tracking, and query execution.",
+              "example": "public class AppDbContext : DbContext { public DbSet<Order> Orders => Set<Order>(); }"
+            },
+            {
+              "term": "DbSet",
+              "longForm": "Database Set",
+              "plainDefinition": "A typed collection representing a database table. LINQ queries on DbSet become SQL.",
+              "example": "db.Orders.Where(o => o.Status == OrderStatus.Pending)"
+            },
+            {
+              "term": "ORM",
+              "longForm": "Object-Relational Mapper",
+              "plainDefinition": "A library that bridges object-oriented code and relational databases.",
+              "example": "Order entity class maps to Orders table via conventions or Fluent API."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Nearly every production Web API reads and writes data. EF Core eliminates boilerplate ADO.NET (connection strings, DataReader loops, parameter binding) and keeps queries type-safe. Interviewers expect you to explain when LINQ runs in the database versus in memory, how DbContext fits into dependency injection (DI), and why SaveChangesAsync is the commit boundary. Misunderstanding IQueryable deferred execution is a top cause of performance bugs."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Correlate with C# LINQ",
+          "body": "DbSet<T> implements IQueryable<T>. The same expression-tree rules from C# LINQ apply — providers translate a subset of C#. See csharp-12-ienumerable-vs-iqueryable for the language fundamentals."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "EF Core query lifecycle in a Web API",
+          "items": [
+            {
+              "title": "Register DbContext",
+              "body": "AddDbContext<AppDbContext>() registers a scoped DbContext with the connection provider (SQL Server, PostgreSQL, SQLite)."
+            },
+            {
+              "title": "Inject into handler",
+              "body": "Minimal API or controller receives AppDbContext from the request scope."
+            },
+            {
+              "title": "Build LINQ query",
+              "body": "Where, Select, OrderBy on DbSet build an IQueryable expression tree — no SQL yet."
+            },
+            {
+              "title": "Execute with async terminal",
+              "body": "ToListAsync, FirstOrDefaultAsync, CountAsync sends translated SQL to the database."
+            },
+            {
+              "title": "SaveChanges for writes",
+              "body": "Add, Update, Remove mark entities; SaveChangesAsync generates INSERT/UPDATE/DELETE in one transaction."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "DbContext in a Web API request",
+            "source": "flowchart LR\n  REQ[HTTP Request] --> SCOPE[Request scope\\nDbContext created]\n  SCOPE --> LINQ[LINQ on DbSet\\nIQueryable built]\n  LINQ --> SQL[EF provider\\ntranslates to SQL]\n  SQL --> DB[(Database)]\n  DB --> DTO[Map to entities/DTOs]\n  DTO --> RESP[HTTP Response]\n  SCOPE --> DISPOSE[Scope disposed\\nDbContext released]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "DbContext, entities, and registration",
+            "code": "public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)\n{\n    public DbSet<Order> Orders => Set<Order>();\n    public DbSet<Customer> Customers => Set<Customer>();\n\n    protected override void OnModelCreating(ModelBuilder modelBuilder)\n    {\n        modelBuilder.Entity<Order>(e =>\n        {\n            e.HasKey(o => o.Id);\n            e.Property(o => o.Total).HasPrecision(18, 2);\n            e.HasIndex(o => o.CustomerId);\n        });\n    }\n}\n\n// Program.cs\nbuilder.Services.AddDbContext<AppDbContext>(options =>\n    options.UseNpgsql(builder.Configuration.GetConnectionString(\"Default\")));",
+            "explanation": "DbContext takes DbContextOptions via constructor injection — required for DI. OnModelCreating configures keys, precision, and indexes via Fluent API. AddDbContext registers scoped lifetime by default."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Read path in a minimal API",
+            "code": "app.MapGet(\"/api/orders/{id:guid}\", async (Guid id, AppDbContext db, CancellationToken ct) =>\n{\n    var order = await db.Orders\n        .AsNoTracking()\n        .Where(o => o.Id == id)\n        .Select(o => new OrderSummaryDto(o.Id, o.Total, o.Status))\n        .FirstOrDefaultAsync(ct);\n\n    return order is null ? Results.NotFound() : Results.Ok(order);\n});",
+            "explanation": "LINQ on db.Orders is IQueryable — SQL runs only at FirstOrDefaultAsync. AsNoTracking skips change tracking for read-only APIs. Select projects to a DTO so EF generates only needed columns."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Write path with SaveChangesAsync",
+            "code": "app.MapPost(\"/api/orders\", async (CreateOrderRequest req, AppDbContext db, CancellationToken ct) =>\n{\n    var order = new Order\n    {\n        Id = Guid.NewGuid(),\n        CustomerId = req.CustomerId,\n        Total = req.Lines.Sum(l => l.Quantity * l.UnitPrice),\n        Status = OrderStatus.Pending\n    };\n\n    db.Orders.Add(order);\n    await db.SaveChangesAsync(ct);\n    return Results.Created($\"/api/orders/{order.Id}\", order);\n});",
+            "explanation": "Add marks the entity as Insert. SaveChangesAsync is the transaction boundary — one round trip for all pending changes. Tracking is on by default for writes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Compiled query for hot read paths",
+            "code": "private static readonly Func<AppDbContext, Guid, Task<Order?>> GetOrderById =\n    EF.CompileAsyncQuery((AppDbContext db, Guid id) =>\n        db.Orders.AsNoTracking().FirstOrDefault(o => o.Id == id));\n\n// Usage in handler — query plan cached, less expression-tree compilation\nvar order = await GetOrderById(db, id);",
+            "explanation": "EF.CompileAsyncQuery caches the translated query plan. Useful for high-frequency identical queries. Tradeoff: less flexible than inline LINQ; use for proven hot paths only."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "EF Core vs TypeORM vs Prisma",
+          "headers": ["Concern", "EF Core (.NET)", "TypeORM (Node)", "Prisma (Node)"],
+          "rows": [
+            ["Query style", "LINQ on IQueryable (expression trees)", "QueryBuilder / Repository methods", "Prisma Client typed API"],
+            ["Context lifetime", "Scoped DbContext per request (DI)", "Manual DataSource / per-request EntityManager", "Singleton PrismaClient (connection pool)"],
+            ["Change tracking", "Built-in identity map per DbContext", "Optional per EntityManager", "No tracking — explicit updates"],
+            ["Migration tool", "dotnet ef migrations", "typeorm migration:run", "prisma migrate"],
+            ["Raw SQL escape hatch", "FromSqlRaw / ExecuteSqlRaw", "query() / getRepository().query()", "$queryRaw"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling ToList() before filtering — pulls entire table into memory. Using synchronous SaveChanges in async APIs — blocks thread pool. Forgetting AsNoTracking on read-only list endpoints — wastes memory on tracking. Assuming AddDbContext is singleton — it is scoped. Putting business logic inside entity setters instead of application services."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: enable EF Core logging (LogTo or Microsoft.Extensions.Logging) at Information level to capture generated SQL in staging. Application Insights dependency tracking shows database call duration per endpoint. dotnet-counters Microsoft.EntityFrameworkCore tracks total-queries and active-db-contexts. Slow endpoints often trace to missing indexes (see execution plan) or client-side evaluation from unsupported LINQ."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Best for", "Risk"],
+          "rows": [
+            ["LINQ + IQueryable", "Type-safe queries, provider translation", "Unsupported expressions fall back to client eval or throw"],
+            ["Compiled queries", "Hot paths with identical shape", "Less flexible; cache invalidation on model change"],
+            ["Raw SQL (FromSqlRaw)", "Complex reports, vendor-specific features", "No compile-time safety; injection if not parameterized"],
+            ["Dapper alongside EF", "Heavy read paths, bulk operations", "Two data access patterns to maintain"],
+            ["Code-first migrations", "Team owns schema in Git", "Drift if manual DB changes skip migrations"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying EF Core 'generates SQL at compile time' — it translates expression trees at runtime when the query executes. Cannot explain difference between IQueryable deferred execution and IEnumerable in-memory. Claiming ORM removes need to understand SQL or indexes. Not knowing SaveChangesAsync is the unit-of-work commit."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "EF Core maps C# entities to tables; DbContext is scoped unit-of-work with DbSet<T> per table and LINQ-to-SQL translation.",
+    "Tradeoff: LINQ convenience vs needing to know what SQL is generated — always review logs for hot endpoints.",
+    "Production tip: index foreign keys and filter columns; enable SQL logging in staging; use AsNoTracking on reads.",
+    "60s: DbContext scoped per request via AddDbContext. DbSet is IQueryable — LINQ builds expression trees, SQL runs at ToListAsync/FirstOrDefaultAsync. SaveChangesAsync commits tracked changes in one transaction. Compiled queries cache plans for hot paths.",
+    "Follow-up: when would you use Dapper instead of EF Core?"
+  ],
+  "commonPitfalls": [
+    "Saying 'EF runs LINQ in C#' gets you rejected — IQueryable defers to the database provider; IEnumerable runs in memory.",
+    "Loading entire tables with ToList() before Where — classic timeout under production data volume.",
+    "Strong answer: 'DbContext is scoped, LINQ on DbSet is IQueryable translated to SQL at execution. Reads use AsNoTracking + projection. Writes use tracking + SaveChangesAsync. I verify SQL in staging logs and index FK/filter columns.'"
+  ],
+  "introducedIn": "EF Core 1.0; compiled queries improved in EF Core 5+",
+  "relatedTopicIds": [
+    "csharp-12-ienumerable-vs-iqueryable",
+    "dotnet-05-service-lifetimes",
+    "dotnet-09-dbcontext-lifetime",
+    "dotnet-09-tracking-vs-notracking"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Prisma Client",
+      "note": "Prisma generates a typed client similar to DbSet — findMany maps to SQL. Unlike scoped DbContext, PrismaClient is typically a singleton with internal connection pooling. No built-in change tracker; updates are explicit.",
+      "futureTopicSlug": "typescript/prisma/client"
+    },
+    {
+      "language": "javascript",
+      "concept": "TypeORM EntityManager",
+      "note": "TypeORM EntityManager is closer to DbContext — per-request instances avoid cross-request state. Express/NestJS apps must create/dispose managers per request, mirroring scoped DbContext.",
+      "futureTopicSlug": "javascript/typeorm/entity-manager"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "EF Core overview",
+      "url": "https://learn.microsoft.com/en-us/ef/core/"
+    },
+    {
+      "title": "DbContext configuration",
+      "url": "https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/"
+    },
+    {
+      "title": "Compiled queries",
+      "url": "https://learn.microsoft.com/en-us/ef/core/performance/advanced-performance-topics#compiled-queries"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

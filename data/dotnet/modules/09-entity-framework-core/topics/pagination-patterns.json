@@ -1,0 +1,246 @@
+{
+  "id": "dotnet-09-pagination-patterns",
+  "slug": "pagination-patterns",
+  "title": "Pagination patterns (offset vs cursor, total count tradeoffs)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 5,
+  "hook": "Clients ask for page 500 of a million-row table — offset pagination scans and discards 10,000 rows. Total count queries can double database load. Cursor pagination fixes deep pages but changes your API contract.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Pagination splits large result sets into pages. Offset pagination uses Skip((page-1)*pageSize).Take(pageSize) — simple but slow on deep pages because the database still scans skipped rows. Cursor (keyset) pagination uses WHERE id > @lastSeenId ORDER BY id LIMIT @pageSize — constant time regardless of depth. Total count (SELECT COUNT(*)) powers 'Page 3 of 47' UIs but adds a full table scan or index scan on every request. Production APIs often return next-cursor links without total count, or cache approximate counts."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Offset pagination",
+              "longForm": "Offset-based pagination",
+              "plainDefinition": "Skip N rows then take M — page number based.",
+              "example": ".Skip((page - 1) * size).Take(size)"
+            },
+            {
+              "term": "Cursor pagination",
+              "longForm": "Keyset pagination",
+              "plainDefinition": "Fetch rows after a stable sort key from the previous page.",
+              "example": ".Where(o => o.Id > cursor).OrderBy(o => o.Id).Take(size)"
+            },
+            {
+              "term": "Total count",
+              "longForm": "Total row count query",
+              "plainDefinition": "COUNT(*) query for total pages — expensive on large filtered tables.",
+              "example": "var total = await query.CountAsync();"
+            },
+            {
+              "term": "Stable sort key",
+              "longForm": "Stable sort key column",
+              "plainDefinition": "Unique, indexed column(s) for cursor — typically Id or (CreatedAt, Id).",
+              "example": "Composite cursor prevents ties when CreatedAt duplicates."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Pagination is on every list endpoint interview. Seniors must explain offset vs cursor tradeoffs, why COUNT(*) hurts at scale, and how to paginate filtered/sorted lists without duplicates across pages. Reddit r/dotnet frequently discusses 'should I return total count' — the answer depends on UX needs vs database cost. Missing indexes on sort columns turns pagination into full table scans."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Index the sort column",
+          "body": "Cursor pagination on OrderBy(CreatedAt) requires an index on CreatedAt (ideally composite with Id). Without it, every page is a sequential scan."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing a pagination strategy",
+          "items": [
+            {
+              "title": "Estimate table size and depth",
+              "body": "Admin UI with page numbers on 50 rows — offset OK. Infinite scroll on millions — cursor required."
+            },
+            {
+              "title": "Define stable sort",
+              "body": "Always OrderBy before Skip/Take or cursor filter. Tie-breaker column prevents gaps/duplicates."
+            },
+            {
+              "title": "Decide on total count",
+              "body": "Need 'total pages'? Pay COUNT cost or use approximate/cached count. Mobile feeds often skip count entirely."
+            },
+            {
+              "title": "Project to DTO",
+              "body": "Select only list fields — pagination + projection is the efficient default."
+            },
+            {
+              "title": "Return metadata",
+              "body": "Offset: page, pageSize, hasNext. Cursor: nextCursor, hasMore — opaque encoded cursor token."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Offset vs cursor query shape",
+            "source": "flowchart LR\n  OFF[\"Offset page 1000\\nSKIP 20000 TAKE 20\"] --> SCAN[Scans 20020 rows\\nO offset depth]\n  CUR[\"Cursor lastId=xyz\\nWHERE id > xyz TAKE 20\"] --> IDX[Index seek\\nO page size only]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Offset pagination with optional total count",
+            "code": "app.MapGet(\"/api/orders\", async (\n    int page = 1, int pageSize = 20, AppDbContext db, CancellationToken ct) =>\n{\n    page = Math.Max(1, page);\n    pageSize = Math.Clamp(pageSize, 1, 100);\n\n    var baseQuery = db.Orders.AsNoTracking().Where(o => o.Status == OrderStatus.Pending);\n\n    // Expensive on large tables — consider skipping or caching\n    var total = await baseQuery.CountAsync(ct);\n\n    var items = await baseQuery\n        .OrderByDescending(o => o.CreatedAt)\n        .ThenBy(o => o.Id)\n        .Skip((page - 1) * pageSize)\n        .Take(pageSize)\n        .Select(o => new OrderSummaryDto(o.Id, o.Total, o.CreatedAt))\n        .ToListAsync(ct);\n\n    return Results.Ok(new { page, pageSize, total, items });\n});",
+            "explanation": "CountAsync runs separate SELECT COUNT — doubles DB work per request. Skip/Take degrades on deep pages. Fine for small admin tables; avoid on public feeds at scale."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Cursor (keyset) pagination",
+            "code": "app.MapGet(\"/api/orders/feed\", async (\n    string? cursor, int pageSize, AppDbContext db, CancellationToken ct) =>\n{\n    pageSize = Math.Clamp(pageSize is 0 ? 20 : pageSize, 1, 100);\n    DateTime? cursorTime = null;\n    Guid? cursorId = null;\n    if (!string.IsNullOrEmpty(cursor))\n        (cursorTime, cursorId) = DecodeCursor(cursor);\n\n    var query = db.Orders.AsNoTracking().Where(o => o.Status == OrderStatus.Pending);\n\n    if (cursorTime is not null && cursorId is not null)\n        query = query.Where(o =>\n            o.CreatedAt < cursorTime ||\n            (o.CreatedAt == cursorTime && o.Id < cursorId));\n\n    var items = await query\n        .OrderByDescending(o => o.CreatedAt)\n        .ThenByDescending(o => o.Id)\n        .Take(pageSize + 1)\n        .Select(o => new OrderSummaryDto(o.Id, o.Total, o.CreatedAt))\n        .ToListAsync(ct);\n\n    var hasMore = items.Count > pageSize;\n    if (hasMore) items.RemoveAt(pageSize);\n    var next = hasMore ? EncodeCursor(items[^1]) : null;\n    return Results.Ok(new { items, nextCursor = next, hasMore });\n});",
+            "explanation": "Composite cursor (CreatedAt, Id) handles ties. Take pageSize+1 to detect hasMore without COUNT. Each page is index seek — O(pageSize) regardless of depth."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Total count tradeoffs — cache and approximate",
+            "code": "// Option A: skip count — return hasMore only (feeds, mobile)\n// Option B: cache count with TTL\nvar cacheKey = \"orders:pending:count\";\nif (!cache.TryGetValue(cacheKey, out int total))\n{\n    total = await db.Orders.CountAsync(o => o.Status == OrderStatus.Pending, ct);\n    cache.Set(cacheKey, total, TimeSpan.FromMinutes(5));\n}\n\n// Option C: approximate count (PostgreSQL)\n// SELECT reltuples::bigint FROM pg_class WHERE relname = 'Orders';\n// Document in API: \"total is approximate\"",
+            "explanation": "COUNT on filtered million-row table on every list request is a common bottleneck. Cache invalidates on writes or accept stale totals. Approximate counts OK for dashboards."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — pagination performance",
+            "code": "// Index required for cursor:\n// CREATE INDEX IX_Orders_Status_CreatedAt_Id ON Orders (Status, CreatedAt DESC, Id DESC);\n\n// Compare execution plans:\n// Offset page 1 vs page 5000 — second plan shows massive rows scanned\n\n// Load test with k6:\n// p95 for GET /api/orders?page=1 vs ?page=500\n// Alert when deep offset p95 > 500ms",
+            "explanation": "Prove index usage with EXPLAIN in staging. Load test shallow vs deep offset pages — cliff proves need for cursor. Monitor COUNT query duration separately in APM."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Pagination in API frameworks",
+          "headers": ["Pattern", "EF Core", "Prisma", "REST convention"],
+          "rows": [
+            ["Offset", "Skip/Take", "skip/take", "?page=2&limit=20"],
+            ["Cursor", "Where key > cursor", "cursor + take", "Link header next URL"],
+            ["Total count", "CountAsync (expensive)", "count() separate query", "X-Total-Count header"],
+            ["Deep page cost", "O(offset) scan", "Same", "Framework-agnostic DB cost"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Skip/Take without OrderBy — non-deterministic pages. Cursor on non-unique sort column without tie-breaker — duplicate/missing rows across pages. COUNT(*) on every infinite-scroll request. pageSize unbounded — client sends pageSize=100000. Offset pagination on user-facing feeds with millions of rows."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: APM compare p95 for page=1 vs page=100 on same endpoint — offset cliff is definitive. Database slow query log flags ORDER BY ... OFFSET large N. Index recommendations: composite index matching WHERE + ORDER BY columns (filter Status, sort CreatedAt, Id). For total count tradeoff: measure COUNT query as % of list endpoint time — if >30%, remove or cache. OpenTelemetry span per CountAsync vs data query shows double round trip."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Pagination tradeoffs",
+          "headers": ["Strategy", "Best for", "Cost"],
+          "rows": [
+            ["Offset + count", "Admin grids <10k rows, need page numbers", "COUNT + deep OFFSET expensive"],
+            ["Offset, no count", "Simple APIs, moderate size", "Deep offset still slow"],
+            ["Cursor, no count", "Feeds, mobile, high volume", "Cannot jump to arbitrary page"],
+            ["Cursor + cached count", "Hybrid UX", "Cache invalidation complexity"],
+            ["Seek with covering index", "Any pagination style", "Index design is the real lever"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Only knowing Skip/Take without cursor alternative. Ignoring total count cost — 'just add CountAsync'. No stable sort key in cursor design. Saying pagination is 'just a LINQ problem' without index strategy."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Offset Skip/Take is simple but O(offset) on deep pages; cursor/keyset uses indexed WHERE on sort key — constant time per page.",
+    "Total count tradeoff: COUNT doubles query cost — skip for feeds, cache for admin, or approximate for dashboards.",
+    "Production tip: composite index on (filter, sort, id); load test deep offset; separate APM spans for count vs data.",
+    "60s: Small tables — offset OK. Millions of rows — cursor pagination with stable sort key and tie-breaker Id. Count is expensive — often omit or cache. Always OrderBy before paginate. Index the sort columns.",
+    "Follow-up: how do you paginate with dynamic filters and multiple sort columns?"
+  ],
+  "commonPitfalls": [
+    "CountAsync on every list request without discussing cost gets you rejected at senior level.",
+    "Cursor without tie-breaker on non-unique CreatedAt — rows appear twice or vanish between pages.",
+    "Strong answer: 'Admin UI under 10k rows: offset + cached count. Public feed: cursor, no count, nextCursor token. Composite index on filter + sort. I load test page 1 vs deep page and watch COUNT duration in APM.'"
+  ],
+  "introducedIn": "EF Core 1.0; filtered CountAsync in EF Core 5+",
+  "relatedTopicIds": [
+    "dotnet-09-n-plus-one-queries",
+    "dotnet-09-tracking-vs-notracking",
+    "dotnet-02-rest-principles"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Prisma cursor pagination",
+      "note": "Prisma cursor API (cursor: { id }, skip: 1, take: 20) maps directly to EF keyset pattern. Same index and stable-sort requirements apply.",
+      "futureTopicSlug": "typescript/prisma/pagination"
+    },
+    {
+      "language": "javascript",
+      "concept": "GraphQL connections spec",
+      "note": "Relay cursor spec (edges, pageInfo) is the industry standard for cursor pagination — EF keyset maps to after/before cursors. Offset in GraphQL is similarly discouraged at depth.",
+      "futureTopicSlug": "javascript/graphql/connections"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Pagination in EF Core",
+      "url": "https://learn.microsoft.com/en-us/ef/core/querying/pagination"
+    },
+    {
+      "title": "Efficient querying",
+      "url": "https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying"
+    },
+    {
+      "title": "Indexes in EF Core",
+      "url": "https://learn.microsoft.com/en-us/ef/core/modeling/indexes"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

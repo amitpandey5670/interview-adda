@@ -1,0 +1,247 @@
+{
+  "id": "dotnet-09-dbcontext-lifetime",
+  "slug": "dbcontext-lifetime",
+  "title": "DbContext lifetime (scoped per request, thread safety)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 2,
+  "hook": "DbContext is not thread-safe and must not live longer than one unit of work. In ASP.NET Core Web APIs it is scoped — one instance per HTTP request, disposed when the response completes.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "DbContext lifetime determines how long EF Core keeps a database connection, change tracker, and cached metadata alive. AddDbContext<T>() registers DbContext as scoped by default — the dependency injection (DI) container creates one instance per HTTP request scope and disposes it when the request ends. DbContext is explicitly not thread-safe: two parallel tasks must not share the same instance. Background services (singletons) must use IServiceScopeFactory to create a fresh scope — and DbContext — per work item."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Scoped lifetime",
+              "longForm": "Scoped service lifetime",
+              "plainDefinition": "One instance per DI scope. In web apps, one scope per HTTP request.",
+              "example": "builder.Services.AddDbContext<AppDbContext>(); // scoped by default"
+            },
+            {
+              "term": "Unit of work",
+              "longForm": "Unit of work pattern",
+              "plainDefinition": "A single consistent boundary for queries and SaveChanges — typically one DbContext per request.",
+              "example": "Multiple repository calls in one handler share the same DbContext and transaction."
+            },
+            {
+              "term": "Thread safety",
+              "longForm": "Thread safety constraint",
+              "plainDefinition": "DbContext cannot be used concurrently from multiple threads or overlapping async operations.",
+              "example": "InvalidOperationException: A second operation was started on this context..."
+            },
+            {
+              "term": "IServiceScopeFactory",
+              "longForm": "Service scope factory",
+              "plainDefinition": "Factory to create DI scopes from singleton services — required for background DbContext usage.",
+              "example": "await using var scope = scopeFactory.CreateAsyncScope();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Wrong DbContext lifetime causes cross-request data leaks, memory growth, and concurrency exceptions. Singleton DbContext is the fastest rejection in senior interviews. Parallel foreach over one DbContext triggers 'second operation on this context'. Captive dependency — singleton holding scoped DbContext — is the #1 EF production bug. Monitoring ActiveDbContexts in production proves whether lifetimes are correct."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Microsoft guidance",
+          "body": "Do not make DbContext singleton. Do not share one DbContext instance across threads. Do not inject DbContext into singleton services — use IServiceScopeFactory instead."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "DbContext per HTTP request",
+          "items": [
+            {
+              "title": "Request arrives",
+              "body": "ASP.NET Core creates an IServiceScope from the root provider."
+            },
+            {
+              "title": "DbContext resolved",
+              "body": "First injection of AppDbContext creates the instance with pooled DbContextOptions."
+            },
+            {
+              "title": "Handler uses context",
+              "body": "All services in the same request share the identical DbContext instance."
+            },
+            {
+              "title": "SaveChanges (optional)",
+              "body": "Pending changes flush to the database within this context's connection."
+            },
+            {
+              "title": "Scope disposed",
+              "body": "DbContext.Dispose() returns connection to pool; change tracker cleared."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "DbContext lifetime vs concurrent requests",
+            "source": "flowchart TB\n  subgraph req1[\"Request A scope\"]\n    DC1[AppDbContext instance A]\n  end\n  subgraph req2[\"Request B scope\"]\n    DC2[AppDbContext instance B]\n  end\n  subgraph singleton[\"Singleton BackgroundService\"]\n    SF[IServiceScopeFactory]\n    SF --> S1[Scope per message\\nDbContext C]\n    SF --> S2[Scope per message\\nDbContext D]\n  end\n  POOL[(Connection pool)]\n  DC1 --> POOL\n  DC2 --> POOL\n  S1 --> POOL\n  S2 --> POOL"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Correct scoped registration and injection",
+            "code": "builder.Services.AddDbContext<AppDbContext>(options =>\n    options.UseSqlServer(builder.Configuration.GetConnectionString(\"Default\")));\n\n// DbContext is scoped — inject into handlers and scoped services\napp.MapGet(\"/api/products\", async (AppDbContext db, CancellationToken ct) =>\n    await db.Products.AsNoTracking().ToListAsync(ct));\n\npublic sealed class OrderService(AppDbContext db) : IOrderService\n{\n    // Same DbContext instance as the handler if both resolved in same request\n    public Task<Order?> GetAsync(Guid id) => db.Orders.FindAsync(id).AsTask();\n}",
+            "explanation": "AddDbContext registers scoped. Handler and OrderService in the same request share one DbContext. Never register AddSingleton<AppDbContext>()."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Background work with IServiceScopeFactory",
+            "code": "public sealed class OutboxDispatcher(IServiceScopeFactory scopeFactory) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        while (!stoppingToken.IsCancellationRequested)\n        {\n            await using var scope = scopeFactory.CreateAsyncScope();\n            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n\n            var batch = await db.OutboxMessages\n                .Where(m => m.ProcessedAt == null)\n                .Take(20)\n                .ToListAsync(stoppingToken);\n\n            // process batch...\n            await db.SaveChangesAsync(stoppingToken);\n        }\n    }\n}",
+            "explanation": "BackgroundService is singleton. CreateAsyncScope per batch gives a fresh scoped DbContext. Scope disposal releases the context even if an exception occurs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Thread-safety violation — never do this",
+            "code": "// WRONG: parallel operations on one DbContext\nvar orders = await db.Orders.ToListAsync(ct);\nawait Parallel.ForEachAsync(orders, ct, async (order, token) =>\n{\n    order.Processed = true;\n    await db.SaveChangesAsync(token); // InvalidOperationException under load\n});\n\n// CORRECT: sequential SaveChanges once, or separate scope per parallel unit\nforeach (var order in orders) order.Processed = true;\nawait db.SaveChangesAsync(ct);",
+            "explanation": "DbContext allows only one active operation at a time. Parallel.ForEachAsync on shared context throws. Batch updates in one context sequentially, or use a scope per parallel partition."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — ActiveDbContexts counter",
+            "code": "// Terminal: dotnet-counters monitor --counters Microsoft.EntityFrameworkCore\n// ActiveDbContexts should ≈ concurrent in-flight requests\n\n// Integration test: two parallel requests get different context instances\n[Fact]\npublic async Task Parallel_requests_use_separate_dbcontexts()\n{\n    var factory = new WebApplicationFactory<Program>();\n    var client = factory.CreateClient();\n    var t1 = client.GetAsync(\"/api/orders\");\n    var t2 = client.GetAsync(\"/api/orders\");\n    await Task.WhenAll(t1, t2);\n    // Under captive dependency, ActiveDbContexts stays at 1 during load test\n}",
+            "explanation": "ActiveDbContexts stuck at 1 under concurrent load proves singleton or captive scoped DbContext. Load test with k6; watch for ObjectDisposedException and second-operation errors."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "DbContext lifetime vs Node ORM patterns",
+          "headers": ["Pattern", ".NET EF Core", "NestJS + TypeORM", "Express + Prisma"],
+          "rows": [
+            ["Per-request context", "AddDbContext scoped (automatic)", "Scope.REQUEST EntityManager", "Singleton PrismaClient (pool handles concurrency)"],
+            ["Background jobs", "IServiceScopeFactory per job", "Manual app.get(DataSource) per job", "New PrismaClient or $transaction per job"],
+            ["Thread safety", "Not safe — one op at a time", "Not safe — one manager per request", "PrismaClient is safe; transactions are not shared"],
+            ["Detection", "dotnet-counters ActiveDbContexts", "Connection leak logs", "Pool timeout errors"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Registering DbContext as singleton for 'performance'. Injecting AppDbContext into singleton cache warmer or middleware constructor. Using Task.WhenAll on multiple queries against one DbContext. Creating manual new AppDbContext() instead of DI — bypasses pooling and scope disposal. Storing DbContext in static fields."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters Microsoft.EntityFrameworkCore — ActiveDbContexts tracks live contexts. Under steady load it should track concurrent requests, not grow unbounded. OpenTelemetry spans with overlapping database operations on the same trace from different requests indicate shared context. Enable ValidateScopes in CI — singleton resolving scoped DbContext from root provider fails at startup. Load test reveals ObjectDisposedException when captive dependencies surface under concurrency."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Lifetime choice", "When", "Risk"],
+          "rows": [
+            ["Scoped (default)", "Web API handlers, per-request services", "Resolving outside request without CreateScope"],
+            ["Transient DbContext", "Rare — usually wrong", "Multiple contexts per request — no shared transaction"],
+            ["Singleton DbContext", "Never in production", "Thread safety, stale tracker, memory leak"],
+            ["Pooled DbContextOptions", "Default with AddDbContext", "Options are singleton; context instance still scoped"],
+            ["IDbContextFactory", "Blazor, threads, explicit short-lived contexts", "Caller must dispose; not automatic per request"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying DbContext can be singleton 'because connections are pooled' — pooling is on DbContextOptions, not the context instance. Not knowing DbContext is not thread-safe. Unable to explain IServiceScopeFactory for BackgroundService. Dismissing ValidateScopes warnings."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "DbContext is scoped per request, not thread-safe, disposed at scope end — AddDbContext registers scoped by default.",
+    "When not to share: parallel tasks, singleton services, background workers without CreateScope.",
+    "Production tip: dotnet-counters ActiveDbContexts ≈ concurrent requests; ValidateScopes in CI; IServiceScopeFactory in BackgroundService.",
+    "60s: DbContext scoped per HTTP request. Not thread-safe — one operation at a time. Singleton services use IServiceScopeFactory.CreateScope per work item. ActiveDbContexts stuck at 1 means captive dependency. Never singleton DbContext.",
+    "Follow-up: when would you use IDbContextFactory instead of injected DbContext?"
+  ],
+  "commonPitfalls": [
+    "Singleton DbContext 'for connection pooling' gets rejected — pooling is on options; context holds tracker and is not thread-safe.",
+    "Parallel.WhenAll on one DbContext — InvalidOperationException in production under load.",
+    "Strong answer: 'Scoped per request via DI. Background work uses IServiceScopeFactory per message. Monitor ActiveDbContexts. DbContext is unit-of-work, not a connection wrapper — never singleton.'"
+  ],
+  "introducedIn": "EF Core 1.0; DbContext pooling in EF Core 2.0",
+  "relatedTopicIds": [
+    "dotnet-05-service-lifetimes",
+    "dotnet-05-captive-dependency-trap",
+    "dotnet-05-iservicescopefactory",
+    "dotnet-09-ef-core-basics"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS REQUEST-scoped providers",
+      "note": "TypeORM EntityManager with Scope.REQUEST mirrors scoped DbContext — one manager per HTTP request, disposed after response. Injecting into singleton throws, same as ValidateScopes.",
+      "futureTopicSlug": "typescript/nestjs/request-scope"
+    },
+    {
+      "language": "javascript",
+      "concept": "PrismaClient singleton",
+      "note": "Prisma uses a singleton client with internal connection pool — different from EF's per-request DbContext. Node developers must not assume Prisma's pattern applies to DbContext lifetime.",
+      "futureTopicSlug": "javascript/prisma/connection-pool"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "DbContext lifetime and configuration",
+      "url": "https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/"
+    },
+    {
+      "title": "DbContext in dependency injection",
+      "url": "https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/#dbcontext-in-dependency-injection-for-aspnet-core"
+    },
+    {
+      "title": "EF Core performance counters",
+      "url": "https://learn.microsoft.com/en-us/ef/core/logging-events-diagnostics/counters"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

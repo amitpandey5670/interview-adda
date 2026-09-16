@@ -1,0 +1,243 @@
+{
+  "id": "dotnet-09-tracking-vs-notracking",
+  "slug": "tracking-vs-notracking",
+  "title": "Change tracking versus AsNoTracking (read vs write paths)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 3,
+  "hook": "By default EF Core watches every entity you load — ready to detect changes for SaveChanges. Read-only API endpoints should call AsNoTracking to skip that overhead and avoid stale tracked graphs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Change tracking is EF Core's identity map — it remembers loaded entities, compares current values to originals, and generates UPDATE statements on SaveChangesAsync. AsNoTracking() tells EF Core not to track query results — lower memory use, faster materialization, no risk of accidental updates. Use tracking for write paths (load entity, modify, SaveChanges). Use AsNoTracking for read-only GET endpoints, reports, and projections to DTOs. AsNoTrackingWithIdentityResolution() deduplicates entities in graph results without full tracking overhead."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Change tracker",
+              "longForm": "EF Core change tracker",
+              "plainDefinition": "In-memory snapshot of loaded entities and their state (Added, Modified, Deleted, Unchanged).",
+              "example": "db.Entry(order).State == EntityState.Modified"
+            },
+            {
+              "term": "AsNoTracking",
+              "longForm": "AsNoTracking query hint",
+              "plainDefinition": "Query hint that returns detached entities EF will not monitor for changes.",
+              "example": "db.Orders.AsNoTracking().Where(...).ToListAsync()"
+            },
+            {
+              "term": "Detached",
+              "longForm": "Detached entity state",
+              "plainDefinition": "Entity not associated with any DbContext tracker — changes are ignored by SaveChanges.",
+              "example": "Returning tracked entity from API without AsNoTracking can cause surprise updates."
+            },
+            {
+              "term": "Identity resolution",
+              "longForm": "Identity resolution mode",
+              "plainDefinition": "AsNoTrackingWithIdentityResolution ensures same row maps to one object in a graph query.",
+              "example": "Include with AsNoTrackingWithIdentityResolution avoids duplicate Customer instances."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "List endpoints that return thousands of rows with tracking enabled allocate identity maps and snapshots — measurable CPU and memory cost at scale. Tracked entities returned from a long-lived scope (or accidentally cached) can write stale data on a later SaveChanges. Senior interviewers ask: when do you use AsNoTracking? What breaks if you use it on an update flow? How does tracking interact with Include and concurrency tokens?"
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Default in EF Core 7+ for read queries",
+          "body": "You can set QueryTrackingBehavior.NoTracking as default and opt into tracking for writes with .AsTracking(). Many API projects configure NoTracking globally and explicitly track only mutation endpoints."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Tracking vs no-tracking read path",
+          "items": [
+            {
+              "title": "Query executes",
+              "body": "SQL returns rows from the database."
+            },
+            {
+              "title": "Materialization",
+              "body": "EF creates entity objects. With tracking, each is registered in the change tracker with original values snapshot."
+            },
+            {
+              "title": "Read-only response",
+              "body": "AsNoTracking: entities are detached, serialized to JSON, garbage collected after response."
+            },
+            {
+              "title": "Write path contrast",
+              "body": "Tracked entity: property change sets Modified state; SaveChangesAsync emits UPDATE for changed columns only."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Change tracker in a Web API",
+            "source": "flowchart LR\n  subgraph read[\"GET /api/orders\"]\n    Q1[AsNoTracking query] --> D1[Detached entities]\n    D1 --> JSON[JSON response]\n  end\n  subgraph write[\"PUT /api/orders/id\"]\n    Q2[Tracked query or Attach] --> T1[Change tracker]\n    T1 --> MOD[Property changed\\nState = Modified]\n    MOD --> SAVE[SaveChangesAsync\\nUPDATE SQL]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Global NoTracking with explicit tracking for writes",
+            "code": "builder.Services.AddDbContext<AppDbContext>(options =>\n{\n    options.UseSqlServer(conn);\n    options.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);\n});\n\n// Read — default no tracking\nvar orders = await db.Orders\n    .Where(o => o.CustomerId == customerId)\n    .ToListAsync(ct);\n\n// Write — opt in to tracking\nvar order = await db.Orders.AsTracking().FirstAsync(o => o.Id == id, ct);\norder.Status = OrderStatus.Shipped;\nawait db.SaveChangesAsync(ct);",
+            "explanation": "NoTracking default suits read-heavy APIs. AsTracking() on mutation paths ensures SaveChanges detects modifications. Clear convention: reads never call AsTracking unless needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Projection avoids tracking entirely",
+            "code": "var summaries = await db.Orders\n    .AsNoTracking()\n    .Where(o => o.Status == OrderStatus.Pending)\n    .Select(o => new OrderSummaryDto(\n        o.Id,\n        o.Total,\n        o.Customer.Name)) // join translated to SQL\n    .ToListAsync(ct);",
+            "explanation": "Select to DTO never tracks — EF materializes only DTO columns. Preferred for list endpoints: less memory than full entities even with AsNoTracking."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Update patterns: tracked load vs Attach",
+            "code": "// Pattern A: load tracked, modify (simple updates)\nvar order = await db.Orders.AsTracking().FirstAsync(o => o.Id == id, ct);\norder.Notes = req.Notes;\nawait db.SaveChangesAsync(ct);\n\n// Pattern B: Attach + mark modified (when client sends full entity)\nvar incoming = new Order { Id = id, Notes = req.Notes, Total = 99.00m };\ndb.Orders.Attach(incoming);\ndb.Entry(incoming).Property(o => o.Notes).IsModified = true;\nawait db.SaveChangesAsync(ct);",
+            "explanation": "Pattern A is clearest for server-owned updates. Pattern B avoids SELECT but risks overwriting columns if IsModified is too broad. Never Attach after AsNoTracking load of a different instance with same key."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — memory and query tags",
+            "code": "// Tag queries to correlate SQL logs with endpoints\nvar orders = await db.Orders\n    .AsNoTracking()\n    .TagWith(\"GET /api/orders list\")\n    .ToListAsync(ct);\n\n// dotnet-counters: Microsoft.EntityFrameworkCore\n//   tracked-entities count should stay low on read-heavy load tests\n\n// Load test: compare Gen2 GC pressure with/without AsNoTracking on same endpoint",
+            "explanation": "TagWith links SQL to route in logs. Tracked-entities counter rising on GET endpoints signals missing AsNoTracking. Compare GC metrics in load tests to prove production impact."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Tracking vs explicit updates",
+          "headers": ["Behavior", "EF Core", "TypeORM", "Prisma"],
+          "rows": [
+            ["Default on read", "Tracking (configurable to NoTracking)", "Tracking per EntityManager", "No tracking — always explicit update"],
+            ["Read optimization", "AsNoTracking / Select DTO", "manager.find({ loadEagerRelations })", "findMany returns plain objects"],
+            ["Accidental update risk", "Tracked entity + later SaveChanges", "Same — dirty checking", "Low — must call update()"],
+            ["Graph queries", "Include + AsNoTrackingWithIdentityResolution", "relations: true", "include: { }"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using AsNoTracking then trying to SaveChanges on those entities — changes ignored. Loading tracked entities for GET list endpoints — memory bloat. Attach entire client-sent entity marking all properties modified — overwrites columns. Mixing tracked and no-tracking instances with same key in one context — InvalidOperationException."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: load test a list endpoint before/after AsNoTracking — measure p95 latency and Gen2 GC collections. EF Core logged SQL is identical; savings are in materialization and tracker overhead. dotnet-counters tracked-entities during GET-only workload should stay near zero with correct config. Application Insights dependency duration may drop slightly; bigger win is memory under high RPS."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Strategy", "Best for", "Risk"],
+          "rows": [
+            ["AsNoTracking on reads", "GET APIs, reports, exports", "Must AsTracking or Attach for updates"],
+            ["Global NoTracking default", "Read-heavy microservices", "Developers forget AsTracking on PATCH"],
+            ["Select projection to DTO", "List/search endpoints", "More mapping code; best SQL shape"],
+            ["Tracked load for update", "Simple CRUD mutations", "Extra SELECT; graph may over-fetch"],
+            ["ExecuteUpdate (EF7+)", "Bulk updates without load", "Bypasses interceptors and some conventions"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying AsNoTracking 'disables the database' — it only skips the identity map. Not knowing tracked entities can cause accidental SaveChanges updates. Claiming tracking is always free — it has real memory cost at scale. Unable to explain Attach vs load-then-modify."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Change tracking watches loaded entities for SaveChanges; AsNoTracking returns detached entities for read-only paths.",
+    "When not to use AsNoTracking: update flows needing Modified detection, or when you rely on fix-up for Includes before save.",
+    "Production tip: default NoTracking for read-heavy APIs; use Select projection; monitor tracked-entities counter on GET load tests.",
+    "60s: Tracking builds identity map for SaveChanges. Read APIs use AsNoTracking or project to DTO. Writes use AsTracking or Attach. Global NoTracking default with explicit tracking on mutations is a common production pattern.",
+    "Follow-up: how does AsNoTracking interact with optimistic concurrency RowVersion?"
+  ],
+  "commonPitfalls": [
+    "AsNoTracking on update then wondering why SaveChanges does nothing — detached entities are invisible to the tracker.",
+    "Returning 10k tracked entities from a list endpoint — memory and GC pressure under load.",
+    "Strong answer: 'Reads: AsNoTracking or Select to DTO. Writes: tracked load or targeted Attach. I set NoTracking default globally and prove impact with load tests and tracked-entities counter.'"
+  ],
+  "introducedIn": "EF Core 1.0; QueryTrackingBehavior default config in EF Core 5+",
+  "relatedTopicIds": [
+    "dotnet-09-ef-core-basics",
+    "dotnet-09-n-plus-one-queries",
+    "dotnet-09-optimistic-concurrency",
+    "csharp-12-deferred-execution"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Prisma explicit updates",
+      "note": "Prisma has no change tracker — every update is explicit prisma.order.update(). EF developers coming from Prisma should consciously choose tracking vs AsNoTracking instead of assuming implicit dirty checking.",
+      "futureTopicSlug": "typescript/prisma/crud"
+    },
+    {
+      "language": "javascript",
+      "concept": "TypeORM dirty checking",
+      "note": "TypeORM tracks entities like EF Core. find() tracks; getRawMany() does not. Same read/write split applies — use query builder with no entity hydration for read-only Express routes.",
+      "futureTopicSlug": "javascript/typeorm/tracking"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Change tracking in EF Core",
+      "url": "https://learn.microsoft.com/en-us/ef/core/change-tracking/"
+    },
+    {
+      "title": "No-tracking queries",
+      "url": "https://learn.microsoft.com/en-us/ef/core/querying/tracking"
+    },
+    {
+      "title": "Efficient querying",
+      "url": "https://learn.microsoft.com/en-us/ef/core/performance/efficient-querying"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "high-concurrency"
+}

@@ -1,0 +1,66 @@
+{
+  "moduleId": "dotnet-09-entity-framework-core",
+  "title": "Entity Framework Core — concept map",
+  "intro": "Entity Framework Core (EF Core) is the Object-Relational Mapper (ORM) for ASP.NET Core Web APIs. DbContext is scoped per request — not thread-safe. Read paths use AsNoTracking and projection; write paths use tracking and SaveChangesAsync. N+1 queries are fixed with Include, AsSplitQuery, or Select to DTO. Pagination chooses offset vs cursor with total count tradeoffs. RowVersion enables optimistic concurrency returning HTTP 409 Conflict. DbContext is already a unit of work — repository pattern only when abstraction earns its keep.",
+  "overviewDiagram": {
+    "type": "mermaid",
+    "title": "EF Core in a Web API request",
+    "source": "flowchart TD\n  REQ[HTTP Request\\nscoped DbContext] --> READ{Read or write?}\n  READ -->|GET list/detail| NT[AsNoTracking\\nSelect projection]\n  READ -->|POST PUT PATCH| TRK[Tracked entities\\nSaveChangesAsync]\n  NT --> SQL[EF translates LINQ\\nto SQL]\n  TRK --> SQL\n  SQL --> DB[(Database)]\n  TRK --> CONC{RowVersion\\nconflict?}\n  CONC -->|yes| R409[409 Conflict]\n  CONC -->|no| OK[200/201]\n  REQ --> DISPOSE[Scope disposed\\ncontext released]"
+  },
+  "conceptCards": [
+    {
+      "id": "card-basics",
+      "title": "EF Core basics",
+      "summary": "DbContext + DbSet + LINQ. AddDbContext registers scoped. IQueryable defers to SQL at ToListAsync/FirstOrDefaultAsync. SaveChangesAsync is the commit boundary.",
+      "example": "builder.Services.AddDbContext<AppDbContext>();",
+      "topicSlug": "ef-core-basics"
+    },
+    {
+      "id": "card-lifetime",
+      "title": "DbContext lifetime",
+      "summary": "Scoped per request, not thread-safe. BackgroundService uses IServiceScopeFactory per work item. ActiveDbContexts ≈ concurrent requests.",
+      "example": "await using var scope = scopeFactory.CreateAsyncScope();",
+      "topicSlug": "dbcontext-lifetime"
+    },
+    {
+      "id": "card-tracking",
+      "title": "Tracking vs AsNoTracking",
+      "summary": "Tracker watches entities for SaveChanges. Read APIs: AsNoTracking or Select DTO. Global NoTracking default with AsTracking on writes.",
+      "example": "db.Orders.AsNoTracking().Select(o => new Dto(...))",
+      "topicSlug": "tracking-vs-notracking"
+    },
+    {
+      "id": "card-n-plus-one",
+      "title": "N+1 queries",
+      "summary": "1 + N round trips from lazy load or loops. Fix: projection (best), Include, AsSplitQuery for multi-collection.",
+      "example": ".Include(o => o.Lines).AsSplitQuery()",
+      "topicSlug": "n-plus-one-queries"
+    },
+    {
+      "id": "card-pagination",
+      "title": "Pagination patterns",
+      "summary": "Offset Skip/Take simple but slow deep. Cursor/keyset constant time. COUNT expensive — omit, cache, or approximate.",
+      "example": ".Where(o => o.Id > cursor).Take(20)",
+      "topicSlug": "pagination-patterns"
+    },
+    {
+      "id": "card-concurrency",
+      "title": "Optimistic concurrency",
+      "summary": "RowVersion in UPDATE WHERE. DbUpdateConcurrencyException → 409 Conflict. Client reloads and retries.",
+      "example": "e.Property(o => o.RowVersion).IsRowVersion();",
+      "topicSlug": "optimistic-concurrency"
+    },
+    {
+      "id": "card-repository",
+      "title": "Repository vs DbContext",
+      "summary": "DbContext is unit of work — direct injection default. Domain repo for complex queries. Avoid generic IRepository<T>.",
+      "example": "public sealed class OrderService(AppDbContext db)",
+      "topicSlug": "repository-vs-direct-dbcontext"
+    }
+  ],
+  "revisionDiagram": {
+    "type": "mermaid",
+    "title": "EF Core revision map",
+    "source": "mindmap\n  root((EF Core Web APIs))\n    Basics\n      DbContext scoped\n      DbSet IQueryable\n      LINQ to SQL\n      SaveChangesAsync commit\n      Compiled queries hot paths\n    Lifetime\n      Not thread safe\n      One per request\n      IServiceScopeFactory background\n      ActiveDbContexts counter\n      Never singleton\n    Tracking\n      Change tracker writes\n      AsNoTracking reads\n      Select projection best\n      Global NoTracking default\n      Attach for updates\n    N Plus One\n      Lazy load trap\n      Include reference\n      AsSplitQuery collections\n      Projection to DTO\n      Index foreign keys\n      SQL count per request\n    Pagination\n      Offset Skip Take\n      Cursor keyset\n      Stable sort tie breaker\n      Count tradeoff\n      Composite indexes\n    Concurrency\n      RowVersion token\n      WHERE on UPDATE\n      409 Conflict\n      Client reload merge\n      CHECK constraints hot rows\n    Repository\n      DbContext is UoW\n      Direct injection default\n      Domain repo complex queries\n      No generic IRepository\n      Testcontainers integration"
+  }
+}

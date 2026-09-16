@@ -1,0 +1,246 @@
+{
+  "id": "dotnet-09-optimistic-concurrency",
+  "slug": "optimistic-concurrency",
+  "title": "Optimistic concurrency (RowVersion, 409 Conflict)",
+  "moduleId": "dotnet-09-entity-framework-core",
+  "order": 6,
+  "hook": "Two users edit the same order at once — last write wins silently unless you add a concurrency token. RowVersion detects conflicts and lets your API return 409 Conflict instead of corrupting data.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Optimistic concurrency assumes conflicts are rare — reads do not lock rows; writes check that data has not changed since load. EF Core supports concurrency tokens: a property (often byte[] RowVersion or xmin in PostgreSQL) included in the WHERE clause of UPDATE. If zero rows match, DbUpdateConcurrencyException is thrown — another transaction modified the row first. Web APIs map this to HTTP 409 Conflict with Problem Details, letting the client refresh and retry. Pessimistic concurrency (SELECT FOR UPDATE) locks rows but hurts throughput — rarely used in stateless REST APIs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Optimistic concurrency",
+              "longForm": "Optimistic concurrency control",
+              "plainDefinition": "Detect conflicts at save time rather than locking rows during read.",
+              "example": "UPDATE ... WHERE Id = @id AND RowVersion = @original"
+            },
+            {
+              "term": "RowVersion",
+              "longForm": "SQL Server rowversion/timestamp",
+              "plainDefinition": "Auto-incrementing binary column SQL Server updates on every row change — ideal concurrency token.",
+              "example": "[Timestamp] public byte[] RowVersion { get; set; }"
+            },
+            {
+              "term": "Concurrency token",
+              "longForm": "Concurrency token property",
+              "plainDefinition": "Property marked [ConcurrencyCheck] or IsConcurrencyToken() in Fluent API.",
+              "example": "modelBuilder.Entity<Order>().Property(o => o.RowVersion).IsRowVersion();"
+            },
+            {
+              "term": "409 Conflict",
+              "longForm": "HTTP 409 Conflict status",
+              "plainDefinition": "HTTP status when update fails due to version mismatch — client should reload.",
+              "example": "return Results.Problem(statusCode: 409, title: \"Concurrency conflict\");"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Without concurrency tokens, two PATCH requests can overwrite each other — lost updates in inventory, billing, or collaborative editing. Interviewers ask how EF detects conflicts, what HTTP status to return, and how clients should retry. RowVersion is SQL Server specific; PostgreSQL uses xmin via Npgsql; other databases use manual int Version column. Senior answer includes client contract: return current RowVersion in GET, require If-Match header or token in PUT body."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "ETag correlation",
+          "body": "RowVersion base64-encoded in an ETag header mirrors HTTP conditional requests — If-Match on PUT returns 412 Precondition Failed or map concurrency to 409 per your API standard."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Optimistic concurrency flow",
+          "items": [
+            {
+              "title": "Client loads resource",
+              "body": "GET returns entity with RowVersion (in body or ETag header)."
+            },
+            {
+              "title": "Client sends update",
+              "body": "PUT/PATCH includes original RowVersion value."
+            },
+            {
+              "title": "EF generates UPDATE",
+              "body": "SQL includes AND RowVersion = @original in WHERE clause."
+            },
+            {
+              "title": "Conflict detected",
+              "body": "Zero rows updated → DbUpdateConcurrencyException."
+            },
+            {
+              "title": "API responds 409",
+              "body": "Problem Details explains conflict; client refreshes and retries merge."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Concurrent updates with RowVersion",
+            "source": "sequenceDiagram\n  participant A as User A\n  participant B as User B\n  participant API\n  participant DB\n  A->>API: GET order v1\n  B->>API: GET order v1\n  API->>DB: SELECT RowVersion=0x01\n  A->>API: PUT RowVersion=0x01\n  API->>DB: UPDATE WHERE RowVersion=0x01 OK\n  B->>API: PUT RowVersion=0x01\n  API->>DB: UPDATE WHERE RowVersion=0x01 FAIL\n  API-->>B: 409 Conflict"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Entity and Fluent API configuration",
+            "code": "public sealed class Order\n{\n    public Guid Id { get; set; }\n    public string Notes { get; set; } = \"\";\n    public decimal Total { get; set; }\n    public byte[] RowVersion { get; set; } = null!;\n}\n\nprotected override void OnModelCreating(ModelBuilder modelBuilder)\n{\n    modelBuilder.Entity<Order>(e =>\n    {\n        e.Property(o => o.RowVersion).IsRowVersion();\n        // PostgreSQL alternative:\n        // e.Property<uint>(\"xmin\").HasColumnType(\"xid\").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();\n    });\n}",
+            "explanation": "IsRowVersion() maps to SQL Server rowversion type — database auto-updates on change. Client never sets RowVersion; only sends back the value from GET."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Update endpoint with concurrency handling",
+            "code": "app.MapPut(\"/api/orders/{id:guid}\", async (\n    Guid id, UpdateOrderRequest req, AppDbContext db, CancellationToken ct) =>\n{\n    var order = await db.Orders.AsTracking().FirstOrDefaultAsync(o => o.Id == id, ct);\n    if (order is null) return Results.NotFound();\n\n    // Client must send RowVersion from their last read\n    if (!req.RowVersion.SequenceEqual(order.RowVersion))\n        return Results.Problem(statusCode: 409, title: \"Stale data\", detail: \"Reload and retry.\");\n\n    order.Notes = req.Notes;\n    order.Total = req.Total;\n\n    try\n    {\n        await db.SaveChangesAsync(ct);\n        return Results.Ok(order);\n    }\n    catch (DbUpdateConcurrencyException)\n    {\n        return Results.Problem(statusCode: 409, title: \"Concurrency conflict\",\n            detail: \"Another user modified this order.\");\n    }\n});",
+            "explanation": "Early check optional; SaveChanges is authoritative — EF compares original RowVersion in WHERE. DbUpdateConcurrencyException when another writer won the race. Return 409 per RFC 7807 Problem Details."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Manual int version for portable databases",
+            "code": "public sealed class Product\n{\n    public int Id { get; set; }\n    public string Name { get; set; } = \"\";\n    public int Version { get; set; } // concurrency token\n}\n\n// Fluent: e.Property(p => p.Version).IsConcurrencyToken();\n\n// Generated SQL: UPDATE Products SET Name=@p, Version=Version+1\n//   WHERE Id=@id AND Version=@originalVersion",
+            "explanation": "Integer Version works on any database. Application or database trigger increments on update. Portable alternative when rowversion/xmin unavailable."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics and client retry pattern",
+            "code": "// Log concurrency conflicts — spike may indicate UX issue or hot row\nlogger.LogWarning(\"Concurrency conflict on Order {OrderId}\", id);\n\n// Client retry pseudocode:\n// 1. GET fresh entity\n// 2. Merge user changes onto server state (or show diff UI)\n// 3. PUT with new RowVersion\n\n// Metrics: track 409 rate per endpoint in Application Insights\n// Alert if Order update 409 rate > 5% — consider UI locking or pessimistic lock for hot rows",
+            "explanation": "High 409 rate on same resource type signals design issue — optimistic may be wrong for inventory decrements. Monitor 409 as business metric, not just error."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Concurrency across stacks",
+          "headers": ["Approach", "EF Core", "TypeORM", "REST / HTTP"],
+          "rows": [
+            ["Token type", "RowVersion / int Version / xmin", "@VersionColumn()", "ETag / If-Match"],
+            ["Conflict signal", "DbUpdateConcurrencyException", "OptimisticLockVersionMismatchError", "412 Precondition Failed"],
+            ["API mapping", "409 Conflict (common)", "Same", "409 or 412 per API design"],
+            ["Retry", "Client reload + merge", "Same", "Standard HTTP conditional requests"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "AsNoTracking load then Attach without original RowVersion — concurrency check skipped. Returning 500 on DbUpdateConcurrencyException — should be 409. Client never sends RowVersion — silent last-write-wins. Using optimistic concurrency for inventory stock decrement without additional constraints — use row-level lock or serialized transaction for hot counters."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: integration test with parallel PUT requests — exactly one succeeds, other gets 409. Application Insights custom metric for concurrency_conflict count. For hot rows (seat booking, inventory), optimistic alone may be insufficient — combine with CHECK constraint (Stock >= 0) or SERIALIZABLE isolation for decrement. RowVersion adds negligible storage; index not needed on token itself since it is in WHERE with primary key."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Concurrency strategy tradeoffs",
+          "headers": ["Strategy", "Best for", "Risk"],
+          "rows": [
+            ["Optimistic + RowVersion", "Collaborative edits, CRUD APIs", "High conflict rate needs UX merge flow"],
+            ["Pessimistic (FOR UPDATE)", "Financial transfers, seat locks", "Deadlocks, reduced throughput"],
+            ["ETag + If-Match", "HTTP-native conditional updates", "Client must implement reload"],
+            ["No concurrency control", "Append-only or single-writer", "Lost updates under concurrency"],
+            ["ExecuteUpdate with WHERE", "Bulk conditional updates", "Bypasses change tracker concurrency"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing EF adds concurrency token to WHERE clause. Returning 500 instead of 409. Saying pessimistic locking is 'always better' without throughput tradeoff. Unable to explain client retry/merge flow."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Optimistic concurrency uses a token (RowVersion) in UPDATE WHERE — zero rows updated means conflict; map to HTTP 409.",
+    "When not enough: high-contention inventory or seat booking may need pessimistic lock or database constraint beyond RowVersion.",
+    "Production tip: return RowVersion in GET; log 409 rate; integration test parallel updates; CHECK constraints on invariants.",
+    "60s: RowVersion auto-updates on SQL Server. EF includes it in WHERE on SaveChanges. Conflict throws DbUpdateConcurrencyException — return 409 Problem Details. Client reloads, merges, retries with new token.",
+    "Follow-up: how does concurrency work with AsNoTracking and Attach updates?"
+  ],
+  "commonPitfalls": [
+    "DbUpdateConcurrencyException mapped to 500 — clients cannot distinguish conflict from server error.",
+    "Attach without original values — EF cannot generate correct WHERE, concurrency silently broken.",
+    "Strong answer: 'RowVersion on entities, IsRowVersion in Fluent API. GET returns token, PUT requires it. SaveChanges conflict → 409 with Problem Details. I monitor 409 rate and use CHECK constraints for invariants like stock >= 0.'"
+  ],
+  "introducedIn": "EF Core 1.0; ExecuteUpdate concurrency in EF Core 7+",
+  "relatedTopicIds": [
+    "dotnet-09-tracking-vs-notracking",
+    "dotnet-08-problem-details",
+    "dotnet-02-http-methods-status-codes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "HTTP If-Match / ETag",
+      "note": "Express/Fastify APIs often use ETag middleware for conditional PUT — semantically identical to EF RowVersion. Encode RowVersion as base64 ETag for standards-compliant clients.",
+      "futureTopicSlug": "typescript/http/conditional-requests"
+    },
+    {
+      "language": "javascript",
+      "concept": "TypeORM @VersionColumn",
+      "note": "TypeORM @VersionColumn() mirrors EF concurrency tokens — same lost-update problem and 409 response pattern in Node APIs.",
+      "futureTopicSlug": "javascript/typeorm/version-column"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Handling concurrency conflicts",
+      "url": "https://learn.microsoft.com/en-us/ef/core/saving/concurrency"
+    },
+    {
+      "title": "Concurrency tokens",
+      "url": "https://learn.microsoft.com/en-us/ef/core/modeling/concurrency"
+    },
+    {
+      "title": "Problem Details (RFC 7807)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/web-api/#default-problemdetails-service"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "high-concurrency"
+}
