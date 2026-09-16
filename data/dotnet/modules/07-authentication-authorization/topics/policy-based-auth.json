@@ -1,0 +1,237 @@
+{
+  "id": "dotnet-07-policy-based-auth",
+  "slug": "policy-based-auth",
+  "title": "Policy-based authorization ([Authorize(Policy = ...)])",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 3,
+  "hook": "Roles alone break down in real APIs. Policy-based authorization lets you compose requirements — claims, roles, custom handlers — and attach them with [Authorize(Policy = \"...\")].",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Policy-based authorization in ASP.NET Core registers named AuthorizationPolicy objects in AddAuthorization. Each policy is a set of IAuthorizationRequirement instances evaluated by IAuthorizationHandler implementations. Endpoints declare [Authorize(Policy = \"CanManageTenant\")] instead of hard-coding role strings in controllers. Handlers can call databases, check resource ownership, or enforce multi-tenant rules — far beyond User.IsInRole."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "AuthorizationPolicy",
+              "longForm": "Authorization policy",
+              "plainDefinition": "Named bundle of requirements plus optional authentication scheme constraints.",
+              "example": "options.AddPolicy(\"AdminOnly\", p => p.RequireRole(\"Admin\"));"
+            },
+            {
+              "term": "IAuthorizationRequirement",
+              "longForm": "Authorization requirement marker",
+              "plainDefinition": "Marker interface representing a condition that must be satisfied (e.g., minimum age, tenant match).",
+              "example": "public record TenantRequirement(string TenantId) : IAuthorizationRequirement;"
+            },
+            {
+              "term": "IAuthorizationHandler",
+              "longForm": "Authorization handler",
+              "plainDefinition": "Evaluates requirements against AuthorizationHandlerContext and calls context.Succeed or leaves failure.",
+              "example": "AuthorizationHandler<TenantRequirement>"
+            },
+            {
+              "term": "IAuthorizationService",
+              "longForm": "Authorization service",
+              "plainDefinition": "Imperative API to authorize inside code: await _authz.AuthorizeAsync(User, resource, policyName).",
+              "example": "Used for resource-based checks in services"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Scattering if (User.IsInRole(\"X\")) across controllers is untestable and inconsistent. Policies centralize rules, enable integration tests with TestAuthorizationHandler, and map cleanly to domain language (CanRefundOrder, BelongsToTenant). Interviewers ask how policy handlers differ from authentication, how to combine multiple requirements, and when to use IAuthorizationService inside minimal APIs."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Handlers are singletons",
+          "body": "IAuthorizationHandler is registered singleton — inject IHttpContextAccessor or scoped services via context.Resource or IAuthorizationHandlerContext, not scoped DbContext in constructor without factory pattern."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Policy evaluation pipeline",
+          "items": [
+            {
+              "title": "Endpoint metadata",
+              "body": "[Authorize(Policy = \"X\")] attached at compile time to controller or minimal route."
+            },
+            {
+              "title": "Authorization middleware",
+              "body": "After authentication, middleware invokes IAuthorizationService for the endpoint policy."
+            },
+            {
+              "title": "Handlers run",
+              "body": "All registered handlers for requirements in the policy execute. Any handler calling context.Succeed(requirement) satisfies that requirement."
+            },
+            {
+              "title": "Result",
+              "body": "All requirements satisfied → proceed. Any unsatisfied → 403 Forbidden (user was authenticated)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Policy handler evaluation",
+            "source": "flowchart TD\n  EP[Endpoint with Policy CanEditOrder] --> MW[Authorization Middleware]\n  MW --> SVC[IAuthorizationService]\n  SVC --> H1[RoleHandler\\nRequireRole Admin]\n  SVC --> H2[OrderOwnerHandler\\nOrderOwnerRequirement]\n  H1 -->|Succeed| OK{All requirements met?}\n  H2 -->|Succeed| OK\n  OK -->|yes| RUN[Run endpoint]\n  OK -->|no| F403[403 Forbidden]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register policies in Program.cs",
+            "code": "builder.Services.AddAuthorization(options =>\n{\n    options.AddPolicy(\"CanViewReports\", policy =>\n        policy.RequireAuthenticatedUser()\n              .RequireClaim(\"scope\", \"reports.read\"));\n\n    options.AddPolicy(\"AdminOnly\", policy =>\n        policy.RequireRole(\"Admin\"));\n\n    options.AddPolicy(\"MinimumAge18\", policy =>\n        policy.AddRequirements(new MinimumAgeRequirement(18)));\n});\nbuilder.Services.AddSingleton<IAuthorizationHandler, MinimumAgeHandler>();\nbuilder.Services.AddSingleton<IAuthorizationHandler, OrderOwnerHandler>();",
+            "explanation": "Built-in RequireRole and RequireClaim compose with custom requirements. Each custom requirement needs a matching handler registered in DI."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom requirement and handler",
+            "code": "public record OrderOwnerRequirement : IAuthorizationRequirement;\n\npublic class OrderOwnerHandler : AuthorizationHandler<OrderOwnerRequirement, Order>\n{\n    protected override Task HandleRequirementAsync(\n        AuthorizationHandlerContext context,\n        OrderOwnerRequirement requirement,\n        Order resource)\n    {\n        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);\n        if (resource.OwnerId == userId || context.User.IsInRole(\"Admin\"))\n            context.Succeed(requirement);\n        return Task.CompletedTask;\n    }\n}\n\n// Resource-based: pass Order as resource to AuthorizeAsync",
+            "explanation": "AuthorizationHandler<TRequirement, TResource> receives the resource instance for ownership checks — cleaner than loading inside a generic handler."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Apply policy on controller and minimal API",
+            "code": "[Authorize(Policy = \"CanViewReports\")]\n[HttpGet(\"reports\")]\npublic IActionResult Reports() => Ok(/* ... */);\n\n// Minimal API\napp.MapGet(\"/orders/{id}\", async (int id, HttpContext ctx, IAuthorizationService authz, OrdersDb db) =>\n{\n    var order = await db.Orders.FindAsync(id);\n    if (order is null) return Results.NotFound();\n\n    var result = await authz.AuthorizeAsync(ctx.User, order, \"CanEditOrder\");\n    if (!result.Succeeded) return Results.Forbid();\n\n    return Results.Ok(order);\n}).RequireAuthorization(\"CanEditOrder\");",
+            "explanation": "Declarative [Authorize(Policy)] for coarse gates; imperative AuthorizeAsync when the resource id comes from the route and must be loaded first."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Integration test with policy override",
+            "code": "public class AllowAllOrdersHandler : IAuthorizationHandler\n{\n    public Task HandleAsync(AuthorizationHandlerContext context)\n    {\n        foreach (var r in context.Requirements)\n            context.Succeed(r);\n        return Task.CompletedTask;\n    }\n}\n\n// In WebApplicationFactory fixture:\nbuilder.ConfigureTestServices(services =>\n{\n    services.AddSingleton<IAuthorizationHandler, AllowAllOrdersHandler>();\n});\n// Or services.AddAuthorization options => options.DefaultPolicy = ...",
+            "explanation": "Test handlers prove business logic without fighting auth in every test. Production uses real handlers; tests swap or mock IAuthorizationHandler."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Policy patterns across stacks",
+          "headers": ["Concept", "NestJS", "Express + CASL", "ASP.NET Core"],
+          "rows": [
+            ["Declarative gate", "@UseGuards(PoliciesGuard) + @CheckPolicies()", "router.use(checkAbility)", "[Authorize(Policy)]"],
+            ["Custom rule class", "PolicyHandler interface", "defineAbility rules", "IAuthorizationHandler"],
+            ["Resource check", "request.user + entity in handler", "ability.can('update', order)", "AuthorizeAsync(User, order, policy)"],
+            ["403 vs 401", "ForbiddenException", "403 res.status", "403 when authenticated, policy fails"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Registering handler but forgetting AddPolicy that AddRequirements the matching type. Injecting scoped DbContext into handler constructor (captive dependency). Using RequireRole only when OAuth sends roles in a claim array with a custom claim name — use RequireClaim or role claim transformation instead."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: log authorization failures with policy name and failed requirement type (custom middleware on 403). Application Insights custom dimensions PolicyName on Forbid results highlight misconfigured IdP role mapping. For performance, cache permission lookups in IMemoryCache keyed by user id + tenant with short TTL — handlers stay async-friendly and avoid N+1 permission queries per request."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Policy design tradeoffs",
+          "headers": ["Pattern", "When", "Pitfall"],
+          "rows": [
+            ["RequireRole", "Simple RBAC, roles in token", "Role explosion; IdP may emit roles claim not Role claim type"],
+            ["RequireClaim / scope", "OAuth scopes for API permissions", "Scope strings must match token exactly"],
+            ["Resource handler", "Row-level ownership", "Must call AuthorizeAsync after loading entity"],
+            ["FallbackPolicy", "Secure-by-default API", "Forgets [AllowAnonymous] on health/swagger"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing IAuthorizationHandler with authentication handlers. Saying policies run before authentication. Not knowing multiple handlers can satisfy different requirements in one policy. Unable to explain 403 when policy fails vs 401 when not authenticated."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Policies = named requirements + IAuthorizationHandler classes; [Authorize(Policy)] attaches them to endpoints.",
+    "403 when authenticated but handler does not Succeed; 401 when no valid principal.",
+    "Production tip: structured logs with policy name on 403; cache permission lookups in handlers hitting DB.",
+    "60s: Register AddPolicy with RequireClaim/RequireRole or custom IAuthorizationRequirement. Handlers call context.Succeed. Resource-based checks use AuthorizeAsync(User, entity, policy). Handlers are singletons.",
+    "Follow-up: how do you unit test a policy handler that queries the database?"
+  ],
+  "commonPitfalls": [
+    "Saying 'roles and policies are unrelated' gets you rejected — RequireRole is implemented as policy requirements internally.",
+    "Scoped DbContext in handler constructor — captive dependency; resolve per request via context or factory.",
+    "Strong answer: 'Policies decouple authorization rules from controllers. Custom handlers enforce domain rules and resource ownership. I test with stub IAuthorizationHandler in WebApplicationFactory.'"
+  ],
+  "introducedIn": "ASP.NET Core 2.0 policy-based authorization",
+  "relatedTopicIds": [
+    "dotnet-07-authn-vs-authz",
+    "dotnet-07-claims-and-transformations",
+    "dotnet-07-jwt-bearer-flow"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS PoliciesGuard + CaslAbilityFactory",
+      "note": "CheckPolicies decorator maps to [Authorize(Policy)]; Ability rules mirror IAuthorizationRequirement + handler logic.",
+      "futureTopicSlug": "typescript/nestjs/casl-policies"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express middleware authorize(permission)",
+      "note": "Imperative permission function per route equals calling IAuthorizationService.AuthorizeAsync inside an endpoint filter or action.",
+      "futureTopicSlug": "javascript/express/rbac-middleware"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Policy-based authorization",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authorization/policies"
+    },
+    {
+      "title": "Resource-based authorization",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authorization/resourcebased"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

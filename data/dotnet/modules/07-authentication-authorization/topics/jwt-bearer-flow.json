@@ -1,0 +1,238 @@
+{
+  "id": "dotnet-07-jwt-bearer-flow",
+  "slug": "jwt-bearer-flow",
+  "title": "JWT bearer authentication flow (signed, not encrypted)",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 2,
+  "hook": "A JSON Web Token (JWT) is a signed string the client sends in the Authorization header. The API verifies the signature and reads claims — it does not decrypt the payload because JWTs are signed, not encrypted.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "JWT bearer authentication is the default pattern for ASP.NET Core Web APIs consumed by SPAs, mobile apps, and service-to-service callers. The client obtains an access token from an identity provider, then sends `Authorization: Bearer <token>` on each API request. The JwtBearerHandler validates issuer, audience, signature, and lifetime, then builds a ClaimsPrincipal from the token payload. Anyone can Base64-decode the payload — treat JWTs as tamper-evident credentials, not secret envelopes."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "JWT",
+              "longForm": "JSON Web Token",
+              "plainDefinition": "Compact token format: header.payload.signature — payload is signed (integrity) but typically not encrypted (confidentiality).",
+              "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            },
+            {
+              "term": "Bearer scheme",
+              "longForm": "Bearer authentication scheme",
+              "plainDefinition": "HTTP Authorization scheme where possession of the token grants access — no additional proof per request beyond presenting the token.",
+              "example": "Authorization: Bearer eyJ..."
+            },
+            {
+              "term": "Access token",
+              "longForm": "OAuth 2.0 access token",
+              "plainDefinition": "Short-lived token used to call APIs; often a JWT but can be opaque.",
+              "example": "expires_in: 3600"
+            },
+            {
+              "term": "Refresh token",
+              "longForm": "OAuth 2.0 refresh token",
+              "plainDefinition": "Longer-lived token exchanged at the token endpoint for new access tokens — never sent to resource APIs.",
+              "example": "POST /connect/token grant_type=refresh_token"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Misunderstanding JWT as encrypted leads teams to put passwords or PII in claims. Treating access tokens like session cookies leads to storing refresh tokens in localStorage without rotation. Reddit and LeetCode threads constantly debate JWT vs server sessions — senior engineers must articulate stateless verification, revocation tradeoffs, and refresh token storage (HttpOnly cookie vs secure backend channel)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Signed, not encrypted",
+          "body": "JWS (signed JWT) proves the token was issued by a trusted party and was not modified. JWE (encrypted JWT) hides payload content — most API access tokens are JWS only. Never put secrets in unsigned or signed-only JWT claims."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Bearer JWT validation flow",
+          "items": [
+            {
+              "title": "Client sends Authorization header",
+              "body": "Browser or service attaches Bearer token on each API call."
+            },
+            {
+              "title": "JwtBearerHandler extracts token",
+              "body": "Reads header, parses JWT segments, loads signing keys from Authority/metadata or configured SymmetricSecurityKey."
+            },
+            {
+              "title": "Validation checks",
+              "body": "Signature, exp (expiry), iss (issuer), aud (audience), nbf (not before). Clock skew allows small time drift."
+            },
+            {
+              "title": "ClaimsPrincipal created",
+              "body": "Claims mapped to HttpContext.User. Authorization policies run next — JWT validation alone does not enforce roles unless claims include them."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "JWT bearer request flow",
+            "source": "sequenceDiagram\n  participant C as Client\n  participant API as ASP.NET Core API\n  participant IdP as Identity Provider\n  C->>IdP: Login / token endpoint\n  IdP-->>C: access_token (JWT) + refresh_token\n  C->>API: GET /api/orders Authorization Bearer JWT\n  API->>API: Validate signature exp iss aud\n  API->>API: Build ClaimsPrincipal\n  API-->>C: 200 JSON or 401 if invalid"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Configure JwtBearer with Authority (OpenID Connect)",
+            "code": "builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(options =>\n    {\n        options.Authority = \"https://login.example.com\";\n        options.Audience = \"orders-api\";\n        options.TokenValidationParameters = new TokenValidationParameters\n        {\n            ValidateIssuer = true,\n            ValidateAudience = true,\n            ValidateLifetime = true,\n            ValidateIssuerSigningKey = true,\n            ClockSkew = TimeSpan.FromMinutes(2)\n        };\n        options.MapInboundClaims = false; // keep short claim names (sub, name)\n    });",
+            "explanation": "Authority pulls OpenID Connect metadata (jwks_uri) for signing keys. Audience must match the aud claim. MapInboundClaims=false avoids legacy claim type remapping."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Symmetric key for internal services (dev/test only pattern)",
+            "code": "var key = new SymmetricSecurityKey(\n    Encoding.UTF8.GetBytes(builder.Configuration[\"Jwt:Key\"]!));\nbuilder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(o =>\n    {\n        o.TokenValidationParameters = new TokenValidationParameters\n        {\n            ValidIssuer = \"internal-issuer\",\n            ValidAudience = \"internal-api\",\n            IssuerSigningKey = key\n        };\n    });\n// Production: prefer asymmetric RS256 from IdentityServer / Entra ID",
+            "explanation": "Shared secret signing is simple but every service holding the key can mint tokens. Asymmetric keys let APIs validate with public key only."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Refresh token flow (BFF pattern — refresh never hits SPA storage)",
+            "code": "// Browser talks to your BFF; BFF holds refresh token in HttpOnly cookie\napp.MapPost(\"/bff/refresh\", async (HttpContext ctx, ITokenClient tokens) =>\n{\n    var refresh = ctx.Request.Cookies[\"refresh_token\"];\n    if (string.IsNullOrEmpty(refresh)) return Results.Unauthorized();\n\n    var pair = await tokens.RefreshAsync(refresh);\n    ctx.Response.Cookies.Append(\"refresh_token\", pair.RefreshToken,\n        new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict });\n    return Results.Json(new { access_token = pair.AccessToken });\n});\n// Resource API only validates short-lived access JWT — never accepts refresh token",
+            "explanation": "Refresh tokens are long-lived secrets exchanged only with the token endpoint. Access JWT goes to APIs; refresh stays server-side or HttpOnly cookie."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure-mode diagnostic — log JwtBearer events",
+            "code": "options.Events = new JwtBearerEvents\n{\n    OnAuthenticationFailed = ctx =>\n    {\n        var log = ctx.HttpContext.RequestServices\n            .GetRequiredService<ILoggerFactory>().CreateLogger(\"JwtBearer\");\n        log.LogWarning(ctx.Exception,\n            \"JWT failed Path={Path} Expired={Expired}\",\n            ctx.Request.Path,\n            ctx.Exception is SecurityTokenExpiredException);\n        return Task.CompletedTask;\n    },\n    OnChallenge = ctx =>\n    {\n        // Default 401 — add WWW-Authenticate for OAuth clients\n        ctx.HandleResponse();\n        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;\n        return ctx.Response.WriteAsJsonAsync(new { error = \"invalid_token\" });\n    }\n};",
+            "explanation": "Separate expired (re-auth/refresh) from bad signature (misconfigured keys) from wrong audience (deployment mismatch) using structured logs and exception types."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "JWT validation: jsonwebtoken vs ASP.NET Core",
+          "headers": ["Step", "Node (jsonwebtoken)", "ASP.NET Core JwtBearer"],
+          "rows": [
+            ["Verify signature", "jwt.verify(token, secret, { algorithms: ['RS256'] })", "TokenValidationParameters + signing keys from metadata"],
+            ["Check exp", "Automatic in verify options", "ValidateLifetime + ClockSkew"],
+            ["Attach user", "req.user = decoded payload", "HttpContext.User ClaimsPrincipal"],
+            ["401 response", "Manual res.status(401)", "OnChallenge / authorization middleware"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Storing refresh tokens in localStorage (XSS steals them). Using alg=none or accepting tokens without audience validation. Putting sensitive data in JWT payload. Sending refresh tokens to resource APIs. Confusing encrypted (JWE) with signed-only (JWS) tokens."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters or Application Insights track JwtBearerHandler failure reasons. Spike in SecurityTokenExpiredException → client refresh flow broken. Invalid signature after deploy → key rotation not propagated to all nodes. For revocation without sessions, use short access TTL (5–15 min), refresh rotation, token version claim checked against Redis, or OAuth token introspection for high-risk operations."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "JWT vs server session for APIs",
+          "headers": ["Factor", "JWT access token", "Server session (Redis)"],
+          "rows": [
+            ["Revocation", "Delayed until expiry unless blocklist", "Delete session key instantly"],
+            ["Scale-out", "No shared store for validation", "Requires Redis/session affinity"],
+            ["Payload size", "Claims in every request header", "Session id cookie only"],
+            ["Mobile / SPA", "Natural fit", "Cookie SameSite and CORS complexity"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying JWT is encrypted and safe to store passwords inside. Claiming JWT eliminates need for refresh tokens on SPAs. Not knowing access vs refresh token responsibilities. Ignoring clock skew and metadata refresh when signing keys rotate."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "JWT bearer = signed token in Authorization header; payload is readable — integrity via signature, not confidentiality.",
+    "Access token short-lived for APIs; refresh token only at token endpoint, ideally HttpOnly cookie or server-side.",
+    "Production tip: log OnAuthenticationFailed exception types; rotate signing keys with overlapping JWKS validity.",
+    "60s: Client gets JWT from IdP, sends Bearer header. API validates iss aud exp signature via JwtBearerHandler, sets User. JWT proves identity not permission. Refresh separately — never send refresh to resource API.",
+    "Follow-up: how would you revoke a JWT before expiry in a microservice fleet?"
+  ],
+  "commonPitfalls": [
+    "Saying 'JWT is encrypted' gets you rejected — default API tokens are JWS (signed), payload is Base64-decodable.",
+    "Using localStorage for refresh tokens — XSS exfiltration; BFF + HttpOnly cookie is stronger for browsers.",
+    "Strong answer: 'Stateless validation scales out; tradeoff is delayed revocation. Short TTL, refresh rotation, optional Redis denylist for high-risk claims.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 JwtBearer; MapInboundClaims default changed in .NET 8",
+  "relatedTopicIds": [
+    "dotnet-07-authn-vs-authz",
+    "dotnet-07-oauth-openid-connect",
+    "dotnet-07-claims-and-transformations",
+    "dotnet-04-middleware-order"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "jsonwebtoken verify vs express-jwt",
+      "note": "Both decode header.payload without secret — verification is separate. Same as JwtBearerHandler validating before trusting claims.",
+      "futureTopicSlug": "javascript/nodejs/jwt-verify"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS JwtStrategy passport-jwt",
+      "note": "secretOrKeyProvider mirrors Authority metadata key resolution; validateIssuer/audience options map to TokenValidationParameters.",
+      "futureTopicSlug": "typescript/nestjs/jwt-strategy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Configure JWT bearer authentication",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/jwt-authn"
+    },
+    {
+      "title": "OpenTelemetry in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "auth-token"
+}

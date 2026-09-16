@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-07-owasp-api-security",
+  "slug": "owasp-api-security",
+  "title": "OWASP API security top 10 (practical ASP.NET Core mitigations)",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 7,
+  "hook": "The Open Worldwide Application Security Project (OWASP) API Security Top 10 lists the most common ways APIs get breached. ASP.NET Core gives you middleware and patterns to mitigate each — if you apply them deliberately.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OWASP API Security Top 10 (2023) covers broken object level authorization (BOLA), broken authentication, unrestricted resource consumption, and more. For ASP.NET Core Web APIs, mitigations map to policy handlers, rate limiting, input validation, Problem Details without stack leaks, and secure token handling. This topic ties auth concepts from the module to a checklist senior engineers use in design reviews and interviews."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "BOLA",
+              "longForm": "Broken Object Level Authorization",
+              "plainDefinition": "API allows access to another user's object by changing id in URL — #1 API risk.",
+              "example": "GET /orders/999 when 999 belongs to another tenant"
+            },
+            {
+              "term": "BFLA",
+              "longForm": "Broken Function Level Authorization",
+              "plainDefinition": "User accesses admin function without admin role — missing [Authorize(Policy)].",
+              "example": "POST /admin/users without Admin policy"
+            },
+            {
+              "term": "Security misconfiguration",
+              "longForm": "Security misconfiguration",
+              "plainDefinition": "Default credentials, verbose errors, open CORS, missing HTTPS.",
+              "example": "UseDeveloperExceptionPage in production"
+            },
+            {
+              "term": "Unrestricted resource consumption",
+              "longForm": "Unrestricted resource consumption",
+              "plainDefinition": "No rate limits or pagination — DoS via expensive endpoints.",
+              "example": "Unbounded ?pageSize=999999"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "FAANG and product company security interviews ask you to walk through OWASP API items with concrete ASP.NET Core controls — not vague 'we use HTTPS.' BOLA alone causes most API breaches because developers authenticate users but skip resource-level authorization. Mapping Top 10 to JwtBearer, IAuthorizationHandler, AddRateLimiter, and [AllowAnonymous] discipline shows production maturity."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "AuthN without AuthZ is incomplete",
+          "body": "API2 Broken Authentication and API1 BOLA overlap with this module — valid JWT does not mean user may access object id in the route."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "OWASP API Top 10 → ASP.NET Core mitigation map",
+          "items": [
+            {
+              "title": "API1 BOLA",
+              "body": "Resource-based IAuthorizationHandler; never trust client-supplied ids without ownership check."
+            },
+            {
+              "title": "API2 Broken authentication",
+              "body": "JwtBearer validation, short TTL, refresh rotation, no password grant; lockout via IdP."
+            },
+            {
+              "title": "API3 Broken object property level authorization",
+              "body": "DTOs with read/write separation; avoid returning entity with sensitive fields."
+            },
+            {
+              "title": "API4 Unrestricted resource consumption",
+              "body": "AddRateLimiter, pagination caps, request size limits, timeouts."
+            },
+            {
+              "title": "API5–API10",
+              "body": "BFLA → policies; misconfiguration → hardened Program.cs; unsafe consumption → validate outbound URLs; supply chain → pinned packages."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Defense layers for a typical Web API",
+            "source": "flowchart TB\n  EDGE[Reverse proxy TLS WAF] --> RL[Rate limiter]\n  RL --> AUTHN[JWT / API key AuthN]\n  AUTHN --> AUTHZ[Policy + resource handlers\\nBOLA BFLA]\n  AUTHZ --> VAL[Validation filters]\n  VAL --> APP[Business logic]\n  APP --> ERR[Problem Details\\nno stack leak]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "BOLA mitigation — resource authorization",
+            "code": "[HttpGet(\"orders/{orderId}\")]\n[Authorize]\npublic async Task<IActionResult> GetOrder(\n    Guid orderId,\n    IAuthorizationService authz)\n{\n    var order = await _db.Orders.AsNoTracking()\n        .FirstOrDefaultAsync(o => o.Id == orderId);\n    if (order is null) return NotFound();\n\n    var result = await authz.AuthorizeAsync(User, order, \"OrderOwner\");\n    if (!result.Succeeded) return Forbid(); // 403 — do not leak existence via 404 debate\n\n    return Ok(_mapper.ToDto(order));\n}",
+            "explanation": "API1 fix: load resource, authorize against it. Team policy chooses 404 vs 403 for non-owned ids — document consistently."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Rate limiting and request size (API4)",
+            "code": "builder.Services.AddRateLimiter(options =>\n{\n    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;\n    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>\n        RateLimitPartition.GetFixedWindowLimiter(\n            ctx.User.Identity?.Name ?? ctx.Connection.RemoteIpAddress?.ToString() ?? \"anon\",\n            _ => new FixedWindowRateLimiterOptions\n            {\n                PermitLimit = 100,\n                Window = TimeSpan.FromMinutes(1)\n            }));\n});\n\nbuilder.WebHost.ConfigureKestrel(o =>\n{\n    o.Limits.MaxRequestBodySize = 1_048_576; // 1 MB\n});\n\napp.UseRateLimiter();",
+            "explanation": "Rate limit by user or IP; cap body size to reduce upload DoS. Return 429 with Retry-After header in production."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Security headers and hardened production config (API8)",
+            "code": "if (!app.Environment.IsDevelopment())\n{\n    app.UseExceptionHandler();\n    app.UseHsts();\n}\napp.UseHttpsRedirection();\n\napp.Use(async (ctx, next) =>\n{\n    ctx.Response.Headers[\"X-Content-Type-Options\"] = \"nosniff\";\n    ctx.Response.Headers[\"Cache-Control\"] = \"no-store\";\n    await next();\n});\n\n// Restrict CORS — never AllowAnyOrigin with credentials\nbuilder.Services.AddCors(o => o.AddPolicy(\"Spa\", p => p\n    .WithOrigins(\"https://app.example.com\")\n    .AllowAnyHeader()\n    .AllowAnyMethod()));",
+            "explanation": "Misconfiguration: permissive CORS, developer exception page in prod, missing HSTS. Problem Details replaces stack traces for API clients."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Audit logging for security events (production proof)",
+            "code": "public class SecurityAuditMiddleware(RequestDelegate next, ILogger<SecurityAuditMiddleware> log)\n{\n    public async Task InvokeAsync(HttpContext ctx)\n    {\n        await next(ctx);\n        if (ctx.Response.StatusCode is 401 or 403 or 429)\n        {\n            log.LogWarning(\n                \"SecurityEvent {Status} {Method} {Path} User={User} ClientId={Client}\",\n                ctx.Response.StatusCode,\n                ctx.Request.Method,\n                ctx.Request.Path,\n                ctx.User.FindFirstValue(\"sub\") ?? \"anonymous\",\n                ctx.User.FindFirstValue(\"client_id\"));\n        }\n    }\n}\n// Ship to SIEM / Application Insights custom events",
+            "explanation": "Detect BOLA probing (403 bursts on sequential ids), credential stuffing (401 spikes), abuse (429). Never log Bearer tokens or API keys."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "OWASP mitigations in Node vs ASP.NET Core",
+          "headers": ["Risk", "Express / NestJS", "ASP.NET Core"],
+          "rows": [
+            ["BOLA", "Manual check req.user.id === resource.owner", "IAuthorizationHandler + AuthorizeAsync"],
+            ["Rate limits", "express-rate-limit", "Built-in AddRateLimiter (.NET 7+)"],
+            ["Auth misconfig", "jwt.verify options", "TokenValidationParameters + FallbackPolicy"],
+            ["Error leaks", "Custom error handler", "UseExceptionHandler + Problem Details"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Only global [Authorize] without per-resource checks (BOLA). Swagger UI exposed in production without auth. CORS AllowAnyOrigin with credentials. Logging Authorization headers. Using int sequential ids without tenant scoping in multi-tenant APIs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: run OWASP ZAP or API security CI against staging with auth tokens. Application Insights alerts on 403 rate per user scanning id ranges. dotnet-counters for thread-pool queue length when API4 attacks hit unbounded endpoints. Pen test findings mapped to GitHub issues with policy handler tests in WebApplicationFactory proving BOLA fixes."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "OWASP API Top 10 quick mitigation reference",
+          "headers": ["#", "Risk", "ASP.NET Core mitigation"],
+          "rows": [
+            ["API1", "BOLA", "Resource IAuthorizationHandler; tenant filter in EF"],
+            ["API2", "Broken authentication", "JwtBearer + PKCE; no weak grants"],
+            ["API3", "Broken property auth", "Response DTOs; [JsonIgnore] on writes"],
+            ["API4", "Resource consumption", "Rate limiter; pagination; Kestrel limits"],
+            ["API5", "BFLA", "[Authorize(Policy)] on every admin route"],
+            ["API8", "Misconfiguration", "HSTS, CORS lockdown, no dev page in prod"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Naming OWASP Top 10 web instead of API list. Saying HTTPS alone secures APIs. Cannot explain BOLA with a concrete id-in-URL example. No mention of rate limiting or resource-level authorization."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "OWASP API Top 10 #1 is BOLA — fix with resource authorization, not just [Authorize].",
+    "Combine JwtBearer, policies, rate limiting, CORS discipline, and Problem Details without stack leaks.",
+    "Production tip: security audit logs on 401/403/429; ZAP in CI; alert on id enumeration patterns.",
+    "60s: Authenticate with JWT or API key. Authorize with policies plus resource handlers for object ids. Rate limit. Harden Program.cs. Never log tokens. BOLA is the breach leaders see most.",
+    "Follow-up: 404 vs 403 when object exists but user lacks access?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we use JWT so OWASP auth is covered' gets you rejected — JWT is API2 enabler not fix; validation and AuthZ still required.",
+    "Global admin role check only — BFLA and BOLA need endpoint and object-level policies.",
+    "Strong answer: 'I map each OWASP API item: BOLA resource handler, API4 rate limiter, API8 no dev exception in prod, audit 403 spikes for enumeration.'"
+  ],
+  "introducedIn": "OWASP API Security Top 10 2023; ASP.NET Core Rate Limiting in .NET 7",
+  "relatedTopicIds": [
+    "dotnet-07-authn-vs-authz",
+    "dotnet-07-policy-based-auth",
+    "dotnet-07-custom-auth-handlers",
+    "dotnet-04-exception-handling-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "express-rate-limit + ownership middleware",
+      "note": "Split rate limit (API4) and per-route ownership check (API1) — ASP.NET unifies via middleware order and IAuthorizationService.",
+      "futureTopicSlug": "javascript/security/owasp-api"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS ThrottlerGuard + CASL subject checks",
+      "note": "ThrottlerGuard maps to AddRateLimiter; CASL ability.can('read', subject) maps to resource authorization handlers.",
+      "futureTopicSlug": "typescript/nestjs/security"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "OWASP API Security Top 10",
+      "url": "https://owasp.org/API-Security/editions/2023/en/0x00-header/"
+    },
+    {
+      "title": "Rate limiting middleware in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
+}

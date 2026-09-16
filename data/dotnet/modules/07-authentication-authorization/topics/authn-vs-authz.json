@@ -1,0 +1,237 @@
+{
+  "id": "dotnet-07-authn-vs-authz",
+  "slug": "authn-vs-authz",
+  "title": "Authentication versus authorization (who you are vs what you can do)",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 1,
+  "hook": "Authentication answers who is calling your API. Authorization answers whether that caller may perform the action. Mixing them up leads to wrong HTTP status codes, security holes, and failed interviews.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Authentication (AuthN) verifies identity — proving the caller is who they claim to be (username/password, JSON Web Token (JWT), API key, certificate). Authorization (AuthZ) decides permissions after identity is known — can this user read orders, delete tenants, or call admin endpoints? In ASP.NET Core, UseAuthentication populates HttpContext.User; UseAuthorization evaluates [Authorize] attributes and policies against that principal."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Authentication (AuthN)",
+              "longForm": "Authentication",
+              "plainDefinition": "Process of verifying identity and building a ClaimsPrincipal on HttpContext.User.",
+              "example": "JwtBearerHandler validates signature and sets User"
+            },
+            {
+              "term": "Authorization (AuthZ)",
+              "longForm": "Authorization",
+              "plainDefinition": "Process of checking whether the authenticated principal may access a resource or perform an action.",
+              "example": "[Authorize(Policy = \"CanEditOrder\")] on a controller action"
+            },
+            {
+              "term": "ClaimsPrincipal",
+              "longForm": "ClaimsPrincipal",
+              "plainDefinition": "Represents the authenticated user with a collection of claims (name, role, tenant id).",
+              "example": "User.FindFirst(\"sub\")?.Value"
+            },
+            {
+              "term": "Anonymous",
+              "longForm": "Anonymous user",
+              "plainDefinition": "No identity established — User.Identity?.IsAuthenticated is false.",
+              "example": "Public GET /health without credentials"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every protected Web API endpoint runs through both stages. Returning 403 Forbidden when the client sent no token (should be 401 Unauthorized) breaks API clients and OAuth flows. Skipping authorization because authentication succeeded assumes all authenticated users have equal access — a common breach pattern. Senior interviews expect you to explain status codes, middleware order, and when to fail closed."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Fail closed",
+          "body": "Default protected endpoints should reject unknown identity (401) and known-but-unauthorized identity (403). Never fall through to business logic without an explicit [AllowAnonymous] or public endpoint."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request flow through AuthN then AuthZ",
+          "items": [
+            {
+              "title": "Routing selects endpoint",
+              "body": "Endpoint routing attaches [Authorize] metadata to the matched route before auth middleware runs."
+            },
+            {
+              "title": "Authentication middleware",
+              "body": "UseAuthentication invokes registered handlers (JWT Bearer, cookies). On success, HttpContext.User is set. On failure or missing credentials, User may remain anonymous — handler does not always short-circuit."
+            },
+            {
+              "title": "Authorization middleware",
+              "body": "UseAuthorization checks endpoint metadata. If [Authorize] requires auth and User is not authenticated → 401. If authenticated but policy fails → 403."
+            },
+            {
+              "title": "Endpoint executes",
+              "body": "Handler runs only if authorization succeeded. Additional resource-level checks (ownership) may still return 403 inside the action."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Authentication vs authorization in the pipeline",
+            "source": "flowchart LR\n  REQ[HTTP Request] --> RT[Routing\\nendpoint metadata]\n  RT --> AUTHN[UseAuthentication\\nwho are you?]\n  AUTHN --> AUTHZ[UseAuthorization\\nwhat may you do?]\n  AUTHZ -->|401 no identity| R401[401 Unauthorized]\n  AUTHZ -->|403 identity ok policy fail| R403[403 Forbidden]\n  AUTHZ -->|allowed| EP[Endpoint handler]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register AuthN and AuthZ in Program.cs",
+            "code": "builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(options =>\n    {\n        options.Authority = \"https://login.example.com\";\n        options.Audience = \"orders-api\";\n    });\nbuilder.Services.AddAuthorization(options =>\n{\n    options.FallbackPolicy = new AuthorizationPolicyBuilder()\n        .RequireAuthenticatedUser()\n        .Build(); // entire API requires login unless [AllowAnonymous]\n});\n\nvar app = builder.Build();\napp.UseRouting();\napp.UseAuthentication(); // sets HttpContext.User\napp.UseAuthorization();  // checks policies\napp.MapControllers();",
+            "explanation": "AddAuthentication registers handlers; AddAuthorization registers policies. Middleware order: routing, then authentication, then authorization, then endpoints."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "401 vs 403 on a controller",
+            "code": "[ApiController]\n[Route(\"api/orders\")]\npublic class OrdersController : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    [Authorize] // no token → 401; token ok → continues\n    public IActionResult Get(int id) => Ok(/* ... */);\n\n    [HttpDelete(\"{id}\")]\n    [Authorize(Policy = \"CanDeleteOrder\")] // token ok but no claim → 403\n    public IActionResult Delete(int id) => NoContent();\n\n    [HttpGet(\"public-stats\")]\n    [AllowAnonymous] // skips authorization requirement\n    public IActionResult Stats() => Ok(/* ... */);\n}",
+            "explanation": "[Authorize] without policy only requires authentication (401 if missing). Policy failure after authentication yields 403. [AllowAnonymous] opts out of fallback policy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Resource-level authorization inside the action",
+            "code": "[HttpPut(\"{id}\")]\n[Authorize]\npublic async Task<IActionResult> Update(int id, OrderDto dto)\n{\n    var order = await _db.Orders.FindAsync(id);\n    if (order is null) return NotFound();\n\n    var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);\n    if (order.OwnerId != userId && !User.IsInRole(\"Admin\"))\n        return Forbid(); // 403 — authenticated but not owner\n\n    // update...\n    return NoContent();\n}",
+            "explanation": "Middleware authorization is coarse (endpoint + policy). Fine-grained ownership checks belong in the handler and still return 403 Forbid(), not 401."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostic — log AuthN vs AuthZ outcome",
+            "code": "app.Use(async (context, next) =>\n{\n    await next();\n    if (context.Response.StatusCode is 401 or 403)\n    {\n        var log = context.RequestServices.GetRequiredService<ILoggerFactory>()\n            .CreateLogger(\"AuthDiag\");\n        var authed = context.User.Identity?.IsAuthenticated ?? false;\n        log.LogWarning(\"{Status} Path={Path} Authenticated={Authed}\",\n            context.Response.StatusCode, context.Request.Path, authed);\n        // 401 + Authenticated=false → missing/invalid token\n        // 403 + Authenticated=true → policy or Forbid()\n    }\n});",
+            "explanation": "Production triage: 401 usually means fix client credentials or token validation. 403 means identity is valid but claims or ownership failed."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "AuthN vs AuthZ in Express/NestJS vs ASP.NET Core",
+          "headers": ["Concern", "Express / passport", "NestJS", "ASP.NET Core"],
+          "rows": [
+            ["Identity", "passport.authenticate('jwt')", "AuthGuard('jwt')", "UseAuthentication + JwtBearerHandler"],
+            ["Permission", "Custom middleware if (req.user.role)", "@Roles() + RolesGuard", "[Authorize(Policy)] + IAuthorizationHandler"],
+            ["401 vs 403", "Often manual res.status(401/403)", "Guard throws UnauthorizedException", "Authorization middleware maps to 401/403"],
+            ["Anonymous routes", "Skip middleware on path", "@Public() decorator", "[AllowAnonymous]"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Returning 403 when no token was sent (should be 401). Checking roles only in the controller without [Authorize] on the endpoint. Calling UseAuthorization before UseAuthentication. Assuming JWT presence means authorization — validation and policies are separate steps."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights dependency tracking on JWT metadata refresh failures correlates with 401 spikes. Custom metrics on 401 vs 403 ratio — sudden 403 increase often means policy or claims mapping regression after identity provider change. OpenTelemetry spans on JwtBearerHandler.OnAuthenticationFailed show signature vs expiry vs audience failures separately from authorization policy denials."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "JWT session vs server session (AuthN tradeoffs)",
+          "headers": ["Approach", "When", "Pitfall"],
+          "rows": [
+            ["JWT access token (stateless API)", "Microservices, mobile, SPA backends", "Cannot revoke instantly without blocklist or short TTL + refresh"],
+            ["Server session cookie", "Monolith, same-site browser apps", "Sticky sessions, server store (Redis), harder for pure APIs"],
+            ["Reference token + introspection", "High-security revoke requirements", "Extra latency per request to identity server"],
+            ["API key (machine-to-machine)", "Partner integrations, webhooks", "Long-lived secret — rotation and scoped keys critical"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying authentication and authorization are the same thing. Returning 403 for missing Bearer token. Not knowing UseAuthentication does not block anonymous requests by itself — [Authorize] and authorization middleware do. Claiming JWT replaces authorization entirely."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Authentication = identity (who); authorization = permission (what) — separate middleware and HTTP status codes.",
+    "401 when identity missing or invalid; 403 when identity valid but policy or ownership fails.",
+    "Production tip: alert on 401/403 ratio shifts; log IsAuthenticated on 403 to distinguish policy bugs from token issues.",
+    "60s: AuthN sets HttpContext.User via UseAuthentication. AuthZ runs after and returns 401 without identity, 403 when policy fails. JWT proves identity, not permission — policies and handlers enforce AuthZ.",
+    "Follow-up: how do refresh tokens fit if access JWT is stateless?"
+  ],
+  "commonPitfalls": [
+    "Saying '403 for expired token' gets you rejected — expired JWT fails authentication (401), not authorization.",
+    "Only checking User.IsInRole in code without [Authorize] — endpoint may be reachable if routing misconfigured.",
+    "Strong answer: '401 means no valid principal. 403 means principal exists but policy or resource check failed. I use fallback policy plus explicit AllowAnonymous on public routes.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; FallbackPolicy in 3.0",
+  "relatedTopicIds": [
+    "dotnet-04-middleware-order",
+    "dotnet-07-jwt-bearer-flow",
+    "dotnet-07-policy-based-auth"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express passport.authenticate vs authorize middleware",
+      "note": "passport.authenticate establishes req.user (AuthN); a separate role check middleware is AuthZ — same two-step split as UseAuthentication then UseAuthorization.",
+      "futureTopicSlug": "javascript/express/passport-jwt"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS AuthGuard vs RolesGuard / PoliciesGuard",
+      "note": "JwtAuthGuard mirrors authentication middleware; RolesGuard or custom PolicyGuard mirrors IAuthorizationHandler — guards run after identity is attached.",
+      "futureTopicSlug": "typescript/nestjs/authorization"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Overview of ASP.NET Core security",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/"
+    },
+    {
+      "title": "Authentication and authorization middleware",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

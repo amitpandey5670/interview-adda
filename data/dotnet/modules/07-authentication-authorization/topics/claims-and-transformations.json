@@ -1,0 +1,237 @@
+{
+  "id": "dotnet-07-claims-and-transformations",
+  "slug": "claims-and-transformations",
+  "title": "Claims, roles, and IClaimsTransformation",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 4,
+  "hook": "After authentication, the user is a bag of claims — name, subject id, roles, scopes. IClaimsTransformation lets you enrich or normalize those claims before authorization runs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Claims are name-value pairs on ClaimsIdentity inside HttpContext.User. JWT payloads map to claims (sub, email, roles). ASP.NET Core historically mapped inbound JWT claim names to long URIs (MapInboundClaims); .NET 8+ defaults preserve short OIDC names. IClaimsTransformation runs on each request after authentication to add application roles from a database, flatten JSON role arrays, or attach tenant id for multi-tenant APIs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Claim",
+              "longForm": "Security claim",
+              "plainDefinition": "A statement about the user (type + value), e.g. sub=123, role=Admin.",
+              "example": "new Claim(ClaimTypes.Role, \"Editor\")"
+            },
+            {
+              "term": "ClaimsIdentity",
+              "longForm": "Claims identity",
+              "plainDefinition": "One identity with claims and AuthenticationType; User can hold multiple identities.",
+              "example": "User.Identity as ClaimsIdentity"
+            },
+            {
+              "term": "Role claim",
+              "longForm": "Role claim type",
+              "plainDefinition": "Claim interpreted by IsInRole and RequireRole — default ClaimTypes.Role or \"roles\" from Azure AD.",
+              "example": "RequireRole(\"Admin\") checks role claims"
+            },
+            {
+              "term": "IClaimsTransformation",
+              "longForm": "Claims transformation service",
+              "plainDefinition": "Async hook to mutate ClaimsPrincipal before authorization — register as transient in DI.",
+              "example": "services.AddTransient<IClaimsTransformation, DbRoleTransformation>();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Identity providers emit different claim shapes — Azure AD uses roles or groups; Auth0 uses permissions claim; some emit JSON array in a single claim. Authorization policies fail mysteriously when RequireRole(\"Admin\") looks for wrong claim type. Transformations bridge IdP output to your policy model without duplicating logic in every handler."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Do not over-trust inbound claims",
+          "body": "Claims come from the token issuer you validated — but application-specific permissions should come from your database or permission service inside IClaimsTransformation or authorization handlers, not blindly from a client-forgeable claim if validation was misconfigured."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Claims lifecycle on a request",
+          "items": [
+            {
+              "title": "JwtBearerHandler validates token",
+              "body": "Builds ClaimsPrincipal from JWT payload claims."
+            },
+            {
+              "title": "IClaimsTransformation.TransformAsync",
+              "body": "Runs once per authentication ticket refresh on the request — add/remove claims."
+            },
+            {
+              "title": "Authorization uses final User",
+              "body": "RequireRole, RequireClaim, and custom handlers read transformed claims."
+            },
+            {
+              "title": "Application code",
+              "body": "User.FindFirstValue(\"tenant_id\") for multi-tenant filtering in EF queries."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Claims transformation pipeline",
+            "source": "flowchart LR\n  JWT[JWT payload claims] --> AUTHN[JwtBearerHandler]\n  AUTHN --> PRIN[ClaimsPrincipal]\n  PRIN --> XFORM[IClaimsTransformation]\n  XFORM --> USER[HttpContext.User]\n  USER --> AUTHZ[Policies / handlers]\n  USER --> APP[Controller / EF tenant filter]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "MapInboundClaims and role claim type",
+            "code": "builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(options =>\n    {\n        options.MapInboundClaims = false; // keep 'sub', 'email', 'roles'\n        options.TokenValidationParameters = new TokenValidationParameters\n        {\n            RoleClaimType = \"roles\" // Azure AD / many IdPs use this name\n        };\n    });\n\n// Now User.IsInRole(\"Admin\") and RequireRole check 'roles' claim values",
+            "explanation": "Mismatch between JWT claim name and RoleClaimType is the #1 reason RequireRole silently fails. MapInboundClaims=false avoids legacy URI claim types."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IClaimsTransformation — load app roles from database",
+            "code": "public class DbRoleClaimsTransformation(\n    IPermissionService permissions) : IClaimsTransformation\n{\n    public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)\n    {\n        if (principal.Identity?.IsAuthenticated != true)\n            return principal;\n\n        var clone = principal.Clone() as ClaimsPrincipal ?? principal;\n        var identity = (ClaimsIdentity)clone.Identity!;\n\n        var userId = principal.FindFirstValue(\"sub\");\n        if (userId is null) return clone;\n\n        var roles = await permissions.GetRolesAsync(userId);\n        foreach (var role in roles)\n            identity.AddClaim(new Claim(ClaimTypes.Role, role));\n\n        return clone;\n    }\n}\n\nbuilder.Services.AddTransient<IClaimsTransformation, DbRoleClaimsTransformation>();",
+            "explanation": "Clone before mutating to avoid side effects on cached principals. Load roles once per request — consider caching inside IPermissionService."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Flatten JSON array claim from IdP",
+            "code": "public class RolesArrayTransformation : IClaimsTransformation\n{\n    public Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)\n    {\n        var identity = principal.Identity as ClaimsIdentity;\n        if (identity is null || !identity.IsAuthenticated)\n            return Task.FromResult(principal);\n\n        var jsonRoles = identity.FindFirst(\"roles\")?.Value;\n        if (jsonRoles?.StartsWith('[') == true)\n        {\n            var roles = JsonSerializer.Deserialize<string[]>(jsonRoles)!;\n            identity.RemoveClaim(identity.FindFirst(\"roles\")!);\n            foreach (var r in roles)\n                identity.AddClaim(new Claim(ClaimTypes.Role, r));\n        }\n        return Task.FromResult(principal);\n    }\n}",
+            "explanation": "Some token issuers incorrectly serialize role arrays as a JSON string in one claim — flatten so RequireRole works."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostic — dump claims on 403 (dev/staging only)",
+            "code": "if (app.Environment.IsDevelopment())\n{\n    app.Use(async (ctx, next) =>\n    {\n        await next();\n        if (ctx.Response.StatusCode == 403)\n        {\n            var claims = ctx.User.Claims\n                .Select(c => $\"{c.Type}={c.Value}\");\n            app.Logger.LogWarning(\"403 claims: {Claims}\", string.Join(\", \", claims));\n        }\n    });\n}",
+            "explanation": "When policies fail after IdP migration, claim dump shows missing scope or wrong role claim type — remove or redact in production."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Claims mapping across ecosystems",
+          "headers": ["Source", "Node JWT decode", "ASP.NET Core"],
+          "rows": [
+            ["Payload fields", "req.user = jwt.decode(payload)", "ClaimsPrincipal from JwtBearerHandler"],
+            ["Role array", "Manual normalize roles[]", "RoleClaimType + IClaimsTransformation"],
+            ["Enrichment", "Middleware loads permissions", "IClaimsTransformation or policy handler"],
+            ["Standard names", "Custom app convention", "ClaimTypes.* vs OIDC short names"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Mutating the original principal without cloning. Heavy database work in transformation without caching — runs every authenticated request. Assuming http://schemas.microsoft.com/ws/2008/06/identity/claims/role when token sends roles. Storing PII in custom claims added client-side."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: after Entra ID group-to-role mapping change, compare token claims in jwt.ms with API logs of RoleClaimType mismatches. Cache permission lookups in Redis with user id key and invalidate on role admin API. Prefer authorization handlers over bloated transformations when logic is resource-specific — transformation is for identity normalization, not full RBAC engine."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Transformation vs authorization handler",
+          "headers": ["Use", "IClaimsTransformation", "IAuthorizationHandler"],
+          "rows": [
+            ["Normalize IdP claim names", "Yes", "Overkill"],
+            ["Load roles from DB", "OK with cache", "Also OK for policy-specific rules"],
+            ["Check order ownership", "No", "Yes — resource handler"],
+            ["Runs when", "After AuthN each request", "During AuthZ for policy"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing MapInboundClaims default changed in .NET 8. Saying claims are encrypted inside JWT. Putting all authorization logic in transformation instead of policies. Ignoring that IClaimsTransformation must be transient and fast."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Claims are the identity facts on HttpContext.User; roles are claims with RoleClaimType.",
+    "IClaimsTransformation normalizes IdP output before authorization — clone principal before mutating.",
+    "Production tip: set RoleClaimType to match IdP; cache DB role lookups; log claims on 403 in staging only.",
+    "60s: JWT maps to claims after signature validation. TransformAsync enriches roles or tenant. RequireRole reads role claims. MapInboundClaims false keeps OIDC short names in .NET 8.",
+    "Follow-up: when would you use groups over roles from Azure AD?"
+  ],
+  "commonPitfalls": [
+    "Saying 'RequireRole reads JWT roles automatically' gets you rejected — RoleClaimType must match token claim name.",
+    "Heavy sync DB in transformation without cache — adds latency to every request.",
+    "Strong answer: 'Transform normalizes IdP claims; policies and handlers enforce permissions. I set MapInboundClaims false and RoleClaimType roles for Azure AD.'"
+  ],
+  "introducedIn": "IClaimsTransformation in ASP.NET Core 2.0; MapInboundClaims default false in .NET 8",
+  "relatedTopicIds": [
+    "dotnet-07-jwt-bearer-flow",
+    "dotnet-07-policy-based-auth",
+    "dotnet-07-oauth-openid-connect"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "JWT payload roles vs permissions",
+      "note": "Same split as RoleClaimType vs custom permission claims — normalize once in middleware (transformation) before route handlers.",
+      "futureTopicSlug": "javascript/oauth/claim-mapping"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS JwtStrategy validate() return shape",
+      "note": "validate() method enriching user object mirrors IClaimsTransformation adding claims before guards run.",
+      "futureTopicSlug": "typescript/nestjs/jwt-validate"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Mapping, customizing, and transforming claims",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/claims"
+    },
+    {
+      "title": "Configure JWT bearer authentication",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/jwt-authn"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

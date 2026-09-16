@@ -1,0 +1,237 @@
+{
+  "id": "dotnet-07-custom-auth-handlers",
+  "slug": "custom-auth-handlers",
+  "title": "Custom authentication handlers and API keys",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 6,
+  "hook": "Not every caller uses JWT. Partner webhooks, internal jobs, and legacy integrations often send API keys or custom headers. AuthenticationHandler<TOptions> lets you plug those schemes into the same pipeline as Bearer tokens.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASP.NET Core authentication is extensible via AuthenticationHandler<TOptions>. Each scheme (JwtBearer, Cookies, ApiKey) reads credentials from the request, validates them, and returns AuthenticateResult.Success with a ClaimsPrincipal or Fail. API key patterns hash keys at rest, scope keys to tenants, rotate on leak, and never log raw keys. You can register multiple schemes and use [Authorize(AuthenticationSchemes = \"ApiKey,Bearer\")] for endpoints accepting either."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "AuthenticationHandler",
+              "longForm": "Authentication handler base class",
+              "plainDefinition": "HandlesAuthenticateAsync reads credentials; HandleChallengeAsync produces 401 response.",
+              "example": "class ApiKeyHandler : AuthenticationHandler<ApiKeyOptions>"
+            },
+            {
+              "term": "AuthenticationScheme",
+              "longForm": "Authentication scheme",
+              "plainDefinition": "Named authentication mechanism registered with AddAuthentication().AddScheme<>.",
+              "example": "\"ApiKey\" scheme alongside JwtBearerDefaults.AuthenticationScheme"
+            },
+            {
+              "term": "API key",
+              "longForm": "Application programming interface key",
+              "plainDefinition": "Long-lived secret sent in header or query — identifies a client app, not a human user.",
+              "example": "X-Api-Key: ak_live_..."
+            },
+            {
+              "term": "Hashed key storage",
+              "longForm": "Hashed API key storage",
+              "plainDefinition": "Store SHA-256 or bcrypt hash of key; compare hash on request — plaintext key shown once at creation.",
+              "example": "Similar to password hashing — never store ak_live in database plaintext"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Machine-to-machine integrations often predate OAuth at the partner. A well-designed API key handler integrates with policies, logging, and rate limiting. Poor patterns — query string keys in URLs, shared master keys, keys in git — appear in OWASP API Top 10. Senior engineers explain when API keys beat OAuth client credentials (simplicity, webhook callbacks) and when they do not (user delegation, fine-grained consent)."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Keys are secrets",
+          "body": "Transmit API keys in headers (X-Api-Key or Authorization: ApiKey ...), not query strings — URLs land in logs, browser history, and referrer headers."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Custom handler lifecycle",
+          "items": [
+            {
+              "title": "Register scheme",
+              "body": "AddAuthentication().AddScheme<ApiKeyOptions, ApiKeyHandler>(\"ApiKey\", ...)"
+            },
+            {
+              "title": "HandleAuthenticateAsync",
+              "body": "Read header, lookup hash in database/cache, build ClaimsPrincipal with client id and scopes."
+            },
+            {
+              "title": "Success or NoResult",
+              "body": "NoResult lets other schemes try; Fail stops with authentication failure."
+            },
+            {
+              "title": "Authorization",
+              "body": "Same policy pipeline — RequireClaim for key scopes or separate policy for machine clients."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Multiple authentication schemes",
+            "source": "flowchart TD\n  REQ[Request] --> AUTHN[UseAuthentication]\n  AUTHN --> JWT[JwtBearerHandler]\n  AUTHN --> APIKEY[ApiKeyHandler]\n  JWT -->|Success| USER[ClaimsPrincipal]\n  APIKEY -->|Success| USER\n  JWT -->|NoResult| APIKEY\n  USER --> AUTHZ[Authorization policies]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ApiKeyHandler skeleton",
+            "code": "public class ApiKeyOptions : AuthenticationSchemeOptions\n{\n    public const string Scheme = \"ApiKey\";\n    public string HeaderName { get; set; } = \"X-Api-Key\";\n}\n\npublic class ApiKeyHandler(\n    IOptionsMonitor<ApiKeyOptions> options,\n    ILoggerFactory logger,\n    UrlEncoder encoder,\n    IApiKeyValidator validator) : AuthenticationHandler<ApiKeyOptions>(options, logger, encoder)\n{\n    protected override async Task<AuthenticateResult> HandleAuthenticateAsync()\n    {\n        if (!Request.Headers.TryGetValue(Options.HeaderName, out var keyValues))\n            return AuthenticateResult.NoResult();\n\n        var key = keyValues.ToString();\n        var client = await validator.ValidateAsync(key, Context.RequestAborted);\n        if (client is null)\n            return AuthenticateResult.Fail(\"Invalid API key\");\n\n        var claims = new[]\n        {\n            new Claim(\"client_id\", client.ClientId),\n            new Claim(ClaimTypes.Role, \"ApiClient\")\n        };\n        var identity = new ClaimsIdentity(claims, ApiKeyOptions.Scheme);\n        return AuthenticateResult.Success(\n            new AuthenticationTicket(new ClaimsPrincipal(identity), ApiKeyOptions.Scheme));\n    }\n}",
+            "explanation": "NoResult when header absent allows JWT scheme on multi-scheme endpoints. Fail when header present but invalid — distinct from missing credentials on single-scheme routes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register scheme and dual-auth endpoint",
+            "code": "builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(/* ... */)\n    .AddScheme<ApiKeyOptions, ApiKeyHandler>(ApiKeyOptions.Scheme, _ => { });\n\nbuilder.Services.AddAuthorization(options =>\n{\n    options.AddPolicy(\"WebhookIngest\", p =>\n        p.AddAuthenticationSchemes(ApiKeyOptions.Scheme)\n         .RequireAuthenticatedUser());\n});\n\n[Authorize(AuthenticationSchemes = \"Bearer,\" + ApiKeyOptions.Scheme)]\n[HttpGet(\"partner/data\")]\npublic IActionResult PartnerData() => Ok();\n\n[Authorize(Policy = \"WebhookIngest\")]\n[HttpPost(\"webhooks/stripe\")]\npublic IActionResult Webhook() => Ok();",
+            "explanation": "Comma-separated schemes accept first successful handler. Webhook-only routes restrict to ApiKey scheme so Bearer tokens cannot impersonate webhook identity."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Hashed key validation service",
+            "code": "public class ApiKeyValidator(AppDbContext db) : IApiKeyValidator\n{\n    public async Task<ApiClient?> ValidateAsync(string rawKey, CancellationToken ct)\n    {\n        var prefix = rawKey[..8]; // lookup index — not secret\n        var candidates = await db.ApiKeys\n            .Where(k => k.Prefix == prefix && k.IsActive)\n            .ToListAsync(ct);\n\n        foreach (var row in candidates)\n        {\n            if (BCrypt.Net.BCrypt.Verify(rawKey, row.KeyHash))\n                return row.Client;\n        }\n        return null;\n    }\n}\n\n// Creation: var hash = BCrypt.HashPassword(generatedKey); show key once to user",
+            "explanation": "Prefix narrows DB lookup; bcrypt verifies without storing plaintext. Rotate by deactivating row and issuing new key."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Rate limit and audit API key usage",
+            "code": "builder.Services.AddRateLimiter(options =>\n{\n    options.AddPolicy(\"ApiKeyPolicy\", context =>\n    {\n        var clientId = context.User.FindFirstValue(\"client_id\") ?? \"anon\";\n        return RateLimitPartition.GetFixedWindowLimiter(clientId,\n            _ => new FixedWindowRateLimiterOptions\n            {\n                PermitLimit = 1000,\n                Window = TimeSpan.FromMinutes(1)\n            });\n    });\n});\n\n// Log key id (not raw key) on auth success\noptions.Events = /* custom middleware logs client_id + endpoint */;",
+            "explanation": "Production API keys need per-client rate limits and audit trails keyed by client_id — proves abuse investigation without logging secrets."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "API key middleware patterns",
+          "headers": ["Aspect", "Express", "ASP.NET Core"],
+          "rows": [
+            ["Read header", "req.headers['x-api-key']", "Request.Headers in HandleAuthenticateAsync"],
+            ["Multiple auth", "passport custom + jwt", "Multiple AddScheme + AuthenticationSchemes"],
+            ["401 response", "res.status(401)", "HandleChallengeAsync / default challenge"],
+            ["Policy integration", "Manual if check", "[Authorize(Policy)] same as JWT users"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single global API key in appsettings committed to git. Keys in query strings. Logging full key on failed auth. No rotation or scope per key. Using Fail instead of NoResult on multi-scheme endpoints when header is absent."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: metrics on ApiKey validation failures by prefix (brute force detection). Alert when one client_id exceeds rate limit. Compare API key traffic vs OAuth client_credentials — migrate partners to OAuth when they need scoped consent and rotation automation. HMAC request signing (AWS SigV4 style) is stronger than static keys for high-value webhooks — custom handler validates signature + timestamp skew."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "API key vs OAuth client credentials",
+          "headers": ["Factor", "API key", "OAuth client credentials"],
+          "rows": [
+            ["Setup friction", "Low — one header", "Higher — IdP client registration"],
+            ["Rotation", "Manual reissue", "IdP-managed secrets + metadata"],
+            ["Scope model", "Custom claims in DB", "Standard scope claims"],
+            ["Best for", "Webhooks, simple partners", "Internal microservices at scale"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Storing plaintext API keys in SQL. Saying custom handlers bypass authorization middleware. Not knowing difference between NoResult and Fail. Recommending query parameter API keys for convenience."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "AuthenticationHandler<TOptions> plugs custom schemes (API keys, HMAC) into UseAuthentication.",
+    "Hash keys at rest; header-only transport; prefix + bcrypt verify; show plaintext once at creation.",
+    "Production tip: per-client_id rate limits; audit logs without raw keys; rotate on leak.",
+    "60s: Implement HandleAuthenticateAsync — read header, validate hash, return ClaimsPrincipal. Register AddScheme. Use AuthenticationSchemes on policies. NoResult lets JWT try next.",
+    "Follow-up: when would HMAC-signed requests beat static API keys?"
+  ],
+  "commonPitfalls": [
+    "Saying 'API keys replace OAuth always' gets you rejected — keys suit M2M simplicity; OAuth gives standard scopes and rotation.",
+    "Plaintext keys in database — store bcrypt hash only; treat leak like password breach.",
+    "Strong answer: 'Custom handler integrates with same policy pipeline. Keys scoped per client, hashed, rate-limited. Webhooks use dedicated scheme policy.'"
+  ],
+  "introducedIn": "AuthenticationHandler since ASP.NET Core 1.0",
+  "relatedTopicIds": [
+    "dotnet-07-authn-vs-authz",
+    "dotnet-07-policy-based-auth",
+    "dotnet-07-owasp-api-security"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express apiKey middleware",
+      "note": "Header check middleware equals HandleAuthenticateAsync — ASP.NET advantage is unified [Authorize] and multiple schemes.",
+      "futureTopicSlug": "javascript/express/api-key-auth"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS AuthGuard('api-key') custom strategy",
+      "note": "Passport custom Strategy validate callback mirrors ApiKeyHandler building user object from key lookup.",
+      "futureTopicSlug": "typescript/nestjs/api-key-strategy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "ASP.NET Core authentication handlers",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/"
+    },
+    {
+      "title": "Rate limiting middleware",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

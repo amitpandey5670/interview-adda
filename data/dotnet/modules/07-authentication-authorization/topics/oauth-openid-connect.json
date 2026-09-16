@@ -1,0 +1,237 @@
+{
+  "id": "dotnet-07-oauth-openid-connect",
+  "slug": "oauth-openid-connect",
+  "title": "OAuth 2.0 and OpenID Connect for APIs",
+  "moduleId": "dotnet-07-authentication-authorization",
+  "order": 5,
+  "hook": "OAuth 2.0 delegates authorization — who may access what on whose behalf. OpenID Connect (OIDC) adds identity on top with standard login and ID tokens. Your API usually validates access tokens, not the user's password.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OAuth 2.0 is an authorization framework: clients obtain access tokens from an authorization server to call resource servers (your Web API). OpenID Connect extends OAuth with an identity layer — ID token (JWT) proves who logged in; access token authorizes API calls. ASP.NET Core APIs typically use JwtBearer with Authority pointing at the OIDC metadata document (.well-known/openid-configuration) to fetch signing keys and issuer. Interactive login flows (authorization code + PKCE) happen in the browser or BFF — not inside a pure JSON API controller."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "OAuth 2.0",
+              "longForm": "OAuth 2.0 authorization framework",
+              "plainDefinition": "Protocol for delegated access via access tokens without sharing user passwords with third-party apps.",
+              "example": "Mobile app calls API with token from Auth0"
+            },
+            {
+              "term": "OpenID Connect (OIDC)",
+              "longForm": "OpenID Connect",
+              "plainDefinition": "Identity layer on OAuth — ID token, UserInfo endpoint, standard claims (sub, email).",
+              "example": ".well-known/openid-configuration"
+            },
+            {
+              "term": "Authorization server",
+              "longForm": "OAuth authorization server",
+              "plainDefinition": "Issues tokens — Entra ID, Auth0, IdentityServer, Keycloak.",
+              "example": "https://login.microsoftonline.com/{tenant}/v2.0"
+            },
+            {
+              "term": "PKCE",
+              "longForm": "Proof Key for Code Exchange",
+              "plainDefinition": "Extension securing authorization code flow for public clients (SPAs, mobile) without client secret.",
+              "example": "code_challenge + code_verifier"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Building custom username/password login in every API duplicates security bugs. Standard OAuth/OIDC flows give refresh rotation, MFA at the IdP, and centralized revocation. Senior interviews ask which grant types are allowed today (authorization code + PKCE; avoid implicit and password grant), what the API validates (access token aud/scope, not ID token for API auth), and how service-to-service uses client credentials."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "API validates access token",
+          "body": "ID token is for the client to know who signed in. Resource APIs should validate the access token's audience and scopes — unless your API is the OIDC userinfo endpoint itself."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Authorization code + PKCE (SPA / mobile)",
+          "items": [
+            {
+              "title": "Authorize redirect",
+              "body": "Client redirects user to IdP /authorize with client_id, scope, redirect_uri, code_challenge."
+            },
+            {
+              "title": "User authenticates at IdP",
+              "body": "MFA, password, federated login — all at the trusted authorization server."
+            },
+            {
+              "title": "Code exchanged for tokens",
+              "body": "Client POSTs to /token with code + code_verifier → access_token, refresh_token, id_token."
+            },
+            {
+              "title": "API call",
+              "body": "Client sends access_token as Bearer; API validates via JwtBearer Authority metadata."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "OAuth 2.0 actors for a Web API",
+            "source": "flowchart TB\n  User[Resource Owner] --> Client[Client SPA or Mobile]\n  Client -->|1 authorize + PKCE| AS[Authorization Server\\nOIDC]\n  AS -->|2 tokens| Client\n  Client -->|3 Bearer access_token| API[Resource Server\\nASP.NET Core API]\n  API -->|4 validate JWT metadata| AS"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "API trusts Entra ID / generic OIDC Authority",
+            "code": "builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(options =>\n    {\n        options.Authority = \"https://login.microsoftonline.com/{tenantId}/v2.0\";\n        options.Audience = \"api://orders-api-client-id\";\n        options.TokenValidationParameters.ValidateAudience = true;\n    });\n\nbuilder.Services.AddAuthorization(options =>\n{\n    options.AddPolicy(\"OrdersRead\", p => p.RequireClaim(\"scp\", \"Orders.Read\"));\n    // Entra v2 access tokens often use 'scp' for delegated scopes\n});",
+            "explanation": "Authority loads OIDC metadata and JWKS automatically. Audience must match app registration API identifier. Scope claims differ by IdP — know your token shape."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Client credentials (service-to-service)",
+            "code": "// Worker service obtains token — no user context\nvar tokenResponse = await http.PostAsync(\"https://login.example.com/connect/token\",\n    new FormUrlEncodedContent(new Dictionary<string, string>\n    {\n        [\"grant_type\"] = \"client_credentials\",\n        [\"client_id\"] = clientId,\n        [\"client_secret\"] = clientSecret,\n        [\"scope\"] = \"orders.read orders.write\"\n    }));\n\n// Call API\nhttp.DefaultRequestHeaders.Authorization =\n    new AuthenticationHeaderValue(\"Bearer\", accessToken);\n\n// API policy: RequireClaim(\"scope\", \"orders.write\") for machine clients",
+            "explanation": "Client credentials grant has no user sub claim — policies must use scopes or app roles, not user ownership defaults."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "BFF pattern — OIDC cookie for browser, JWT for API",
+            "code": "builder.Services.AddAuthentication(options =>\n{\n    options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;\n    options.DefaultChallengeScheme = OpenIdConnectDefaults.AuthenticationScheme;\n})\n.AddCookie()\n.AddOpenIdConnect(options =>\n{\n    options.Authority = \"https://login.example.com\";\n    options.ClientId = \"bff-client\";\n    options.ResponseType = OpenIdConnectResponseType.Code;\n    options.UsePkce = true;\n    options.SaveTokens = true; // access token in auth session\n});\n\n// BFF forwards access token to downstream API — SPA never holds refresh token",
+            "explanation": "Browser apps use OIDC middleware on the BFF; JavaScript calls same-origin BFF which attaches Bearer token server-side."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostic — log metadata refresh failures",
+            "code": "options.Events = new JwtBearerEvents\n{\n    OnAuthenticationFailed = ctx =>\n    {\n        if (ctx.Exception is SecurityTokenSignatureKeyNotFoundException)\n        {\n            // Signing keys rotated — metadata cache stale\n            var configManager = (ctx.Options.ConfigurationManager as\n                BaseConfigurationManager);\n            configManager?.RequestRefresh();\n        }\n        return Task.CompletedTask;\n    }\n};",
+            "explanation": "After IdP key rotation, APIs fail all tokens until ConfigurationManager refreshes JWKS — monitor this exception in production."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "OIDC client libraries vs ASP.NET Core",
+          "headers": ["Flow", "SPA (oidc-client-ts)", "ASP.NET Core API"],
+          "rows": [
+            ["Login UI", "signinRedirect with PKCE", "OpenIdConnect middleware on BFF, not API"],
+            ["Token storage", "Should avoid localStorage for refresh", "SaveTokens in cookie session on server"],
+            ["API validation", "API validates JWT remotely", "JwtBearer + Authority metadata"],
+            ["Scopes", "scope param at authorize", "RequireClaim on scp or scope claim"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using resource owner password grant in new apps. Validating ID token at the API instead of access token. Missing PKCE on public clients. Hard-coding JWKS keys instead of metadata refresh. Treating client_credentials tokens like user tokens in ownership checks."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: correlate 401 spikes with IdP deployment or certificate rotation timestamps. Use token introspection (RFC 7662) for opaque tokens or high-security immediate revocation. Document which grant types each client uses — security audits flag password and implicit grants. OpenTelemetry baggage propagating sub and tenant from validated access token aids cross-service tracing without re-parsing JWT in every service manually."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Grant type suitability (2024+ guidance)",
+          "headers": ["Grant", "Use case", "Avoid because"],
+          "rows": [
+            ["Authorization code + PKCE", "SPA, mobile, user login", "N/A — default choice"],
+            ["Client credentials", "Daemon, microservice", "No user context — adjust policies"],
+            ["Refresh token rotation", "Long sessions", "Reuse detection catches theft"],
+            ["Resource owner password", "Legacy migration only", "Phishing, no MFA at IdP UX"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain difference between ID token and access token. Recommending implicit flow for SPAs. Saying API should accept username/password POST to /login in OAuth architecture. Not knowing PKCE purpose."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "OAuth 2.0 = delegated access tokens; OIDC adds identity (ID token, metadata, standard claims).",
+    "APIs validate access token audience/scopes via JwtBearer Authority — not ID token for resource access.",
+    "Production tip: monitor JWKS refresh failures; use authorization code + PKCE; rotate refresh tokens.",
+    "60s: User logs in at IdP via code+PKCE. Client gets access and refresh tokens. API validates JWT against OIDC metadata. BFF keeps refresh HttpOnly. Client credentials for machine-to-machine.",
+    "Follow-up: how does token introspection differ from local JWT validation?"
+  ],
+  "commonPitfalls": [
+    "Saying 'use ID token to call API' gets you rejected — access token is for resource server; ID token is for client identity.",
+    "Password grant for new mobile apps — OAuth working group deprecates it; use authorization code + PKCE.",
+    "Strong answer: 'Separate authorization server from API. API is resource server validating aud and scp. Browser uses BFF; mobile uses PKCE; services use client credentials.'"
+  ],
+  "introducedIn": "AddOpenIdConnect in ASP.NET Core 1.0; PKCE support in 2.1+",
+  "relatedTopicIds": [
+    "dotnet-07-jwt-bearer-flow",
+    "dotnet-07-claims-and-transformations",
+    "dotnet-07-policy-based-auth"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "oidc-client-ts / Auth0 SPA SDK",
+      "note": "signinRedirect + PKCE parallels OpenIdConnect middleware UsePkce on BFF — tokens never handled identically but flow matches.",
+      "futureTopicSlug": "javascript/oauth/oidc-pkce"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS @nestjs/passport OpenID Connect",
+      "note": "Guard validates JWT same as JwtBearer; scope decorators map to RequireClaim on scp — IdP-specific claim names still apply.",
+      "futureTopicSlug": "typescript/nestjs/openid-connect"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Overview of ASP.NET Core authentication",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/"
+    },
+    {
+      "title": "OpenID Connect web authentication",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/openid-connect"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "auth-token"
+}

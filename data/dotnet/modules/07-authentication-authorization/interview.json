@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-07-authentication-authorization",
+  "title": "Authentication and authorization interview drills",
+  "items": [
+    {
+      "question": "Explain the difference between authentication and authorization in ASP.NET Core and which HTTP status codes apply.",
+      "answer": "Authentication (UseAuthentication) verifies identity and builds HttpContext.User from JWT, cookies, or custom handlers like API keys. Authorization (UseAuthorization) evaluates [Authorize] attributes and policies against that principal and endpoint metadata. Return 401 Unauthorized when there is no valid authenticated identity — missing Bearer token, expired JWT, invalid signature. Return 403 Forbidden when identity is valid but the policy or resource check fails — wrong role, failed IAuthorizationHandler, or Forbid() on ownership. Mixing these breaks OAuth clients and observability dashboards.",
+      "followUps": [
+        "Does JwtBearerHandler return 401 by itself or does authorization middleware?",
+        "When would you return 404 instead of 403 for BOLA?"
+      ],
+      "sixtySeconds": "AuthN is who — middleware sets User. AuthZ is what — policies and handlers. 401 no valid identity. 403 identity ok but denied. JWT validates AuthN not permission."
+    },
+    {
+      "question": "JWT versus server-side session for a REST API — tradeoffs and when to use each.",
+      "answer": "JWT access tokens validate statelessly with signing keys — no shared session store, ideal for microservices and mobile clients scaling horizontally. Tradeoff: revocation is delayed until expiry unless you maintain a denylist, use very short TTL with refresh token rotation, or introspect tokens. Server sessions store state in Redis with a session id cookie — instant revocation and smaller cookies, but require shared store and complicate pure API mobile clients. Hybrid is common: short-lived JWT access token plus refresh token stored HttpOnly on a BFF, or reference tokens with introspection for high-security operations.",
+      "followUps": [
+        "How would you revoke a JWT immediately across ten API instances?",
+        "Where should a SPA store refresh tokens?"
+      ],
+      "sixtySeconds": "JWT stateless scales out; weak instant revoke. Session Redis revokes fast; needs store. Short access JWT plus rotated refresh on BFF is common SPA pattern."
+    },
+    {
+      "question": "Walk through refresh token flow without exposing refresh tokens to JavaScript.",
+      "answer": "Browser SPA calls same-origin Backend-for-Frontend (BFF). BFF performs OIDC authorization code + PKCE with the identity provider, stores refresh token in HttpOnly Secure SameSite cookie, and keeps access token server-side or returns short-lived access token to SPA memory only. When access token expires, SPA calls BFF /refresh; BFF exchanges refresh token at token endpoint, rotates refresh token, updates cookie, returns new access token. Resource API never accepts refresh tokens — only validates access JWT. Detect refresh token reuse at IdP to catch theft.",
+      "followUps": [
+        "What happens if refresh token is stolen from localStorage?",
+        "Does the resource API need to know about refresh?"
+      ],
+      "sixtySeconds": "Refresh only at token endpoint via BFF. HttpOnly cookie holds refresh. API gets short access JWT. Rotate refresh on each use. Never send refresh to resource API."
+    },
+    {
+      "question": "Implement policy-based authorization for 'user can edit only their own orders unless Admin'.",
+      "answer": "Register policy CanEditOrder with OrderOwnerRequirement. Implement AuthorizationHandler<OrderOwnerRequirement, Order>: load is unnecessary if using resource-based overload — pass Order to AuthorizeAsync. In handler, succeed if order.OwnerId matches sub claim or User.IsInRole Admin. On endpoint, load order by id, return NotFound if missing, await authz.AuthorizeAsync(User, order, \"CanEditOrder\"), return Forbid if failed. Alternatively attach handler to policy evaluated automatically when resource is passed. Avoid only [Authorize] without resource check — that is BOLA.",
+      "followUps": [
+        "Why are IAuthorizationHandler implementations singletons?",
+        "How do you test this in WebApplicationFactory?"
+      ],
+      "sixtySeconds": "Custom requirement plus handler. AuthorizeAsync User and order entity. Succeed if owner or Admin. Forbid 403. Declarative policy on endpoint plus imperative resource check."
+    },
+    {
+      "question": "Why is JWT signed but not encrypted, and what does that mean for API design?",
+      "answer": "Most API access tokens are JWS — header.payload.signature with Base64url payload readable by anyone. Signature proves issuer and integrity using private key or shared secret; it does not hide contents. Therefore never embed passwords, PII, or secrets in claims. Clients and proxies can read scopes and sub. If confidentiality is required, use JWE encrypted tokens or transport only over TLS and minimize claims. Authorization decisions still require server-side policies — readable sub claim does not mean client can forge it without valid signature.",
+      "followUps": [
+        "What is the difference between JWS and JWE?",
+        "Can a user tamper with roles in the payload?"
+      ],
+      "sixtySeconds": "JWT payload is Base64 readable. Signature prevents tampering not secrecy. No secrets in claims. TLS in transit. Policies enforce AuthZ after signature validation."
+    },
+    {
+      "question": "401 versus 403 in production — how do you diagnose each?",
+      "answer": "401: check Authorization header presence, JwtBearer OnAuthenticationFailed logs — SecurityTokenExpiredException vs SignatureKeyNotFound vs invalid audience. Often client clock skew, wrong Authority, or stale JWKS after key rotation — call ConfigurationManager.RequestRefresh. 403: user is authenticated — dump claims in staging, verify RoleClaimType matches IdP, check policy handler failure. Log IsAuthenticated true on 403. Application Insights: 401 spike after deploy suggests metadata or config; 403 spike after IdP change suggests claim mapping regression.",
+      "followUps": [
+        "Should expired tokens return 401 or 403?",
+        "How does OnChallenge differ from OnAuthenticationFailed?"
+      ],
+      "sixtySeconds": "401 invalid or missing credentials — fix token validation. 403 valid user wrong permission — fix claims or policy. Log exception type on AuthN failure."
+    },
+    {
+      "question": "Design API key authentication that integrates with ASP.NET Core authorization.",
+      "answer": "Implement AuthenticationHandler<ApiKeyOptions>: read X-Api-Key header, return NoResult if absent on multi-scheme endpoints, Fail if invalid. Validate against bcrypt hash in database with prefix lookup. Issue ClaimsPrincipal with client_id and scopes as claims. Register AddScheme<ApiKeyOptions, ApiKeyHandler>. Use [Authorize(AuthenticationSchemes = \"ApiKey,Bearer\")] or policy with AddAuthenticationSchemes ApiKey only for webhooks. Add per-client_id rate limiting and audit logs without logging raw key. Rotate by deactivating DB row and issuing new key shown once.",
+      "followUps": [
+        "API key versus OAuth client credentials?",
+        "Why NoResult vs Fail?"
+      ],
+      "sixtySeconds": "Custom AuthenticationHandler. Hash keys bcrypt. Header only. ClaimsPrincipal with client_id. Dedicated policy for webhook routes. Rate limit per client."
+    },
+    {
+      "question": "OAuth 2.0 authorization code with PKCE — roles of each token for a SPA and API.",
+      "answer": "User authenticates at authorization server via /authorize with code_challenge. Client exchanges code at /token with code_verifier for access_token, refresh_token, and id_token. ID token is for client to know who logged in — not sent to resource API for authorization. Access token goes to ASP.NET Core API as Bearer; JwtBearer validates via OIDC metadata. Refresh token stays at BFF or secure storage for silent renewal. PKCE prevents authorization code interception on public clients without client secret.",
+      "followUps": [
+        "Why is implicit flow deprecated for SPAs?",
+        "What scopes appear in access token for Entra ID?"
+      ],
+      "sixtySeconds": "Code plus PKCE at IdP. Access token to API. ID token stays client side. Refresh at token endpoint only. API validates aud and scp on access JWT."
+    },
+    {
+      "question": "Map three OWASP API Security Top 10 items to concrete ASP.NET Core controls.",
+      "answer": "API1 BOLA: resource-based IAuthorizationHandler and AuthorizeAsync after loading entity by route id; tenant filters in EF for multi-tenant. API2 Broken authentication: JwtBearer with full validation, no password grant, refresh rotation, lockout at IdP. API4 Unrestricted resource consumption: AddRateLimiter with 429, Kestrel MaxRequestBodySize, pagination caps. Also API5 BFLA via [Authorize(Policy)] on admin endpoints, API8 misconfiguration via HSTS, locked CORS, UseExceptionHandler instead of developer page, Problem Details without stack traces.",
+      "followUps": [
+        "How do you detect BOLA probing in logs?",
+        "What is broken object property level authorization?"
+      ],
+      "sixtySeconds": "BOLA resource handler. Broken auth JwtBearer plus PKCE. API4 rate limiter and body size caps. BFLA policies on admin routes. Harden Program.cs for misconfig."
+    },
+    {
+      "question": "IClaimsTransformation — when to use it versus an authorization handler?",
+      "answer": "IClaimsTransformation runs once after authentication to normalize IdP claims — map roles claim name to RoleClaimType, flatten JSON role arrays, add tenant_id from database with caching. Use for identity shaping shared across many policies. Authorization handlers evaluate specific requirements — especially resource ownership — and belong in policies rather than stuffing all logic into transformation. Transformation must be fast and transient; clone principal before mutating. Heavy permission engines belong in handlers or dedicated services called from handlers, not unbounded DB work in transformation without cache.",
+      "followUps": [
+        "What changed for MapInboundClaims in .NET 8?",
+        "Can transformation replace RequireRole?"
+      ],
+      "sixtySeconds": "Transformation normalizes claims after AuthN — roles tenant. Handlers enforce policy especially resource BOLA. Clone principal. Cache DB lookups. Do not put ownership logic only in transformation."
+    }
+  ]
+}
