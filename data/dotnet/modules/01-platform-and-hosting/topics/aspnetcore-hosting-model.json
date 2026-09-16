@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-01-aspnetcore-hosting-model",
+  "slug": "aspnetcore-hosting-model",
+  "title": "ASP.NET Core hosting model (WebApplication and the generic host)",
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "order": 2,
+  "hook": "Every ASP.NET Core Web API runs inside a host that wires configuration, logging, dependency injection, and the web server together. WebApplication is the modern shortcut; the generic host is the underlying engine.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Hosting is how a .NET process becomes a long-running service. The generic host (IHost) manages application lifetime, configuration, logging, and dependency injection. For web apps, IWebHost / WebApplication layers Kestrel and the middleware pipeline on top. Since .NET 6, WebApplication.CreateBuilder is the default entry point — it merges what used to be separate Host.CreateDefaultBuilder and ConfigureWebHostDefaults calls into one fluent setup in Program.cs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Generic host",
+              "longForm": "Generic host",
+              "plainDefinition": "IHost that boots any .NET app: loads config, registers services, starts IHostedService background work, and coordinates shutdown.",
+              "example": "Worker Service template uses Host.CreateApplicationBuilder without Kestrel."
+            },
+            {
+              "term": "WebApplication",
+              "longForm": "WebApplication",
+              "plainDefinition": "The combined web host + pipeline builder returned by WebApplication.CreateBuilder. Exposes MapGet, UseMiddleware, and Run.",
+              "example": "var app = builder.Build(); app.MapControllers(); app.Run();"
+            },
+            {
+              "term": "IHostedService",
+              "longForm": "IHostedService",
+              "plainDefinition": "Background service interface started and stopped by the host alongside the web server.",
+              "example": "SQS consumer inheriting BackgroundService runs inside the same host as your API."
+            },
+            {
+              "term": "Kestrel",
+              "longForm": "Kestrel",
+              "plainDefinition": "Cross-platform web server built into ASP.NET Core that listens for HTTP requests.",
+              "example": "Kestrel binds to port 8080 inside a Docker container."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The hosting model determines startup order, graceful shutdown, and where you register services. Misunderstanding it leads to running two hosts in one process, registering middleware after Build, or losing the host CancellationToken for Redis and queue clients. Senior interviews often ask how WebApplication differs from the older two-file Startup.cs pattern and when you would still use Host.CreateApplicationBuilder for non-HTTP workers."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Golden rule",
+          "body": "Configure services on builder.Services before Build(). Configure middleware on app after Build(). Run() blocks until shutdown signal."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "WebApplication startup sequence",
+          "items": [
+            {
+              "title": "CreateBuilder",
+              "body": "Loads appsettings, environment variables, command-line args, and sets up default logging."
+            },
+            {
+              "title": "Register services",
+              "body": "builder.Services.AddControllers(), AddDbContext, AddStackExchangeRedisCache, etc."
+            },
+            {
+              "title": "Build",
+              "body": "Materializes the service provider and creates the middleware pipeline shell."
+            },
+            {
+              "title": "Configure pipeline",
+              "body": "app.UseAuthentication(), UseAuthorization(), MapControllers() — order matters."
+            },
+            {
+              "title": "Run",
+              "body": "Starts Kestrel, IHostedServices, and blocks until SIGTERM or Ctrl+C."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Host composition",
+            "source": "flowchart TD\n  A[WebApplication.CreateBuilder] --> B[Configuration + Logging]\n  B --> C[builder.Services DI registration]\n  C --> D[builder.Build]\n  D --> E[app middleware + endpoints]\n  E --> F[app.Run]\n  F --> G[Kestrel listens]\n  F --> H[IHostedService workers start]\n  G --> I[HTTP request pipeline]\n  H --> J[SQS Redis background loops]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Modern WebApplication minimal API host",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n\nbuilder.Services.AddControllers();\nbuilder.Services.AddSingleton<IConnectionMultiplexer>(\n    _ => ConnectionMultiplexer.Connect(builder.Configuration[\"Redis:Connection\"]!));\nbuilder.Services.AddHostedService<OutboxDispatcher>();\n\nvar app = builder.Build();\n\napp.UseHttpsRedirection();\napp.UseAuthentication();\napp.UseAuthorization();\napp.MapControllers();\napp.MapGet(\"/health\", () => Results.Ok(new { status = \"healthy\" }));\n\napp.Run();",
+            "explanation": "CreateBuilder sets up the generic host defaults. Services register before Build. Middleware and endpoints configure after Build. HostedService starts with Run."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Generic host for non-HTTP worker (no Kestrel)",
+            "code": "var builder = Host.CreateApplicationBuilder(args);\n\nbuilder.Services.AddSingleton<IAmazonSQS>(_ =>\n    new AmazonSQSClient(RegionEndpoint.USEast1));\nbuilder.Services.AddHostedService<SqsConsumerService>();\n\nvar host = builder.Build();\nawait host.RunAsync();\n\n// No WebApplication — no HTTP listener.\n// Same DI, config, logging, and graceful shutdown model.",
+            "explanation": "Use the generic host when the process only processes queue messages. You avoid Kestrel overhead and open ports entirely."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Graceful shutdown with host CancellationToken",
+            "code": "public sealed class SqsConsumerService(\n    IAmazonSQS sqs,\n    ILogger<SqsConsumerService> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        while (!stoppingToken.IsCancellationRequested)\n        {\n            var response = await sqs.ReceiveMessageAsync(new ReceiveMessageRequest\n            {\n                QueueUrl = \"https://sqs.us-east-1.amazonaws.com/123/orders\",\n                WaitTimeSeconds = 20\n            }, stoppingToken);\n\n            foreach (var message in response.Messages)\n            {\n                stoppingToken.ThrowIfCancellationRequested();\n                // process...\n            }\n        }\n        logger.LogInformation(\"SQS consumer stopped cleanly\");\n    }\n}",
+            "explanation": "stoppingToken is linked to the host lifetime. On Docker SIGTERM, in-flight ReceiveMessageAsync cancels cooperatively instead of killing mid-batch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Pre-.NET 6 pattern (still valid to recognize)",
+            "code": "// Older template — two-phase host + web host:\n// Host.CreateDefaultBuilder(args)\n//     .ConfigureWebHostDefaults(web =>\n//     {\n//         web.UseStartup<Startup>();\n//     })\n//     .Build()\n//     .Run();\n//\n// Startup.cs had ConfigureServices + Configure(IApplicationBuilder).\n// WebApplication.CreateBuilder merges both into Program.cs.",
+            "explanation": "Interviewers may show legacy Startup.cs. Know that ConfigureServices maps to builder.Services and Configure maps to app.Use* after Build."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Hosting models",
+          "headers": ["Aspect", "ASP.NET Core", "Node.js / NestJS"],
+          "rows": [
+            ["Entry point", "Program.cs top-level statements", "index.ts / main.ts"],
+            ["Service registration", "builder.Services.Add*", "NestJS module providers; Express manual wiring"],
+            ["HTTP server", "Kestrel built-in", "http.createServer or Fastify instance"],
+            ["Background work", "IHostedService / BackgroundService", "setInterval, Bull worker, separate process"],
+            ["Shutdown", "IHostApplicationLifetime + CancellationToken", "SIGTERM handlers; less standardized in Express"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling builder.Build() twice. Adding app.Use* before Build(). Forgetting to pass the host stopping token into long-running loops. Creating a second Host in the same process for background work instead of AddHostedService. Assuming Run() returns immediately — it blocks the main thread until shutdown."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: on SIGTERM, Kubernetes gives a grace period — IHostApplicationLifetime.ApplicationStopping fires and hosted services should drain. Log ApplicationStarted and ApplicationStopped timestamps to verify clean rollout. If pods restart with 'connection reset' spikes, check whether middleware was registered after Map* endpoints (too late). Use dotnet-trace on startup to see service provider build time when DI graph is huge (many Redis and EF registrations)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "WebApplication versus generic host",
+          "headers": ["Choice", "Use when", "Skip when"],
+          "rows": [
+            ["WebApplication.CreateBuilder", "HTTP APIs, minimal APIs, MVC", "Pure queue worker with no HTTP"],
+            ["Host.CreateApplicationBuilder", "Console/worker-only processes", "You need MapControllers or Kestrel"],
+            ["WebApplication + AddHostedService", "API plus in-process background work", "Heavy CPU workers — consider separate deployment"],
+            ["Separate worker service", "Independent scaling of SQS consumers", "Simple outbox dispatcher colocated with API"],
+            ["IIS in-process hosting", "Windows deployments behind IIS", "Linux containers — use Kestrel directly"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying WebApplication and generic host are unrelated — WebApplication is built on IHost. Claiming you must have Startup.cs in modern templates. Not knowing that middleware order is fixed at Build time for the pipeline shape. Registering scoped services as singleton hosted service fields without IServiceScopeFactory — captive dependency bug."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "WebApplication.CreateBuilder is the unified entry for modern ASP.NET Core — generic host underneath, Kestrel and pipeline on top.",
+    "Register services before Build(); configure middleware and endpoints after Build(); Run() starts Kestrel and IHostedServices.",
+    "In production, wire host CancellationToken through queue and Redis calls so SIGTERM drains gracefully during rolling deploys.",
+    "60s: Generic host manages lifetime, config, DI, logging. WebApplication adds HTTP. CreateBuilder replaces Startup.cs. Build once. Middleware after Build. AddHostedService for SQS workers in the same process. Host.CreateApplicationBuilder when no HTTP needed.",
+    "Follow-up: what happens to scoped services resolved from a singleton IHostedService?"
+  ],
+  "commonPitfalls": [
+    "Saying 'WebApplication replaces the generic host' gets you rejected — it extends IHost with web-specific defaults.",
+    "Registering middleware before Build() — pipeline is not available until after Build.",
+    "Strong answer: 'IHost for lifecycle and DI. WebApplication for HTTP. Services on builder, pipeline on app. Pass stoppingToken to background loops. Separate worker host when scaling concerns dominate.'"
+  ],
+  "introducedIn": "WebApplication in .NET 6; generic host since .NET Core 3.0",
+  "relatedTopicIds": [
+    "dotnet-01-what-is-dotnet",
+    "dotnet-01-kestrel-and-reverse-proxy",
+    "dotnet-01-project-structure",
+    "dotnet-01-environments-and-startup"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS bootstrap and module lifecycle",
+      "note": "NestFactory.create registers providers then listens — similar two-phase build/listen. ASP.NET Core Build() materializes DI before middleware, like Nest's module graph resolution.",
+      "futureTopicSlug": "nestjs/bootstrap-lifecycle"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express app.listen versus worker process",
+      "note": "Express app.listen starts HTTP only. ASP.NET Core host also coordinates IHostedService shutdown on SIGTERM — Express has no built-in equivalent for background loops.",
+      "futureTopicSlug": "express/application-lifecycle"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": ".NET Generic Host",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/generic-host"
+    },
+    {
+      "title": "Host ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/web-host"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

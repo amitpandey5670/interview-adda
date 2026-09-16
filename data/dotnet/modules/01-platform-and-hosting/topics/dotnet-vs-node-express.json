@@ -1,0 +1,212 @@
+{
+  "id": "dotnet-01-dotnet-vs-node-express",
+  "slug": "dotnet-vs-node-express",
+  "title": ".NET Web API versus Node.js Express (mental model transfer)",
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "order": 6,
+  "hook": "If you have built Express or NestJS APIs, many ASP.NET Core concepts map directly — routing, middleware, dependency injection, and JSON serialization just have different names and defaults.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Both stacks solve the same problem: accept Hypertext Transfer Protocol (HTTP) requests, run business logic, talk to Redis or a database, and return JSON. Express is a minimal middleware framework on Node.js event loop. ASP.NET Core is a full web framework on the .NET thread pool with Kestrel as the server. NestJS sits closer to ASP.NET Core in structure — modules, decorators, and built-in dependency injection — making it the best TypeScript comparison point."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Middleware",
+              "longForm": "Middleware",
+              "plainDefinition": "Functions that process requests in order before reaching the endpoint handler.",
+              "example": "Express: app.use(logging); ASP.NET Core: app.UseMiddleware<RequestLoggingMiddleware>();"
+            },
+            {
+              "term": "Dependency injection",
+              "shortForm": "DI",
+              "longForm": "Dependency injection",
+              "plainDefinition": "Framework provides service instances to handlers instead of manual new() calls.",
+              "example": "NestJS @Injectable() ≈ ASP.NET Core services.AddScoped<T>()."
+            },
+            {
+              "term": "Controller",
+              "longForm": "Controller",
+              "plainDefinition": "Class grouping HTTP endpoints by resource or feature area.",
+              "example": "[ApiController] OrdersController ≈ Express Router mounted at /orders."
+            },
+            {
+              "term": "Minimal API",
+              "longForm": "Minimal API",
+              "plainDefinition": "Route handlers defined inline without a controller class — similar to Express app.get callbacks.",
+              "example": "app.MapGet(\"/orders/{id}\", (int id) => ...);"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Teams migrating microservices from Node to .NET (or vice versa) fail when they copy patterns blindly — blocking the event loop in Node is fatal, while sync-over-async in .NET causes thread-pool starvation instead. Knowing the mapping speeds onboarding: your Express error middleware becomes exception handler middleware; passport.js maps to ASP.NET Core authentication handlers; Bull queue workers map to BackgroundService with SQS."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Fastest mental model",
+          "body": "Express app + Router ≈ WebApplication + MapControllers. NestJS module ≈ service registration extension method. Node middleware chain ≈ ASP.NET Core middleware pipeline (order matters in both)."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Same request, two stacks",
+          "items": [
+            {
+              "title": "HTTP arrives",
+              "body": "Kestrel (or Node http.Server) accepts the connection."
+            },
+            {
+              "title": "Middleware chain",
+              "body": "Logging, authentication, CORS — each can short-circuit or call next."
+            },
+            {
+              "title": "Route matching",
+              "body": "Express: app.get('/orders/:id'); .NET: MapGet or [HttpGet(\"{id}\")]."
+            },
+            {
+              "title": "Handler executes",
+              "body": "Injected services call Redis, database, or downstream HTTP APIs."
+            },
+            {
+              "title": "JSON response",
+              "body": "System.Text.Json or res.json() serializes the result."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Concept mapping",
+            "source": "flowchart LR\n  subgraph express [Express / Node]\n    E1[app.use middleware]\n    E2[Router routes]\n    E3[manual require DI]\n    E4[Bull / setInterval worker]\n  end\n  subgraph aspnet [ASP.NET Core]\n    A1[app.Use middleware]\n    A2[MapControllers / Minimal API]\n    A3[builder.Services DI]\n    A4[BackgroundService SQS]\n  end\n  E1 -.->|same idea| A1\n  E2 -.->|same idea| A2\n  E3 -.->|built-in| A3\n  E4 -.->|IHostedService| A4"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same orders endpoint — Express versus ASP.NET Core",
+            "code": "// Express (JavaScript)\n// const express = require('express');\n// const app = express();\n// app.get('/orders/:id', async (req, res) => {\n//   const order = await redis.get(`order:${req.params.id}`);\n//   res.json(JSON.parse(order));\n// });\n// app.listen(3000);\n\n// ASP.NET Core minimal API (C#)\nvar builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddSingleton<IConnectionMultiplexer>(\n    _ => ConnectionMultiplexer.Connect(\"localhost:6379\"));\nvar app = builder.Build();\n\napp.MapGet(\"/orders/{id}\", async (string id, IConnectionMultiplexer mux) =>\n{\n    var db = mux.GetDatabase();\n    var json = await db.StringGetAsync($\"order:{id}\");\n    return json.IsNullOrEmpty ? Results.NotFound() : Results.Content(json!, \"application/json\");\n});\n\napp.Run(\"http://localhost:3000\");",
+            "explanation": "Both read from Redis and return JSON. .NET injects IConnectionMultiplexer via DI; Express typically requires the client manually or via a wrapper module."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "NestJS-style controller versus ASP.NET Core",
+            "code": "// NestJS (TypeScript) — conceptual parallel\n// @Controller('orders')\n// export class OrdersController {\n//   constructor(private readonly orders: OrdersService) {}\n//   @Get(':id')\n//   findOne(@Param('id') id: string) { return this.orders.findOne(id); }\n// }\n\n[ApiController]\n[Route(\"api/[controller]\")]\npublic class OrdersController(OrdersService orders) : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    public async Task<ActionResult<OrderDto>> Get(string id, CancellationToken ct)\n        => await orders.FindOneAsync(id, ct) is { } o ? Ok(o) : NotFound();\n}\n\n// Program.cs: builder.Services.AddScoped<OrdersService>();",
+            "explanation": "Constructor injection and attribute routing are nearly identical between NestJS and ASP.NET Core controllers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Background worker mapping — Bull queue versus BackgroundService",
+            "code": "// Node: Bull queue processor\n// const Queue = require('bull');\n// const emailQueue = new Queue('email', 'redis://localhost:6379');\n// emailQueue.process(async (job) => { await sendEmail(job.data); });\n\n// ASP.NET Core: SQS consumer as hosted service\npublic sealed class EmailQueueWorker(IAmazonSQS sqs) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        while (!stoppingToken.IsCancellationRequested)\n        {\n            var resp = await sqs.ReceiveMessageAsync(\"https://sqs.../email\", stoppingToken);\n            foreach (var msg in resp.Messages)\n                await ProcessEmailAsync(msg, stoppingToken);\n        }\n    }\n}\n// builder.Services.AddHostedService<EmailQueueWorker>();",
+            "explanation": "Bull uses Redis as a queue broker; AWS deployments often use SQS with a BackgroundService. Both run alongside the HTTP host in NestJS/ASP.NET Core or as a separate Node process."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Full stack comparison for API developers",
+          "headers": ["Concern", "ASP.NET Core", "Express", "NestJS"],
+          "rows": [
+            ["Concurrency model", "Thread pool + async/await", "Single-threaded event loop", "Event loop + async/await"],
+            ["Blocking risk", "Thread-pool starvation", "Event loop blocked", "Event loop blocked"],
+            ["Built-in DI", "First-class in host", "Manual / optional", "Built-in module system"],
+            ["Validation", "Data annotations / FluentValidation", "express-validator / Zod manual", "class-validator pipes"],
+            ["Auth", "JWT bearer middleware built-in", "passport.js middleware", "@nestjs/passport"],
+            ["Config", "appsettings + IConfiguration", "dotenv + process.env", "ConfigModule"],
+            ["Deploy", "Docker + Kestrel + proxy", "Docker + Node + proxy", "Same as Express"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls when switching stacks",
+          "body": "Using sync I/O in .NET controllers because 'Express did it fine' — different scheduler, different failure mode. Assuming npm middleware concepts map 1:1 without learning ASP.NET Core middleware order rules. Porting fire-and-forget async void handlers from Node — return Task in .NET so the host observes exceptions. Expecting hot reload and nodemon parity without dotnet watch."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Express middleware chain ≈ ASP.NET Core pipeline; NestJS architecture ≈ controllers + DI modules.",
+    "Node blocks the event loop with sync I/O; .NET starves the thread pool — both punish blocking, differently.",
+    "In production, both stacks deploy behind a reverse proxy with Redis, queues, and environment-based config.",
+    "60s: Same HTTP problem. Express minimal, NestJS closer to ASP.NET Core with DI and decorators. Middleware order matters in both. Node event loop versus .NET thread pool. Map Bull to BackgroundService, passport to JWT bearer middleware, dotenv to appsettings plus env vars.",
+    "Follow-up: when would you choose .NET over Node for a new high-throughput API?"
+  ],
+  "commonPitfalls": [
+    "Saying 'they are identical' gets you rejected — concurrency models and failure modes differ fundamentally.",
+    "Blocking the .NET thread pool with .Result because Express tolerated sync database drivers.",
+    "Strong answer: 'Map middleware, routing, DI, and workers across stacks. Know Node blocks one thread; .NET blocks pool threads. NestJS is the closest TS analog. Choose .NET for typed performance-critical APIs; Node for JS ecosystem velocity.'"
+  ],
+  "introducedIn": "Cross-stack comparison — foundational mental model",
+  "relatedTopicIds": [
+    "dotnet-01-what-is-dotnet",
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-01-kestrel-and-reverse-proxy",
+    "dotnet-01-project-structure",
+    "dotnet-01-environments-and-startup"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express middleware chain (req, res, next)",
+      "note": "Express middleware runs in registration order; ASP.NET Core app.Use* follows the same rule but with a terminal endpoint. Both short-circuit by not calling next / not calling next delegate.",
+      "futureTopicSlug": "express/middleware"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS modules, providers, and controllers",
+      "note": "NestJS was explicitly inspired by Angular and ASP.NET. Module imports, provider registration, and constructor injection map almost directly to builder.Services and [ApiController] classes.",
+      "futureTopicSlug": "nestjs/fundamentals"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "ASP.NET Core overview",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/overview"
+    },
+    {
+      "title": "Compare ASP.NET Core and Node.js",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
+}

@@ -1,0 +1,204 @@
+{
+  "id": "dotnet-01-project-structure",
+  "slug": "project-structure",
+  "title": "Web API project structure (Program.cs, appsettings, launch profiles)",
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "order": 4,
+  "hook": "A new ASP.NET Core Web API project looks sparse at first — most behavior lives in Program.cs, configuration JSON files, and a handful of folders you add as the app grows.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The Web API template generates a single project with Program.cs as the entry point, appsettings.json for default configuration, and Properties/launchSettings.json for local development URLs. Unlike older templates, there is no Startup.cs — service registration and middleware live in Program.cs using top-level statements. As the app grows, teams add Controllers/, Services/, Models/, and Data/ folders, but the SDK project file (.csproj) remains the build manifest that declares target framework and package references."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Program.cs",
+              "longForm": "Program.cs",
+              "plainDefinition": "Application entry point: creates the host, registers services, configures middleware, and calls Run.",
+              "example": "var builder = WebApplication.CreateBuilder(args);"
+            },
+            {
+              "term": "appsettings.json",
+              "longForm": "appsettings.json",
+              "plainDefinition": "Default JSON configuration loaded by the host. Environment-specific files override it.",
+              "example": "ConnectionStrings, Redis, Jwt settings stored here for local dev."
+            },
+            {
+              "term": "launchSettings.json",
+              "longForm": "launchSettings.json",
+              "plainDefinition": "Development-only profiles: URLs, environment name, and optional launch browser flags. Not published to production.",
+              "example": "applicationUrl: https://localhost:7xxx;http://localhost:5xxx"
+            },
+            {
+              "term": "csproj",
+              "longForm": "Project file",
+              "plainDefinition": "MSBuild XML file defining TargetFramework, package references, and build properties.",
+              "example": "<Project Sdk=\"Microsoft.NET.Sdk.Web\">"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Knowing which files ship to production prevents leaking development secrets from launchSettings.json and explains why changing appsettings.Development.json has no effect in Docker. The project structure is also the hook for dependency injection registration — every service you add to builder.Services must be wired somewhere in Program.cs or an extension method it calls. Clean structure scales to Redis-backed APIs with separate configuration sections per concern."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "What publishes",
+          "body": "dotnet publish copies DLLs, appsettings.json, and wwwroot. launchSettings.json stays on your machine — production URLs come from environment variables and orchestrator config."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Configuration load order",
+          "items": [
+            {
+              "title": "appsettings.json",
+              "body": "Base defaults shared across environments."
+            },
+            {
+              "title": "appsettings.{Environment}.json",
+              "body": "Overrides for Development, Staging, or Production."
+            },
+            {
+              "title": "Environment variables",
+              "body": "Double-underscore nesting: ConnectionStrings__Redis, ASPNETCORE_URLS."
+            },
+            {
+              "title": "Command-line arguments",
+              "body": "Highest priority in default host configuration."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Typical Web API folder layout",
+            "source": "flowchart TB\n  Root[WebApi.csproj] --> Program[Program.cs]\n  Root --> AppSettings[appsettings.json]\n  Root --> AppSettingsDev[appsettings.Development.json]\n  Root --> Props[Properties/launchSettings.json]\n  Root --> Controllers[Controllers/]\n  Root --> Services[Services/]\n  Root --> Models[Models/]\n  Root --> Data[Data/]\n  Program --> Controllers\n  Program --> Services"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Typical Program.cs with extension method organization",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n\nbuilder.Services.AddApiServices(builder.Configuration);\nbuilder.Services.AddControllers();\nbuilder.Services.AddEndpointsApiExplorer();\nbuilder.Services.AddSwaggerGen();\n\nvar app = builder.Build();\n\nif (app.Environment.IsDevelopment())\n{\n    app.UseSwagger();\n    app.UseSwaggerUI();\n}\n\napp.UseHttpsRedirection();\napp.MapControllers();\napp.Run();\n\n// Extensions/ServiceCollectionExtensions.cs keeps Program.cs thin:\n// public static IServiceCollection AddApiServices(this IServiceCollection s, IConfiguration c) { ... }",
+            "explanation": "Extension methods group DI registration by feature — Redis, EF Core, auth — without a Startup.cs class."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "appsettings with Redis and connection strings",
+            "code": "{\n  \"ConnectionStrings\": {\n    \"OrdersDb\": \"Host=localhost;Database=orders;Username=api;Password=dev\"\n  },\n  \"Redis\": {\n    \"Connection\": \"localhost:6379,abortConnect=false\"\n  },\n  \"Logging\": {\n    \"LogLevel\": {\n      \"Default\": \"Information\",\n      \"Microsoft.AspNetCore\": \"Warning\"\n    }\n  },\n  \"AllowedHosts\": \"*\"\n}\n\n// Access in code:\n// builder.Configuration.GetConnectionString(\"OrdersDb\")\n// builder.Configuration[\"Redis:Connection\"]",
+            "explanation": "Colon syntax in code maps to JSON nesting. Production overrides Redis host via environment variable Redis__Connection in Kubernetes secrets."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "launchSettings.json profile (development only)",
+            "code": "{\n  \"profiles\": {\n    \"https\": {\n      \"commandName\": \"Project\",\n      \"dotnetRunMessages\": true,\n      \"launchBrowser\": true,\n      \"launchUrl\": \"swagger\",\n      \"applicationUrl\": \"https://localhost:7241;http://localhost:5241\",\n      \"environmentVariables\": {\n        \"ASPNETCORE_ENVIRONMENT\": \"Development\"\n      }\n    },\n    \"Docker\": {\n      \"commandName\": \"Docker\",\n      \"launchUrl\": \"{Scheme}://{ServiceHost}:{ServicePort}/swagger\"\n    }\n  }\n}",
+            "explanation": "launchSettings sets ASPNETCORE_ENVIRONMENT for F5 debugging. Docker profile maps container ports for Visual Studio / VS Code container debugging."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Project layout comparison",
+          "headers": ["Concern", "ASP.NET Core", "Node.js / NestJS"],
+          "rows": [
+            ["Entry point", "Program.cs", "src/main.ts or index.js"],
+            ["Config files", "appsettings.json + env vars", ".env + process.env"],
+            ["Dev URLs", "launchSettings.json", "package.json scripts (--port)"],
+            ["Dependencies", "PackageReference in csproj", "dependencies in package.json"],
+            ["API docs", "Swagger via Swashbuckle", "Swagger via @nestjs/swagger or express-openapi"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Committing secrets in appsettings.json instead of user secrets or environment variables. Expecting launchSettings.json to apply in Docker production builds. Putting business logic directly in Program.cs instead of services. Forgetting to add appsettings.Production.json overrides for log levels. Using AllowedHosts: * in production without understanding host filtering."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Program.cs is the single entry point; appsettings*.json plus environment variables form the configuration stack.",
+    "launchSettings.json is development-only — production URLs and secrets come from the orchestrator, not Properties/.",
+    "Organize growing apps with extension methods (AddApiServices) and feature folders — Controllers, Services, Data.",
+    "60s: Web template has Program.cs, appsettings, csproj. No Startup.cs in modern templates. Config loads json then env vars. launchSettings for local F5 only. Extension methods keep Program thin. Secrets via env or Key Vault, not committed json.",
+    "Follow-up: how does user secrets differ from appsettings.Development.json?"
+  ],
+  "commonPitfalls": [
+    "Committing production connection strings to appsettings.json — use secrets manager or CI-injected env vars.",
+    "Assuming launchSettings applies in published Docker images — it does not ship with publish output.",
+    "Strong answer: 'Program.cs wires host. appsettings layered by environment. Env vars override with double underscore. launchSettings is dev-only. Feature folders plus DI extension methods for scale.'"
+  ],
+  "introducedIn": "Top-level statements and minimal hosting model in .NET 6",
+  "relatedTopicIds": [
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-01-environments-and-startup",
+    "dotnet-01-what-is-dotnet",
+    "dotnet-01-dotnet-vs-node-express"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "package.json scripts and .env files",
+      "note": "Express apps use npm start scripts and dotenv for local config — analogous to launchSettings and appsettings.Development.json, but Node typically commits .env.example not the full hierarchy.",
+      "futureTopicSlug": "nodejs/project-structure"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS module and config module",
+      "note": "NestJS ConfigModule loads .env and json — similar layering to IConfiguration. Program.cs extension methods map to NestJS dynamic modules registering providers.",
+      "futureTopicSlug": "nestjs/configuration"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Project structure for ASP.NET Core apps",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/"
+    },
+    {
+      "title": "Configuration in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "redis-cache"
+}

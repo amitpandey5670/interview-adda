@@ -1,0 +1,243 @@
+{
+  "id": "dotnet-01-what-is-dotnet",
+  "slug": "what-is-dotnet",
+  "title": "What is .NET? (runtime, SDK, and how it relates to C#)",
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "order": 1,
+  "hook": ".NET is the platform that runs your code; C# is one language that compiles into it. The Software Development Kit (SDK) builds your app, the runtime executes it, and ASP.NET Core is the web framework layered on top.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": ".NET is a free, cross-platform developer platform from Microsoft. You write C# (or F#, VB.NET), the compiler turns source into Intermediate Language (IL) packaged in assemblies, and the Common Language Runtime (CLR) executes that IL with a Just-In-Time (JIT) compiler on first use. ASP.NET Core is not a separate runtime — it is a set of libraries and hosting abstractions that run on the same .NET runtime as console apps, workers, and gRPC services."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "SDK",
+              "shortForm": "SDK",
+              "longForm": "Software Development Kit",
+              "plainDefinition": "Tools to build, test, and publish .NET apps: compilers, MSBuild, project templates, and the runtime bundled for development.",
+              "example": "dotnet build uses the SDK; production containers often install only the runtime."
+            },
+            {
+              "term": "Runtime",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The execution engine: loads assemblies, JIT-compiles IL to native code, manages memory with the garbage collector, and provides base class libraries.",
+              "example": "aspnet:8.0 Docker image contains the ASP.NET Core runtime, not the full SDK."
+            },
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The virtual machine inside the .NET runtime that executes managed code with type safety and automatic memory management.",
+              "example": "Exceptions, thread pool, and GC all live in the CLR."
+            },
+            {
+              "term": "BCL",
+              "shortForm": "BCL",
+              "longForm": "Base Class Library",
+              "plainDefinition": "Core APIs shipped with the runtime: collections, IO, networking, threading, and JSON primitives.",
+              "example": "System.Net.Http.HttpClient is BCL; Microsoft.AspNetCore.Mvc is ASP.NET Core."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Confusing the SDK with the runtime causes bloated Docker images, failed CI builds on slim agents, and vague interview answers. In production you typically ship a self-contained or framework-dependent publish output that needs only the matching runtime — not dotnet new or MSBuild. Understanding the stack also explains why a Web API shares the same dependency injection container model as a background SQS worker: both are hosted applications on the same platform."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview one-liner",
+          "body": "C# is the language. .NET is the platform (runtime + libraries). ASP.NET Core is the web framework. The SDK builds; the runtime runs."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From source code to running Web API",
+          "items": [
+            {
+              "title": "Write C# and a .csproj",
+              "body": "Your Web API project references Microsoft.AspNetCore.App via the framework reference."
+            },
+            {
+              "title": "SDK compiles to IL",
+              "body": "Roslyn emits IL into a DLL. ReadyToRun or Native AOT are optional publish modes that change this step."
+            },
+            {
+              "title": "dotnet run or container start",
+              "body": "The host loads the runtime, JIT-compiles hot paths, and starts Kestrel."
+            },
+            {
+              "title": "ASP.NET Core handles HTTP",
+              "body": "Middleware, routing, and controllers run as managed code on the shared thread pool."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": ".NET platform stack",
+            "source": "flowchart TB\n  subgraph dev [Development machine]\n    SDK[.NET SDK\\nbuild test publish]\n    CSharp[C# source code]\n    CSharp --> SDK\n  end\n  subgraph prod [Production host]\n    Runtime[.NET Runtime\\nCLR JIT GC BCL]\n    AspNet[ASP.NET Core\\nKestrel middleware DI]\n    App[Your Web API DLL]\n    SDK -->|publish output| App\n    App --> Runtime\n    AspNet --> Runtime\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Check installed SDK versus runtime",
+            "code": "// Terminal — SDK (build tooling + dev runtime)\n// $ dotnet --list-sdks\n// 8.0.404 [/usr/share/dotnet/sdk]\n\n// Terminal — runtimes only (what executes published apps)\n// $ dotnet --list-runtimes\n// Microsoft.AspNetCore.App 8.0.11 [/usr/share/dotnet/shared/Microsoft.AspNetCore.App]\n// Microsoft.NETCore.App 8.0.11 [/usr/share/dotnet/shared/Microsoft.NETCore.App]\n\n// A machine with runtime but no SDK cannot `dotnet build`",
+            "explanation": "List SDKs when diagnosing CI or Docker build failures. List runtimes when a published app fails to start with 'framework not found'."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Framework-dependent Web API csproj",
+            "code": "<Project Sdk=\"Microsoft.NET.Sdk.Web\">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n    <Nullable>enable</Nullable>\n    <ImplicitUsings>enable</ImplicitUsings>\n  </PropertyGroup>\n</Project>\n\n// Microsoft.NET.Sdk.Web pulls ASP.NET Core framework reference.\n// Publish output is small — host must have matching 8.0 runtime installed.",
+            "explanation": "Framework-dependent deployment assumes the target server already has Microsoft.AspNetCore.App 8.x. This is the default for Linux containers using the aspnet image."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Self-contained publish for workers behind API gateway",
+            "code": "// Terminal\n// dotnet publish -c Release -r linux-x64 --self-contained true\n\n// csproj alternative:\n<PropertyGroup>\n  <RuntimeIdentifier>linux-x64</RuntimeIdentifier>\n  <SelfContained>true</SelfContained>\n  <PublishSingleFile>true</PublishSingleFile>\n</PropertyGroup>\n\n// Output bundles the runtime — larger artifact, no shared runtime on host.\n// Useful for immutable AMIs running SQS consumers without dotnet on the box.",
+            "explanation": "Self-contained publish ships the CLR with your app. Trade larger size for predictable deployment when you cannot control host runtimes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same runtime serves API and background worker",
+            "code": "// Web API Program.cs\nvar builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddHostedService<SqsOrderWorker>();\nvar app = builder.Build();\napp.MapGet(\"/health\", () => Results.Ok(\"up\"));\napp.Run();\n\n// SqsOrderWorker uses the same DI container and CancellationToken\n// as HTTP endpoints — one process, one runtime, shared configuration.",
+            "explanation": "ASP.NET Core hosting unifies HTTP and IHostedService workers. Both compile to IL and execute on the same CLR thread pool."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": ".NET platform versus Node.js",
+          "headers": ["Aspect", ".NET", "Node.js"],
+          "rows": [
+            ["Language vs runtime", "C# compiles to IL; CLR executes", "JavaScript interpreted/JIT by V8"],
+            ["Build tooling", ".NET SDK (dotnet CLI, MSBuild)", "npm + TypeScript compiler (tsc) or bundler"],
+            ["Web framework", "ASP.NET Core on shared runtime", "Express/Fastify/NestJS on Node"],
+            ["Deploy unit", "Published DLL + runtime or self-contained", "node_modules + JS bundle or ts-node"],
+            ["Memory model", "Managed heap + GC generations", "V8 heap + event loop"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Installing only the SDK on a production server and assuming it is minimal — SDK images are much larger than aspnet runtime images. Pinning TargetFramework to net8.0 but deploying to a host with only .NET 6 runtime. Saying '.NET and C# are the same thing' in interviews. Using SDK container for production instead of aspnet:8.0."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: inspect the container image — mcr.microsoft.com/dotnet/aspnet:8.0 has no compiler. Run dotnet --info inside the pod; missing SDK is expected. Framework-dependent apps fail fast with a roll-forward message if the shared framework is absent. Use dotnet-counters to observe GC and thread-pool metrics — those come from the CLR, not ASP.NET Core. For AOT or trimming publish modes, verify startup time and size with a cold-start probe behind your API gateway."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "SDK versus runtime at senior level",
+          "headers": ["Artifact", "Contains", "Production use"],
+          "rows": [
+            ["SDK image", "Compiler, MSBuild, templates, dev runtime", "CI build stages only"],
+            ["aspnet runtime image", "ASP.NET Core + .NET Core shared frameworks", "Default for Web API containers"],
+            ["runtime-only image", ".NET Core BCL without ASP.NET", "Console workers without HTTP"],
+            ["Self-contained publish", "App + entire runtime", "Edge devices, locked-down VMs"],
+            ["Framework-dependent publish", "App DLLs only", "Kubernetes with shared aspnet base image"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying '.NET is C#' — C# is one language; F# and VB compile to the same IL. Claiming you need the SDK on every production server — you need the matching runtime. Not knowing the difference between Microsoft.NETCore.App and Microsoft.AspNetCore.App shared frameworks. Confusing .NET Framework (Windows-only, legacy) with modern .NET (cross-platform .NET 5+)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "C# is the language; .NET is the platform (CLR + BCL); ASP.NET Core is the web stack on that runtime.",
+    "SDK builds and publishes; runtime executes — production containers should use aspnet runtime images, not SDK images.",
+    "In production, pin TargetFramework to the runtime version on the host and verify with dotnet --list-runtimes in the deployment image.",
+    "60s: C# compiles to IL. The CLR JITs and runs it with GC. The SDK has compilers and MSBuild. The runtime is what ships in Docker. ASP.NET Core is libraries on the same runtime as workers. Framework-dependent needs shared runtime; self-contained bundles it.",
+    "Follow-up: what is the difference between Microsoft.NETCore.App and Microsoft.AspNetCore.App?"
+  ],
+  "commonPitfalls": [
+    "Saying '.NET equals C#' gets you rejected — .NET is the platform; C# is one language targeting it.",
+    "Using mcr.microsoft.com/dotnet/sdk in production — bloated image and unnecessary attack surface.",
+    "Strong answer: 'SDK for build, aspnet runtime for deploy. IL on CLR. ASP.NET Core is framework reference on shared runtime. Pin versions in CI and container base image.'"
+  ],
+  "introducedIn": ".NET Core 1.0 (2016); unified .NET 5+ (2020)",
+  "relatedTopicIds": [
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-01-project-structure",
+    "dotnet-01-environments-and-startup",
+    "dotnet-01-dotnet-vs-node-express"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Node.js runtime versus npm devDependencies",
+      "note": "Node on the server is both runtime and package host. .NET splits explicitly: SDK for build (like devDependencies + tsc) and runtime for execute (like node in production).",
+      "futureTopicSlug": "nodejs/runtime-vs-tooling"
+    },
+    {
+      "language": "typescript",
+      "concept": "TypeScript compiles to JavaScript; C# compiles to IL",
+      "note": "TypeScript erases at compile time to JS that V8 runs. C# becomes IL that the CLR JITs — stronger runtime type checks and a different GC model than V8.",
+      "futureTopicSlug": "typescript/compilation-model"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "What is .NET?",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/introduction"
+    },
+    {
+      "title": ".NET SDK overview",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/sdk"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "sqs-consumer"
+}

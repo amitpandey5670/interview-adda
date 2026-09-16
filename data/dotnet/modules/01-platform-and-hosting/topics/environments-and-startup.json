@@ -1,0 +1,208 @@
+{
+  "id": "dotnet-01-environments-and-startup",
+  "slug": "environments-and-startup",
+  "title": "Environments (Development, Staging, Production) and startup flow",
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "order": 5,
+  "hook": "The ASPNETCORE_ENVIRONMENT variable tells your app whether to show detailed errors, enable Swagger, or run strict production logging. Startup is the sequence from process launch until Kestrel accepts the first request.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASP.NET Core uses the IHostEnvironment (and IWebHostEnvironment) abstraction to expose the current environment name: Development, Staging, Production, or a custom value. This name selects which appsettings.{Environment}.json file merges into configuration and drives conditional behavior in Program.cs — like enabling Swagger only in Development. Startup flow is everything from Main/Program entry through builder.Build(), middleware registration, and app.Run() until the host reports ApplicationStarted."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ASPNETCORE_ENVIRONMENT",
+              "longForm": "ASPNETCORE_ENVIRONMENT",
+              "plainDefinition": "Environment variable that sets IHostEnvironment.EnvironmentName. Defaults to Production if unset.",
+              "example": "ASPNETCORE_ENVIRONMENT=Development enables developer exception page."
+            },
+            {
+              "term": "Development",
+              "longForm": "Development environment",
+              "plainDefinition": "Local dev: detailed errors, Swagger, relaxed HTTPS, verbose logging.",
+              "example": "if (app.Environment.IsDevelopment()) app.UseSwagger();"
+            },
+            {
+              "term": "Production",
+              "longForm": "Production environment",
+              "plainDefinition": "Live deployment: generic error responses, no Swagger UI, structured logging, strict security headers.",
+              "example": "Kubernetes sets ASPNETCORE_ENVIRONMENT=Production in the deployment manifest."
+            },
+            {
+              "term": "IHostApplicationLifetime",
+              "longForm": "IHostApplicationLifetime",
+              "plainDefinition": "Events for ApplicationStarted, ApplicationStopping, and ApplicationStopped during startup and shutdown.",
+              "example": "Register callback to flush Redis pub/sub subscriptions on shutdown."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Shipping with Development environment in Docker exposes stack traces and Swagger to the internet — a common security finding. Staging should mirror Production configuration but point at test databases and Redis clusters. Understanding startup order helps debug slow cold starts behind an API gateway: service provider build, EF migrations, Redis connection warmup, and Kestrel bind each add latency before the readiness probe passes."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Default is Production",
+          "body": "If ASPNETCORE_ENVIRONMENT is unset, the host assumes Production. That is safer for accidental deploys but surprises developers who forget to set Development locally."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Startup timeline",
+          "items": [
+            {
+              "title": "Process starts",
+              "body": "dotnet MyApi.dll or container ENTRYPOINT launches the runtime."
+            },
+            {
+              "title": "CreateBuilder",
+              "body": "Configuration sources chain: json files, env vars, secrets. Environment name is read."
+            },
+            {
+              "title": "Service registration",
+              "body": "DI container graph built — DbContext, Redis, HTTP clients registered."
+            },
+            {
+              "title": "Build + pipeline",
+              "body": "Middleware chain assembled; conditional branches run based on IsDevelopment()."
+            },
+            {
+              "title": "Run",
+              "body": "Kestrel binds, IHostedServices start, ApplicationStarted fires, readiness probe can pass."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Environment-driven startup branches",
+            "source": "flowchart TD\n  Start[Process launch] --> Env{ASPNETCORE_ENVIRONMENT}\n  Env -->|Development| DevCfg[appsettings.Development.json\\nSwagger + detailed errors]\n  Env -->|Staging| StgCfg[appsettings.Staging.json\\ntest Redis + DB]\n  Env -->|Production| ProdCfg[appsettings.Production.json\\nstrict logging]\n  DevCfg --> Build[builder.Build]\n  StgCfg --> Build\n  ProdCfg --> Build\n  Build --> Run[app.Run Kestrel + workers]\n  Run --> Ready[/health ready]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Environment-conditional middleware",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddControllers();\n\nvar app = builder.Build();\n\nif (app.Environment.IsDevelopment())\n{\n    app.UseDeveloperExceptionPage(); // detailed stack traces — never in Production\n    app.UseSwagger();\n    app.UseSwaggerUI();\n}\nelse\n{\n    app.UseExceptionHandler(\"/error\"); // generic Problem Details response\n    app.UseHsts();\n}\n\napp.MapControllers();\napp.Run();",
+            "explanation": "IsDevelopment() gates developer-only features. Production uses exception handler middleware that does not leak internals to API clients."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom Staging environment in Docker Compose",
+            "code": "# docker-compose.yml\nservices:\n  api:\n    image: order-api:latest\n    environment:\n      ASPNETCORE_ENVIRONMENT: Staging\n      ConnectionStrings__OrdersDb: \"Host=postgres-staging;Database=orders\"\n      Redis__Connection: \"redis-staging:6379\"\n    ports:\n      - \"8080:8080\"\n    healthcheck:\n      test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8080/health\"]\n      interval: 10s\n      timeout: 3s\n      retries: 3",
+            "explanation": "Staging uses production-like settings but different connection strings. Health check gates dependent services and load balancer registration."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Startup timing and lifetime hooks",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nvar startupTimer = Stopwatch.StartNew();\n\nbuilder.Services.AddControllers();\nbuilder.Services.AddSingleton<IConnectionMultiplexer>(sp =>\n{\n    var config = sp.GetRequiredService<IConfiguration>();\n    return ConnectionMultiplexer.Connect(config[\"Redis:Connection\"]!);\n});\n\nvar app = builder.Build();\n\nvar lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();\nlifetime.ApplicationStarted.Register(() =>\n{\n    startupTimer.Stop();\n    app.Logger.LogInformation(\"Startup completed in {Ms}ms\", startupTimer.ElapsedMilliseconds);\n});\n\napp.MapGet(\"/health\", () => Results.Ok());\napp.Run();",
+            "explanation": "Log startup duration to catch slow Redis or EF initialization before readiness probes timeout in Kubernetes."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Environment handling",
+          "headers": ["Aspect", "ASP.NET Core", "Node.js / NestJS"],
+          "rows": [
+            ["Env variable", "ASPNETCORE_ENVIRONMENT", "NODE_ENV"],
+            ["Default if unset", "Production", "undefined (often treated as development)"],
+            ["Config file", "appsettings.{Env}.json", ".env.development / .env.production"],
+            ["Dev-only features", "IsDevelopment() guards", "if (process.env.NODE_ENV !== 'production')"],
+            ["Graceful shutdown", "IHostApplicationLifetime", "process.on('SIGTERM') manual"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Leaving ASPNETCORE_ENVIRONMENT=Development in production Kubernetes manifests. Using Staging connection strings in Production because the wrong appsettings file shipped. Running EF Migrate() on every startup in Production without a migration strategy. Forgetting that IsProduction() is the negation of Development and Staging — use explicit checks for Staging-only behavior."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "ASPNETCORE_ENVIRONMENT selects config files and conditional middleware; default is Production when unset.",
+    "Development enables Swagger and detailed errors; Production uses exception handlers and HSTS — never ship Dev to public endpoints.",
+    "In production, log startup duration and wire IHostApplicationLifetime for graceful Redis and queue drain on SIGTERM.",
+    "60s: Env var sets Development, Staging, or Production. Merges appsettings.{Env}.json. IsDevelopment gates Swagger. Default Production. Startup is CreateBuilder, services, Build, pipeline, Run. ApplicationStarted when ready for probes.",
+    "Follow-up: how do you prevent Swagger from being exposed in a misconfigured Production deploy?"
+  ],
+  "commonPitfalls": [
+    "Deploying with ASPNETCORE_ENVIRONMENT=Development — exposes stack traces and Swagger publicly.",
+    "Treating NODE_ENV and ASPNETCORE_ENVIRONMENT as identical — .NET defaults to Production, Node often assumes development.",
+    "Strong answer: 'Env drives config merge and middleware branches. Staging mirrors prod infra with test data. Log startup time. ApplicationStopping for graceful drain. Never Swagger in Production.'"
+  ],
+  "introducedIn": "IHostEnvironment since .NET Core 2.1; environment-based config since 1.0",
+  "relatedTopicIds": [
+    "dotnet-01-project-structure",
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-01-kestrel-and-reverse-proxy",
+    "dotnet-01-what-is-dotnet"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "NODE_ENV production versus development",
+      "note": "Express checks NODE_ENV to enable view caching and disable verbose errors. ASP.NET Core IsDevelopment() is the parallel guard — but .NET defaults to Production, Node often does not.",
+      "futureTopicSlug": "nodejs/environment-variables"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS enable versioning and Swagger per environment",
+      "note": "NestJS conditionally registers SwaggerModule in non-production — same pattern as if (app.Environment.IsDevelopment()) in Program.cs.",
+      "futureTopicSlug": "nestjs/swagger-environments"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Use multiple environments in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/environments"
+    },
+    {
+      "title": "ASP.NET Core fundamentals — startup",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/startup"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "auth-token"
+}

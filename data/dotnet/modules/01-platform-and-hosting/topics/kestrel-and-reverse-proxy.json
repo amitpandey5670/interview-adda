@@ -1,0 +1,245 @@
+{
+  "id": "dotnet-01-kestrel-and-reverse-proxy",
+  "slug": "kestrel-and-reverse-proxy",
+  "title": "Kestrel and reverse proxies (nginx, IIS, load balancers)",
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "order": 3,
+  "hook": "Kestrel is the web server inside your ASP.NET Core process. In production, nginx, IIS, or a cloud load balancer usually sits in front to handle TLS, connection limits, and routing.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Kestrel is ASP.NET Core's cross-platform web server. It reads HTTP requests from sockets, passes them through the middleware pipeline, and writes responses. It is fast and suitable for direct internet exposure in controlled scenarios, but production architectures almost always place a reverse proxy or API gateway in front. The proxy terminates Transport Layer Security (TLS), enforces rate limits, serves static files, and forwards requests to Kestrel over HTTP — often on localhost or an internal network."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Kestrel",
+              "longForm": "Kestrel",
+              "plainDefinition": "The default in-process HTTP server for ASP.NET Core, implemented on top of libuv or sockets.",
+              "example": "Listens on http://0.0.0.0:8080 inside a Docker container."
+            },
+            {
+              "term": "Reverse proxy",
+              "longForm": "Reverse proxy",
+              "plainDefinition": "A server that accepts client connections and forwards them to upstream application servers.",
+              "example": "nginx forwards https://api.example.com to http://127.0.0.1:5000."
+            },
+            {
+              "term": "TLS",
+              "shortForm": "TLS",
+              "longForm": "Transport Layer Security",
+              "plainDefinition": "Encrypts HTTP traffic. Often terminated at the proxy, not inside Kestrel.",
+              "example": "AWS Application Load Balancer handles HTTPS; Kestrel sees plain HTTP."
+            },
+            {
+              "term": "Forwarded headers",
+              "longForm": "Forwarded headers",
+              "plainDefinition": "X-Forwarded-For, X-Forwarded-Proto, and X-Forwarded-Host headers that preserve original client IP and scheme through a proxy.",
+              "example": "UseForwardedHeaders middleware so redirects use https:// not http://."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Running Kestrel alone behind a public IP works for demos but misses defense in depth. Proxies buffer slow clients, protect against slowloris attacks, and centralize certificate rotation. Misconfigured forwarded headers break OAuth redirects, rate limiting by client IP, and audit logs. In Kubernetes, the ingress controller is your reverse proxy; Kestrel binds to port 8080 on the pod while the ingress handles TLS and path routing to multiple services."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Production default",
+          "body": "Kestrel handles application logic; the reverse proxy handles TLS, HTTP/2 edge features, and upstream load balancing across pods."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request path through proxy to Kestrel",
+          "items": [
+            {
+              "title": "Client sends HTTPS",
+              "body": "Browser or mobile app hits api.example.com on port 443."
+            },
+            {
+              "title": "Proxy terminates TLS",
+              "body": "nginx, IIS, or AWS API Gateway decrypts and may authenticate at the edge."
+            },
+            {
+              "title": "Forward to Kestrel",
+              "body": "Proxy opens an HTTP connection to the upstream — often http://localhost:5000 or a pod IP."
+            },
+            {
+              "title": "ASP.NET Core pipeline",
+              "body": "Middleware, routing, controller, Redis cache lookup, JSON response."
+            },
+            {
+              "title": "Response returns through proxy",
+              "body": "Proxy may compress, add security headers, and re-encrypt for the client."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Kestrel behind reverse proxy",
+            "source": "flowchart LR\n  Client[Mobile / Browser] -->|HTTPS 443| Proxy[nginx / ALB / API Gateway]\n  Proxy -->|HTTP internal| Kestrel[Kestrel :8080]\n  Kestrel --> Pipeline[Middleware + Controllers]\n  Pipeline --> Redis[(Redis cache)]\n  Pipeline --> Proxy\n  Proxy --> Client"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Configure Kestrel endpoints in Docker",
+            "code": "// appsettings.Production.json\n{\n  \"Kestrel\": {\n    \"Endpoints\": {\n      \"Http\": {\n        \"Url\": \"http://0.0.0.0:8080\"\n      }\n    }\n  }\n}\n\n// Program.cs — ASPNETCORE_URLS env var overrides this in containers\nvar builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\napp.MapGet(\"/health\", () => Results.Ok());\napp.Run();",
+            "explanation": "Bind 0.0.0.0 so Docker and Kubernetes can reach the pod. TLS is usually off here — the ingress terminates HTTPS."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Forwarded headers for correct scheme and client IP",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n\nbuilder.Services.Configure<ForwardedHeadersOptions>(options =>\n{\n    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor\n        | ForwardedHeaders.XForwardedProto\n        | ForwardedHeaders.XForwardedHost;\n    // In Kubernetes, clear known networks or restrict to ingress CIDR\n    options.KnownNetworks.Clear();\n    options.KnownProxies.Clear();\n});\n\nvar app = builder.Build();\n\n// MUST be first middleware — before UseHttpsRedirection\napp.UseForwardedHeaders();\napp.UseHttpsRedirection();\napp.MapControllers();\napp.Run();",
+            "explanation": "Without UseForwardedHeaders, HttpContext.Connection.RemoteIpAddress shows the proxy IP, not the client. Redirects may use http instead of https."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "nginx upstream config (companion to Kestrel)",
+            "code": "# /etc/nginx/conf.d/api.conf\nupstream aspnet_api {\n    server 127.0.0.1:8080;\n    keepalive 32;\n}\n\nserver {\n    listen 443 ssl;\n    server_name api.example.com;\n\n    location / {\n        proxy_pass http://aspnet_api;\n        proxy_set_header Host $host;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_http_version 1.1;\n    }\n}",
+            "explanation": "nginx sets forwarded headers Kestrel expects. keepalive reduces connection churn between proxy and upstream under high concurrency."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Kestrel limits for high-concurrency API behind gateway",
+            "code": "builder.WebHost.ConfigureKestrel(options =>\n{\n    options.Limits.MaxConcurrentConnections = 10_000;\n    options.Limits.MaxConcurrentUpgradedConnections = 10_000;\n    options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(2);\n    options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(30);\n});\n\n// Pair with proxy timeouts — if nginx proxy_read_timeout is 60s\n// but Kestrel RequestHeadersTimeout is 30s, the stricter limit wins first.",
+            "explanation": "Tune Kestrel limits together with API gateway timeouts. Mismatched timeouts cause 502 Bad Gateway errors that look like application bugs."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Edge server patterns",
+          "headers": ["Aspect", "ASP.NET Core + Kestrel", "Node.js Express"],
+          "rows": [
+            ["Built-in HTTP server", "Kestrel (production-grade)", "Node http module / Express"],
+            ["TLS at edge", "Usually proxy or load balancer", "Often nginx or cloud LB in front of Node"],
+            ["Process model", "Kestrel thread pool + async I/O", "Single-threaded event loop per process"],
+            ["Behind PM2/cluster", "Scale pods/replicas; Kestrel per process", "PM2 cluster mode forks Node workers"],
+            ["Forwarded headers", "UseForwardedHeaders middleware", "trust proxy setting in Express"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Terminating TLS in both nginx and Kestrel without reason — double encryption overhead. Forgetting UseForwardedHeaders before UseHttpsRedirection — infinite redirect loops. Binding Kestrel to 127.0.0.1 in Docker so health probes from another network namespace fail. Assuming Kestrel replaces a CDN for static assets. Setting KnownProxies too loosely and allowing header spoofing."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: compare RemoteIpAddress before and after UseForwardedHeaders in a staging ingress. Watch 502 rates when upstream keepalive pools exhaust — correlate nginx error log upstream timed out with Kestrel active connections via dotnet-counters (Microsoft-AspNetCore-Server-Kestrel). For WebSockets through a proxy, verify Upgrade and Connection headers pass through. API Gateway (AWS) adds latency budget — measure p95 at Kestrel versus at the edge with distributed tracing."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Kestrel direct versus behind proxy",
+          "headers": ["Deployment", "Pros", "Cons"],
+          "rows": [
+            ["Kestrel direct (TLS in app)", "Simple local dev parity", "Cert rotation per app; fewer edge protections"],
+            ["nginx + Kestrel", "Central TLS, buffering, rate limits", "Extra hop; must configure forwarded headers"],
+            ["IIS in-process", "Windows enterprise integration", "Windows-specific; Linux containers use Kestrel"],
+            ["Cloud LB → Kestrel", "Managed TLS, auto-scaling targets", "Forwarded header trust configuration critical"],
+            ["Kestrel only (no proxy)", "Acceptable for internal gRPC mesh", "Not recommended for public internet APIs"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'IIS is required for ASP.NET Core' — Kestrel is the default cross-platform server. Claiming Kestrel cannot handle production load without nginx — it can, but proxies add operational benefits. Not knowing UseForwardedHeaders must run early in the pipeline. Recommending double HTTPS termination without measuring overhead."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Kestrel is the in-process HTTP server; reverse proxies terminate TLS, load-balance, and protect upstream apps.",
+    "UseForwardedHeaders must be first middleware when behind nginx, IIS, or a load balancer — fixes IP, scheme, and redirect bugs.",
+    "In production, align Kestrel timeouts with API gateway/nginx timeouts; mismatch causes 502s under slow clients.",
+    "60s: Kestrel runs inside the process and handles HTTP. Production puts nginx or ALB in front for TLS and routing. Forward X-Forwarded-* headers. UseForwardedHeaders early. Kestrel binds internal port; proxy faces the internet. Tune limits together.",
+    "Follow-up: when would you terminate TLS in Kestrel instead of at the proxy?"
+  ],
+  "commonPitfalls": [
+    "Saying 'Kestrel is only for development' gets you rejected — it is the production server; the proxy is an optional but common edge layer.",
+    "Omitting UseForwardedHeaders — OAuth and IP-based rate limits break silently.",
+    "Strong answer: 'Kestrel serves the app. Proxy handles TLS and edge policy. Forward headers. Configure timeouts on both sides. Scale by replicating Kestrel processes behind the load balancer.'"
+  ],
+  "introducedIn": "Kestrel since ASP.NET Core 1.0; ForwardedHeaders middleware in ASP.NET Core 1.1",
+  "relatedTopicIds": [
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-01-environments-and-startup",
+    "dotnet-01-project-structure",
+    "dotnet-01-dotnet-vs-node-express"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express trust proxy setting",
+      "note": "Express app.set('trust proxy', 1) reads X-Forwarded-For for req.ip — same problem as UseForwardedHeaders in ASP.NET Core.",
+      "futureTopicSlug": "express/trust-proxy"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS behind nginx ingress",
+      "note": "NestJS apps also listen on an internal port while ingress handles TLS. The forwarded-header trust problem is identical across Node and Kestrel stacks.",
+      "futureTopicSlug": "nestjs/deployment-behind-proxy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Kestrel web server",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel"
+    },
+    {
+      "title": "Configure ASP.NET Core to work with proxy servers and load balancers",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

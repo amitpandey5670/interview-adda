@@ -1,0 +1,78 @@
+{
+  "moduleId": "dotnet-01-platform-and-hosting",
+  "title": "Platform and hosting interview drills",
+  "items": [
+    {
+      "question": "What is the difference between the .NET SDK and the .NET runtime, and which do you put in a production Docker image?",
+      "answer": "The SDK contains compilers, MSBuild, templates, and build tooling — everything needed to compile C# into IL assemblies. The runtime contains the CLR, JIT compiler, garbage collector, and base class libraries needed to execute those assemblies. ASP.NET Core apps also need the Microsoft.AspNetCore.App shared framework. Production containers should use the aspnet runtime image (mcr.microsoft.com/dotnet/aspnet:8.0), not the SDK image. CI build stages use the SDK image to dotnet publish; the output DLLs copy into a slim runtime stage. Putting the SDK in production bloats the image and exposes unnecessary tooling.",
+      "followUps": [
+        "What is the difference between framework-dependent and self-contained deployment?",
+        "What happens if the host has .NET 6 runtime but you published for net8.0?"
+      ],
+      "sixtySeconds": "SDK builds. Runtime runs. aspnet image for production. sdk image for CI only. Framework-dependent needs shared runtime on host. Self-contained bundles runtime."
+    },
+    {
+      "question": "Explain WebApplication.CreateBuilder versus the generic host. When would you use Host.CreateApplicationBuilder instead?",
+      "answer": "WebApplication.CreateBuilder is the modern unified entry for ASP.NET Core. It sets up the generic host (configuration, logging, DI, lifetime) and adds web-specific defaults including Kestrel. You register services on builder.Services, call Build to materialize the pipeline, configure middleware on app, then Run to start Kestrel and any IHostedServices. Host.CreateApplicationBuilder is the same generic host without the web layer — use it for console apps or pure SQS/RabbitMQ workers that never listen for HTTP. If you need both HTTP and background work in one process, use WebApplication plus AddHostedService.",
+      "followUps": [
+        "What is the legacy Startup.cs pattern and how does it map to Program.cs?",
+        "What happens if you register middleware before Build()?"
+      ],
+      "sixtySeconds": "WebApplication equals generic host plus Kestrel. Services before Build. Middleware after. Run starts everything. Host.CreateApplicationBuilder for workers without HTTP. AddHostedService for background loops in the same process."
+    },
+    {
+      "question": "Your API runs in Kubernetes behind an nginx ingress. Clients report wrong redirect URLs (http instead of https) and rate limiting sees only the ingress IP. What is wrong?",
+      "answer": "The app is not processing forwarded headers from the proxy. nginx sets X-Forwarded-Proto, X-Forwarded-For, and X-Forwarded-Host when forwarding to Kestrel. Without UseForwardedHeaders middleware — registered before UseHttpsRedirection — ASP.NET Core believes the request arrived over plain HTTP from the proxy's internal IP. OAuth redirects and HSTS decisions use the wrong scheme. Rate limiting keyed on Connection.RemoteIpAddress sees the proxy, not the client. Fix: configure ForwardedHeadersOptions, call app.UseForwardedHeaders() as the first middleware, and restrict KnownProxies or KnownNetworks to your ingress CIDR to prevent header spoofing.",
+      "followUps": [
+        "Should Kestrel terminate TLS in this architecture?",
+        "How do Express apps solve the same problem?"
+      ],
+      "sixtySeconds": "Proxy sets X-Forwarded-Proto and X-Forwarded-For. UseForwardedHeaders must be first middleware. Without it, scheme and client IP are wrong. Restrict known proxies. TLS stays at ingress."
+    },
+    {
+      "question": "Walk through what happens from dotnet run until the first HTTP request is handled.",
+      "answer": "The runtime loads the published assembly and executes Program.cs top-level statements. WebApplication.CreateBuilder loads appsettings.json, environment-specific overrides, and environment variables into IConfiguration. Services register into the DI container. Build() constructs the service provider and prepares the middleware pipeline. Conditional blocks run based on IHostEnvironment — Swagger in Development, exception handler in Production. MapControllers or MapGet registers endpoints. Run() starts Kestrel binding to configured URLs, starts IHostedService implementations, and fires ApplicationStarted. When a request arrives, Kestrel parses HTTP, creates HttpContext, and walks the middleware chain to the matched endpoint.",
+      "followUps": [
+        "What is the default value of ASPNETCORE_ENVIRONMENT?",
+        "How would you measure slow startup in production?"
+      ],
+      "sixtySeconds": "CreateBuilder loads config. Register services. Build creates pipeline. Map endpoints. Run starts Kestrel and hosted services. Request hits middleware chain. Default environment is Production."
+    },
+    {
+      "question": "Why should launchSettings.json secrets and URLs never be relied on in a Docker production deployment?",
+      "answer": "launchSettings.json lives under Properties/ and is a Visual Studio / dotnet run convenience for local development. It is not included in dotnet publish output. Production containers get their URLs from ASPNETCORE_URLS or Kestrel endpoint configuration, and their environment from the orchestrator (Kubernetes deployment env, ECS task definition). Secrets belong in environment variables, mounted secrets, or Azure Key Vault — not in launchSettings or committed appsettings. Teams that debug locally with launchSettings profiles sometimes forget this and wonder why Production still shows Development behavior — usually because ASPNETCORE_ENVIRONMENT was set incorrectly in the container manifest.",
+      "followUps": [
+        "How does appsettings.Production.json differ from environment variables in Kubernetes?",
+        "What is the user secrets ID in the csproj for?"
+      ],
+      "sixtySeconds": "launchSettings is dev-only, not published. Production uses orchestrator env vars. ASPNETCORE_URLS for binding. Secrets via Key Vault or K8s secrets. appsettings.Production for non-secret defaults."
+    },
+    {
+      "question": "You are migrating an Express API with Redis caching and a Bull queue worker to ASP.NET Core. Map the architecture.",
+      "answer": "Express app.use middleware chain maps to app.Use* middleware in Program.cs — same ordering concerns. Express Router routes map to MapControllers or minimal API MapGet/MapPost. Manual require() of Redis client maps to builder.Services.AddSingleton<IConnectionMultiplexer> with constructor injection into handlers. Bull queue.process maps to a BackgroundService or separate worker host using SQS ReceiveMessageAsync with the host CancellationToken. dotenv and process.env map to appsettings plus environment variables with IConfiguration. passport.js JWT strategy maps to AddAuthentication().AddJwtBearer(). The critical difference: Node blocks the event loop on sync I/O; .NET blocks thread-pool threads — use async all the way in both, but the failure signature differs under load.",
+      "followUps": [
+        "Would you run the queue worker in the same process as the API?",
+        "How does NestJS compare to ASP.NET Core for this migration?"
+      ],
+      "sixtySeconds": "Express middleware equals Use pipeline. Router equals MapControllers. Redis singleton DI. Bull equals BackgroundService or SQS worker. dotenv equals appsettings plus env. Node blocks event loop; .NET starves thread pool."
+    },
+    {
+      "question": "When is it acceptable to expose Kestrel directly to the internet without a reverse proxy?",
+      "answer": "Kestrel is production-capable and can handle TLS directly via ConfigureKestrel certificate configuration. Acceptable cases include internal service-to-service communication behind a private network, development and test environments, or container platforms where the ingress controller is technically a proxy but you think of Kestrel as the app server. For public-facing APIs, a reverse proxy or cloud load balancer still adds defense in depth: TLS certificate centralization, request buffering against slow clients, Web Application Firewall integration, and uniform rate limiting at the edge. The interview-safe answer: Kestrel can serve production traffic, but most teams terminate TLS and enforce edge policy at nginx, IIS, or an API gateway, forwarding plain HTTP to Kestrel on an internal port.",
+      "followUps": [
+        "How do you configure Kestrel HTTPS certificates in production?",
+        "What Kestrel limits would you tune for 10k concurrent connections?"
+      ],
+      "sixtySeconds": "Kestrel is production-grade. Public APIs still use proxy for TLS, WAF, buffering. Internal mesh may hit Kestrel directly. Configure forwarded headers when proxy exists. Align timeouts both sides."
+    },
+    {
+      "question": "A staging deployment behaves correctly but Production returns 500 errors with no Swagger and generic error messages. How do environments explain this?",
+      "answer": "Production intentionally hides detailed exceptions from clients. IsDevelopment() is false, so DeveloperExceptionPage is off and a generic exception handler or Problem Details middleware returns sanitized responses. Staging might still have verbose logging or different connection strings that mask configuration bugs. Check ASPNETCORE_ENVIRONMENT is actually Production, verify appsettings.Production.json connection strings for Redis and database, and inspect structured logs — Production logs Microsoft.AspNetCore at Warning by default, hiding useful request detail unless you tune levels. Also confirm Production enables HSTS and HTTPS redirection which can break health checks if forwarded headers are missing.",
+      "followUps": [
+        "How would you safely expose detailed errors in Staging only?",
+        "What logging configuration do you use for Production?"
+      ],
+      "sixtySeconds": "Production hides stack traces by design. Check env var, appsettings.Production, and connection strings. Logging is quieter. Missing forwarded headers break HTTPS redirects. Use exception handler middleware, not developer page."
+    }
+  ]
+}
