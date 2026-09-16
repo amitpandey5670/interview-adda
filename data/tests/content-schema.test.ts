@@ -28,7 +28,7 @@ const addFormats = require('ajv-formats') as (ajv: unknown) => void;
 const root = process.cwd();
 const dataRoot = path.join(root, 'data');
 const schemaDir = path.join(dataRoot, 'schemas');
-const csharpRoot = path.join(dataRoot, 'csharp');
+const contentLanguages = ['csharp', 'dotnet'] as const;
 
 function loadJson(filePath: string): unknown {
   return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
@@ -46,8 +46,12 @@ function compile(schemaName: string) {
   return ajv.compile(loadJson(path.join(schemaDir, schemaName)));
 }
 
-function listModuleFolders(): string[] {
-  const modulesDir = path.join(csharpRoot, 'modules');
+function languageRoot(language: string): string {
+  return path.join(dataRoot, language);
+}
+
+function listModuleFolders(language: string): string[] {
+  const modulesDir = path.join(languageRoot(language), 'modules');
   if (!existsSync(modulesDir)) {
     return [];
   }
@@ -69,9 +73,13 @@ function requiresSeniorDepth(stage: Stage, upgradedModule: boolean): boolean {
   return upgradedModule && isSeniorStage(stage);
 }
 
-describe('C# content schemas', () => {
+for (const language of contentLanguages) {
+  const langRoot = languageRoot(language);
+  const label = language === 'csharp' ? 'C#' : '.NET';
+
+  describe(`${label} content schemas`, () => {
   it('validates index.json when present', () => {
-    const indexPath = path.join(csharpRoot, 'index.json');
+    const indexPath = path.join(langRoot, 'index.json');
     if (!existsSync(indexPath)) {
       return;
     }
@@ -81,7 +89,7 @@ describe('C# content schemas', () => {
   });
 
   it('validates overview.json when present', () => {
-    const overviewPath = path.join(csharpRoot, 'overview.json');
+    const overviewPath = path.join(langRoot, 'overview.json');
     if (!existsSync(overviewPath)) {
       return;
     }
@@ -97,7 +105,7 @@ describe('C# content schemas', () => {
     const validateQuick = compile('quick-overview.schema.json');
     const validateInterview = compile('interview.schema.json');
 
-    for (const folder of listModuleFolders()) {
+    for (const folder of listModuleFolders(language)) {
       const moduleDoc = loadJson(path.join(folder, 'module.json'));
       expect(validateModule(moduleDoc), `${folder} module ${JSON.stringify(validateModule.errors)}`).toBe(true);
 
@@ -125,7 +133,7 @@ describe('C# content schemas', () => {
     const topics: Topic[] = [];
     const moduleIds = new Set<string>();
 
-    for (const folder of listModuleFolders()) {
+    for (const folder of listModuleFolders(language)) {
       const moduleDoc = loadJson(path.join(folder, 'module.json')) as ModuleDoc;
       expect(moduleIds.has(moduleDoc.id)).toBe(false);
       moduleIds.add(moduleDoc.id);
@@ -179,7 +187,7 @@ describe('C# content schemas', () => {
     const topicIds = topics.map((topic) => topic.id);
     expect(new Set(topicIds).size).toBe(topicIds.length);
 
-    const indexPath = path.join(csharpRoot, 'index.json');
+    const indexPath = path.join(langRoot, 'index.json');
     let expectedModuleCount = 0;
     if (existsSync(indexPath) && moduleIds.size > 0) {
       const index = loadJson(indexPath) as ContentIndex;
@@ -202,10 +210,11 @@ describe('C# content schemas', () => {
       }
     }
 
-    const overviewPath = path.join(csharpRoot, 'overview.json');
+    const overviewPath = path.join(langRoot, 'overview.json');
     if (existsSync(overviewPath)) {
       const overview = loadJson(overviewPath) as OverviewPage;
-      expect(overview.language).toBe('csharp');
+      expect(overview.language).toBe(language);
     }
   });
-});
+  });
+}
