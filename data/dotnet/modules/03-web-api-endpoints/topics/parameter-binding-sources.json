@@ -1,0 +1,300 @@
+{
+  "id": "dotnet-03-parameter-binding-sources",
+  "slug": "parameter-binding-sources",
+  "title": "Parameter binding sources ([FromBody], [FromRoute], [AsParameters])",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 4,
+  "hook": "Binding source attributes tell ASP.NET Core exactly where each parameter comes from — route segment, query string, header, form, or JSON body. [AsParameters] (.NET 7+) bundles many query fields into one record, which is the cleanest pattern for search and filter endpoints.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Each action or minimal API parameter is bound from a BindingSource: Path (route), Query, Header, Form, Body, or Services (dependency injection). Attributes like [FromRoute], [FromQuery], [FromHeader], [FromBody], and [FromForm] override [ApiController] inference. [AsParameters] marks a type whose public properties are bound individually from route and query — perfect for pagination and search DTOs without ten separate parameters. [FromServices] is explicit DI; most services are injected without an attribute when the type is registered in the container."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "[FromBody]",
+              "plainDefinition": "Bind parameter from the HTTP request body (typically JSON). Only one per action.",
+              "example": "public IActionResult Create([FromBody] CreateOrderRequest request)",
+              "longForm": "[FromBody]"
+            },
+            {
+              "term": "[FromRoute]",
+              "plainDefinition": "Bind from URI path segments matched by the route template.",
+              "example": "[HttpGet(\"{tenantId}/{orderId}\")] ... ([FromRoute] string tenantId, [FromRoute] Guid orderId)",
+              "longForm": "[FromRoute]"
+            },
+            {
+              "term": "[AsParameters]",
+              "plainDefinition": ".NET 7+ attribute: bind a record/class properties from route and query in one parameter.",
+              "example": "GetOrders([AsParameters] OrderQuery query) where OrderQuery has Page, PageSize, Status.",
+              "longForm": "[AsParameters]"
+            },
+            {
+              "term": "BindingSource.Services",
+              "plainDefinition": "Resolved from DI container, not from the HTTP request.",
+              "example": "IOrderService orders — no attribute needed when type is registered.",
+              "longForm": "BindingSource.Services"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Explicit binding sources prevent ambiguous matches — especially when a simple type could come from route or query. [AsParameters] keeps signatures readable and makes OpenAPI reflect a structured query object. Wrong sources cause null parameters, 415 Unsupported Media Type, or silent wrong values. Senior interviews test [AsParameters], header-based versioning, and the single-body rule."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "[AsParameters] rules",
+          "body": "Properties must be bindable from route or query (simple types, enums, nullable). No [FromBody] properties inside an [AsParameters] type. Works in controllers and minimal APIs. Prefer a record for immutability."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Resolving binding sources",
+          "items": [
+            {
+              "title": "Check explicit attribute",
+              "body": "[FromQuery] on parameter or property wins over inference."
+            },
+            {
+              "title": "Apply [ApiController] inference",
+              "body": "If no attribute: complex type → body on POST/PUT; simple type → route then query."
+            },
+            {
+              "title": "[AsParameters] expansion",
+              "body": "Binder treats each property as a separate parameter with route/query sources."
+            },
+            {
+              "title": "DI resolution",
+              "body": "Types in DI are satisfied from Services binding source, not HTTP."
+            },
+            {
+              "title": "Bind and validate",
+              "body": "Each source reads from ValueProvider (route values, query collection, header dictionary)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "[AsParameters] binding flow",
+            "source": "flowchart LR\n  URL[\"/api/orders?page=2&status=Shipped\"] --> AP[AsParameters OrderQuery]\n  AP --> P1[Page = 2\\nfrom Query]\n  AP --> P2[Status = Shipped\\nfrom Query]\n  AP --> P3[Sort default\\noptional query]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Explicit binding sources on a controller action",
+            "code": "[HttpGet(\"{id:guid}/items\")]\npublic ActionResult<PagedResult<ItemDto>> ListItems(\n    [FromRoute] Guid id,\n    [FromQuery] int page = 1,\n    [FromQuery] int pageSize = 20,\n    [FromHeader(Name = \"X-Correlation-Id\")] string? correlationId,\n    [FromServices] IItemService items)\n{\n    var result = items.ListForOrder(id, page, pageSize);\n    return Ok(result);\n}",
+            "explanation": "[FromRoute] and [FromQuery] disambiguate simple types. [FromHeader] reads custom headers — useful for correlation IDs and feature flags. [FromServices] is optional but documents DI explicitly."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "[AsParameters] record for search and pagination",
+            "code": "public sealed record OrderQuery(\n    int Page = 1,\n    int PageSize = 20,\n    OrderStatus? Status = null,\n    string? Sort = \"createdDesc\");\n\n[HttpGet]\npublic ActionResult<PagedResult<OrderDto>> GetOrders(\n    [AsParameters] OrderQuery query,\n    [FromServices] IOrderService orders)\n    => Ok(orders.Search(query));\n\n// Minimal API — identical pattern:\napp.MapGet(\"/api/orders\", ([AsParameters] OrderQuery query, IOrderService svc)\n    => Results.Ok(svc.Search(query)));",
+            "explanation": "[AsParameters] collapses four query fields into one type. OpenAPI generators emit a single query object schema. Defaults in the record apply when query keys are absent."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "[AsParameters] mixing route and query properties",
+            "code": "public sealed record TenantOrderQuery(\n    [FromRoute] string TenantId,\n    [FromQuery] int Page = 1,\n    [FromQuery] DateOnly? From = null);\n\n[HttpGet(\"/api/{tenantId}/orders\")]\npublic IActionResult GetTenantOrders([AsParameters] TenantOrderQuery q)\n    => Ok(new { q.TenantId, q.Page, q.From });\n\n// Route property TenantId binds from {tenantId}\n// Query properties bind from ?page=1&from=2024-01-01",
+            "explanation": "Properties can specify [FromRoute] or [FromQuery] inside an [AsParameters] type. This pattern replaces long parameter lists on multi-tenant list endpoints."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Single body rule and form file binding",
+            "code": "// INVALID — two body binders:\n// public IActionResult Bad([FromBody] A a, [FromBody] B b)\n\n[HttpPost(\"upload\")]\n[Consumes(\"multipart/form-data\")]\npublic async Task<IActionResult> Upload(\n    [FromForm] string description,\n    [FromForm] IFormFile file)\n{\n    await using var stream = file.OpenReadStream();\n    // ...\n    return Ok();\n}",
+            "explanation": "Only one [FromBody] per request. File uploads use [FromForm] and multipart/form-data. [Consumes] restricts content types and improves OpenAPI accuracy."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Binding sources across frameworks",
+          "headers": [
+            "Source",
+            "ASP.NET Core",
+            "Express",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Route",
+              "[FromRoute] / route template",
+              "req.params",
+              "@Param()"
+            ],
+            [
+              "Query",
+              "[FromQuery] / [AsParameters]",
+              "req.query",
+              "@Query() class"
+            ],
+            [
+              "Header",
+              "[FromHeader]",
+              "req.headers['x-tenant']",
+              "@Headers()"
+            ],
+            [
+              "Body",
+              "[FromBody] (one only)",
+              "req.body",
+              "@Body()"
+            ],
+            [
+              "Composite query",
+              "[AsParameters] record",
+              "Manual destructuring",
+              "@Query() PaginationDto"
+            ],
+            [
+              "Services",
+              "Constructor / parameter DI",
+              "req.app.get('svc')",
+              "Constructor injection"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Putting [FromBody] on a property inside [AsParameters] — not supported. Using [FromQuery] on a complex type without a custom binder — only top-level properties bind. Forgetting [FromRoute] when route and query names collide. Relying on inference for PUT with both id in route and body — specify [FromRoute] on id."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "BindingSource.Metadata is attached to parameters for OpenAPI and client generators. [AsParameters] uses AsParametersBindingConvention — internally expands to property binders. For header-based API versioning, [FromHeader(Name = \"X-Api-Version\")] on an [AsParameters] property keeps version next to other query params in one DTO. Custom BindingSource can be created for advanced scenarios (custom ValueProvider). In minimal APIs, parameter order does not affect binding — only types and attributes matter. Production tip: log binding failures with action name and ModelState keys; spike in 400s often means client query contract drift."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "[AsParameters] vs alternatives",
+          "headers": [
+            "Pattern",
+            "When to use",
+            "Drawback"
+          ],
+          "rows": [
+            [
+              "[AsParameters] record",
+              "List/search endpoints, many query fields",
+              "Properties must be simple — no nested body"
+            ],
+            [
+              "Individual [FromQuery] params",
+              "1–3 query values",
+              "Long signatures, weak OpenAPI grouping"
+            ],
+            [
+              "[FromBody] query object",
+              "Non-REST search via POST",
+              "Not cacheable, breaks GET semantics"
+            ],
+            [
+              "Manual HttpContext.Request.Query",
+              "Escape hatch only",
+              "Untestable, bypasses ModelState"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing [AsParameters] exists in .NET 7+ for query bundling. Claiming multiple [FromBody] parameters work. Unable to explain difference between [FromServices] and constructor injection — same container, different binding stage. Saying headers are bound by default without [FromHeader]."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "[FromRoute], [FromQuery], [FromHeader], [FromBody], [FromForm] explicitly set where each value is read from the request.",
+    "Only one [FromBody] per request — use [AsParameters] or [FromQuery] for composite list/filter inputs on GET.",
+    "[AsParameters] (.NET 7+) binds record properties from route and query — preferred for pagination and search DTOs.",
+    "60s: Binding sources disambiguate route vs query vs body. ApiController infers defaults. AsParameters bundles query fields into one type for clean signatures and OpenAPI. Services come from DI, not HTTP.",
+    "Follow-up: how would you bind a nested filter object from query string?"
+  ],
+  "commonPitfalls": [
+    "Saying 'you can bind two JSON bodies' gets you rejected — HTTP has one body stream.",
+    "Using [FromBody] on GET list endpoints — use [AsParameters] with query instead.",
+    "Strong answer: 'Explicit attributes override inference. AsParameters for search DTOs. One body rule. FromHeader for correlation and versioning. DI types skip HTTP binding.'"
+  ],
+  "introducedIn": "Binding attributes from ASP.NET Core 1.0; [AsParameters] in .NET 7",
+  "relatedTopicIds": [
+    "dotnet-03-model-binding",
+    "dotnet-03-endpoint-routing",
+    "dotnet-02-api-versioning",
+    "dotnet-08-validation-filters-problems",
+    "dotnet-05-dependency-injection"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Destructuring req.query",
+      "note": "const { page, status } = req.query is manual [AsParameters]. ASP.NET binds and type-converts in one step — '2' becomes int 2 with error on invalid.",
+      "futureTopicSlug": "javascript/express/query-params"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS @Query() DTO class",
+      "note": "class PaginationDto { @Type(() => Number) page: number } mirrors [AsParameters] with implicit conversion. Nest needs class-transformer; ASP.NET uses TypeConverter infrastructure.",
+      "futureTopicSlug": "typescript/nestjs/query-dto"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Parameter binding in minimal APIs",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding"
+    },
+    {
+      "title": "AsParameters attribute",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding#binding-source-parameter-binding"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

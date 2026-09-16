@@ -1,0 +1,78 @@
+{
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "title": "Web API endpoints — interview",
+  "items": [
+    {
+      "question": "When would you choose controllers over minimal APIs for a new microservice?",
+      "answer": "Controllers when the service has many endpoints sharing filters (authorization, validation, logging), a team familiar with MVC/NestJS patterns, or heavy reliance on [ApiController] automatic 400 validation. Minimal APIs for small surface areas (< 15 routes), vertical-slice layout, prototypes, or AOT-friendly explicit routes. Runtime performance is identical — both compile to Endpoint objects in the same routing table. Hybrid is common: health checks as MapGet, domain CRUD in controllers.",
+      "followUps": [
+        "How does IEndpointFilter compare to IActionFilter?",
+        "What does [ApiController] give you that minimal APIs lack by default?"
+      ],
+      "sixtySeconds": "Same endpoint routing underneath. Controllers for filter-heavy APIs and ApiController validation. Minimal for small services and vertical slices. Hybrid is fine. NestJS maps to controllers; Express app.get maps to MapGet."
+    },
+    {
+      "question": "A GET to /api/orders/search returns the wrong order instead of search results. What happened?",
+      "answer": "Route template precedence: api/orders/{id} captured the literal segment 'search' as an id parameter. Fix by registering the literal route api/orders/search before the parameterized route, or use a constraint that excludes non-GUID values. ASP.NET prefers more specific templates, but a greedy {id} without constraints matches any string. Debug with endpoint logging — HttpContext.GetEndpoint()?.DisplayName shows which action matched.",
+      "followUps": [
+        "How do route constraints like :guid help?",
+        "Where does routing sit in the middleware pipeline?"
+      ],
+      "sixtySeconds": "Literal 'search' was captured by {id}. Add explicit literal route first or constrain {id}. Check endpoint DisplayName in logs. Specificity and constraints determine the winner."
+    },
+    {
+      "question": "Explain [AsParameters] and when you would use it.",
+      "answer": "[AsParameters] (.NET 7+) binds a record or class whose properties are populated from route and query string values in a single parameter. Ideal for list/search endpoints with pagination, sorting, and filters — instead of ten separate [FromQuery] parameters. Properties must be simple types bindable from route/query; no [FromBody] inside. Works in controllers and minimal APIs. OpenAPI emits one structured query object. Example: GetOrders([AsParameters] OrderQuery query) where OrderQuery has Page, PageSize, Status.",
+      "followUps": [
+        "Can you mix [FromRoute] and [FromQuery] properties inside [AsParameters]?",
+        "How is this different from POSTing a search body?"
+      ],
+      "sixtySeconds": "AsParameters bundles query and route fields into one record. Clean signatures, good OpenAPI. For GET list endpoints. Properties from route or query only — not body."
+    },
+    {
+      "question": "What is the difference between IActionResult, ActionResult<T>, and TypedResults?",
+      "answer": "IActionResult is the untyped controller result interface — Ok(), NotFound(), File(). ActionResult<T> documents the success type at compile time while still allowing NotFound() and other results. TypedResults (minimal APIs and .NET 7+ controllers) returns strongly typed IResult unions like Results<Ok<OrderDto>, NotFound> — OpenAPI sees both outcomes. IActionResult executes via MVC infrastructure; IResult via IResult.ExecuteAsync. Both defer setting status codes and serializing until after the handler returns.",
+      "followUps": [
+        "When should you return a plain object instead of ActionResult<T>?",
+        "How does ValidationProblem relate to RFC 7807?"
+      ],
+      "sixtySeconds": "IActionResult untyped. ActionResult<T> typed success plus error results. TypedResults union types for minimal APIs. Never 200 with error flags — use NotFound, Problem, proper status codes."
+    },
+    {
+      "question": "How does model binding decide where each parameter value comes from?",
+      "answer": "Explicit attributes ([FromRoute], [FromQuery], [FromBody], [FromHeader], [FromForm]) override defaults. [ApiController] inference: complex types from JSON body on POST/PUT/PATCH; simple types from route then query; IFormFile from form. Services registered in DI resolve from the container, not HTTP. Only one [FromBody] per request. Binding failures populate ModelState; [ApiController] converts invalid models to 400 ValidationProblem automatically. Minimal APIs use the same binding infrastructure.",
+      "followUps": [
+        "What happens when a query string cannot convert to int?",
+        "How do JsonOptions and HttpJsonOptions differ?"
+      ],
+      "sixtySeconds": "Attributes or ApiController inference pick route, query, header, form, body. One body rule. DI types skip HTTP. ModelState errors to 400 with ApiController. Same binders for minimal APIs."
+    },
+    {
+      "question": "Does ASP.NET Core content negotiation mean your API always returns XML and JSON?",
+      "answer": "No. Modern Web APIs standardize on JSON via System.Text.Json output formatters. Content negotiation selects among registered IOutputFormatter implementations based on the Accept header — XML requires explicitly adding AddXmlSerializerFormatters(). Most teams document JSON-only in OpenAPI and skip XML entirely. ObjectResult execution runs the selected formatter. Misaligned JsonOptions vs HttpJsonOptions causes controllers and minimal APIs to serialize differently — configure both. Use File() for CSV/binary exports instead of over-engineering Accept negotiation.",
+      "followUps": [
+        "What is the difference between 406 and 415?",
+        "When would you add a custom IOutputFormatter?"
+      ],
+      "sixtySeconds": "JSON default via System.Text.Json. XML opt-in. Accept drives formatter selection. Most APIs are JSON-only. Align JsonOptions and HttpJsonOptions. File() bypasses formatters."
+    },
+    {
+      "question": "How do you safely handle a 200 MB file upload in production?",
+      "answer": "Never buffer the entire file into memory. Bind IFormFile from multipart/form-data, validate content type and size server-side, then stream via OpenReadStream() to blob storage (S3, Azure Blob). Configure Kestrel MaxRequestBodySize, FormOptions.MultipartBodyLengthLimit, and reverse proxy client_max_body_size consistently. Use [RequestSizeLimit] per endpoint. Do not trust client FileName — generate safe storage keys. For scale, use presigned URLs so clients upload directly to blob storage. Return metadata URL, not file system paths.",
+      "followUps": [
+        "What does FormOptions.MemoryBufferThreshold do?",
+        "When do you call DisableAntiforgery on upload endpoints?"
+      ],
+      "sixtySeconds": "IFormFile stream to blob. Validate type and size. Kestrel plus proxy limits. Safe filenames. Presigned URLs at scale. Never byte[] for large files."
+    },
+    {
+      "question": "Compare ASP.NET Core endpoint routing to Express and NestJS.",
+      "answer": "Express app.get('/orders/:id', handler) maps to MapGet or [HttpGet(\"{id}\")] — inline handler with manual req.params parsing versus automatic typed binding. NestJS @Controller('orders') + @Get(':id') mirrors controller attributes with constructor DI and guards parallel to IActionFilter and [Authorize]. ASP.NET adds route constraints (:guid), compile-time route validation, and link generation (CreatedAtRoute). Express matches first-registered route; ASP.NET uses DFA specificity. All three register routes at startup; ASP.NET stores them as Endpoint metadata consumed by middleware.",
+      "followUps": [
+        "How does NestJS ValidationPipe compare to [ApiController] 400 behavior?",
+        "What is MapGroup equivalent in Express?"
+      ],
+      "sixtySeconds": "MapGet like Express app.get with auto binding. Controllers like NestJS @Controller. ASP.NET adds constraints and link gen. Same route table for both ASP.NET styles. Express first-match vs ASP.NET specificity."
+    }
+  ]
+}

@@ -1,0 +1,299 @@
+{
+  "id": "dotnet-03-model-binding",
+  "slug": "model-binding",
+  "title": "Model binding (from body, route, query, and headers)",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 3,
+  "hook": "Model binding is the bridge between raw HTTP bytes and your C# parameters. ASP.NET Core reads the route, query string, headers, and body — then builds typed objects so your handler works with OrderDto instead of parsing strings manually.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Model binding runs after routing selects an endpoint and before your action or minimal API handler executes. The DefaultModelBinder (and specialized binders for collections, forms, and files) maps HTTP request data to action parameters and complex types. For [ApiController] classes, inference rules apply: complex types from JSON body, simple types from route/query, IFormFile from form. Binding failures set ModelState errors; [ApiController] converts invalid models to HTTP 400 with a validation problem response automatically."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Model binding",
+              "plainDefinition": "The process of creating .NET objects from HTTP request data (route values, query, headers, body, form).",
+              "example": "POST JSON body → CreateOrderRequest object on action parameter.",
+              "longForm": "Model binding"
+            },
+            {
+              "term": "ModelState",
+              "plainDefinition": "A dictionary of binding and validation errors keyed by parameter or property name.",
+              "example": "ModelState.IsValid is false when a required field is missing.",
+              "longForm": "ModelState"
+            },
+            {
+              "term": "IModelBinder",
+              "plainDefinition": "Interface for custom binding logic — implement BindModelAsync to control how a type is populated.",
+              "example": "Custom binder for a strongly typed Id value object from route string.",
+              "longForm": "IModelBinder"
+            },
+            {
+              "term": "Body model limit",
+              "plainDefinition": "Kestrel and form options cap request body size — configure for large uploads separately.",
+              "example": "[RequestSizeLimit(10_000_000)] or FormOptions.MultipartBodyLengthLimit.",
+              "longForm": "Body model limit"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Correct binding eliminates boilerplate parsing and prevents security issues from trusting raw input. Misunderstanding binding sources causes subtle bugs: reading body twice, binding GET requests from body (not supported by default), or culture-sensitive decimal parsing. Senior engineers configure JSON options, custom binders for domain types, and consistent 400 responses for client errors."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Binding is not validation",
+          "body": "Binding converts strings to types (e.g. 'abc' to int fails binding). Validation checks business rules (e.g. age > 0) via DataAnnotations or FluentValidation. Both contribute to ModelState but at different pipeline stages."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Model binding pipeline",
+          "items": [
+            {
+              "title": "Endpoint invokes model binding",
+              "body": "ControllerActionInvoker or minimal API infrastructure creates ParameterBinder per handler parameter."
+            },
+            {
+              "title": "Select binding source",
+              "body": "Attributes ([FromBody], [FromQuery]) or [ApiController] inference pick route, query, header, form, or body."
+            },
+            {
+              "title": "Run binders",
+              "body": "SimpleTypeModelBinder for primitives; BodyModelBinder deserializes JSON via System.Text.Json input formatter."
+            },
+            {
+              "title": "Populate ModelState",
+              "body": "Binding errors add ModelState entries. Validation runs if [ApiController] or explicit validation filter is active."
+            },
+            {
+              "title": "Handler receives objects",
+              "body": "Fully bound parameters are passed to your method. Invalid model may short-circuit to 400 before your code runs."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "HTTP request to bound parameters",
+            "source": "flowchart TD\n  R[HTTP Request] --> RT[Route values\\n/api/orders/42]\n  R --> QS[Query string\\n?page=2]\n  R --> H[Headers\\nX-Tenant-Id]\n  R --> B[Body JSON]\n  RT --> MB[Model binder]\n  QS --> MB\n  H --> MB\n  B --> MB\n  MB --> P[Handler parameters\\nint id, int page,\\nCreateOrderRequest body]\n  MB --> MS[ModelState errors\\n→ 400 if invalid]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Automatic binding with [ApiController] inference",
+            "code": "[ApiController]\n[Route(\"api/orders\")]\npublic sealed class OrdersController : ControllerBase\n{\n    // id from route, page from query, body from JSON — no attributes needed\n    [HttpPut(\"{id:guid}\")]\n    public async Task<IActionResult> Update(\n        Guid id,\n        [FromQuery] int page,\n        UpdateOrderRequest request, // inferred [FromBody]\n        CancellationToken ct)\n    {\n        if (!ModelState.IsValid) return ValidationProblem(ModelState);\n        // ...\n        return NoContent();\n    }\n}",
+            "explanation": "[ApiController] infers [FromBody] for complex types in POST/PUT/PATCH. Simple types in PUT without [FromBody] come from route/query. Explicit [FromQuery] disambiguates when needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal API — same binding rules for parameters",
+            "code": "app.MapPut(\"/api/orders/{id:guid}\", async (\n    Guid id,\n    int page,\n    UpdateOrderRequest request,\n    IOrderService svc,\n    CancellationToken ct) =>\n{\n    await svc.UpdateAsync(id, request, ct);\n    return Results.NoContent();\n});\n\n// Services (IOrderService) come from DI, not binding\n// id from route, page from query, request from body",
+            "explanation": "Minimal APIs use the same parameter binding infrastructure as controllers. Types registered in DI are resolved from the container; everything else is bound from the request."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom model binder for a domain type",
+            "code": "public sealed class OrderId\n{\n    public Guid Value { get; }\n    public OrderId(Guid value) => Value = value;\n}\n\npublic sealed class OrderIdBinder : IModelBinder\n{\n    public Task BindModelAsync(ModelBindingContext ctx)\n    {\n        var raw = ctx.ValueProvider.GetValue(ctx.ModelName).FirstValue;\n        if (Guid.TryParse(raw, out var guid))\n        {\n            ctx.Result = ModelBindingResult.Success(new OrderId(guid));\n            return Task.CompletedTask;\n        }\n        ctx.ModelState.TryAddModelError(ctx.ModelName, \"Invalid order id\");\n        ctx.Result = ModelBindingResult.Failed();\n        return Task.CompletedTask;\n    }\n}\n\n[ModelBinder(BinderType = typeof(OrderIdBinder))]\npublic sealed record GetOrderRequest(OrderId Id);",
+            "explanation": "Custom binders encapsulate parse logic and error messages. Register via [ModelBinder] attribute or ModelBinderProvider for global registration."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "JSON binding options — camelCase and enums",
+            "code": "builder.Services.AddControllers()\n    .AddJsonOptions(o =>\n    {\n        o.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;\n        o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());\n        o.JsonSerializerOptions.NumberHandling = JsonNumberHandling.AllowReadingFromString;\n    });\n\n// Minimal APIs share options when you call:\nbuilder.Services.ConfigureHttpJsonOptions(o =>\n    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);",
+            "explanation": "System.Text.Json is the default serializer. Configure naming policy once — clients send camelCase JSON, C# properties stay PascalCase. Mismatched options cause silent null defaults."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Binding vs manual parsing",
+          "headers": [
+            "Aspect",
+            "ASP.NET Core",
+            "Express",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Route params",
+              "Auto-bound to typed parameters",
+              "req.params.id (string)",
+              "@Param('id') with pipes"
+            ],
+            [
+              "Query string",
+              "Auto-bound, type conversion",
+              "req.query.page",
+              "@Query() DTO"
+            ],
+            [
+              "JSON body",
+              "BodyModelBinder + System.Text.Json",
+              "express.json() → req.body",
+              "@Body() DTO + ValidationPipe"
+            ],
+            [
+              "Invalid types",
+              "ModelState error → 400",
+              "NaN or undefined unless validated",
+              "400 from ValidationPipe"
+            ],
+            [
+              "Culture",
+              "Thread culture affects decimals/dates",
+              "Always JS parsing rules",
+              "Depends on transform pipe"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Multiple [FromBody] parameters — only one body binder per request. [FromBody] on GET — ignored or fails. Reading Request.Body manually then expecting model binding to work — stream is consumed. Nullable reference types without required modifier — missing JSON properties bind as null without error until validation."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Model binding runs in the invocation pipeline, not middleware. BodyModelBinder enables buffering (EnableBuffering) so the stream can be read once — important if you also log raw bodies. [ApiController] applies InvalidModelStateResponseFactory returning ValidationProblemDetails (RFC 7807-ish). For minimal APIs, add .AddEndpointFilter<ValidationFilter>() or call Results.ValidationProblem manually. Culture: invariant culture is recommended for APIs — set RequestLocalizationOptions or use [BindProperty] with explicit formats. Prove binding issues with logging ModelState keys in a filter and 400 rate in Application Insights."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Binding source inference ([ApiController])",
+          "headers": [
+            "Parameter type",
+            "Inferred source",
+            "Override"
+          ],
+          "rows": [
+            [
+              "Complex type (POST/PUT/PATCH)",
+              "Body",
+              "[FromQuery] for rare cases"
+            ],
+            [
+              "Simple type",
+              "Route, then query",
+              "[FromRoute], [FromQuery]"
+            ],
+            [
+              "IFormFile",
+              "Form",
+              "[FromForm]"
+            ],
+            [
+              "CancellationToken",
+              "Request abort token",
+              "Automatic, not from client"
+            ],
+            [
+              "Service (DI)",
+              "Container",
+              "Not a binding source"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing model binding with JSON deserialization only — route and query binding are separate binders. Saying you can have two [FromBody] parameters. Not knowing [ApiController] auto-400 behavior. Ignoring culture impact on decimal/date parsing in global APIs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Model binding maps route, query, header, form, and body data to typed parameters before your handler runs.",
+    "[ApiController] infers binding sources and returns 400 on invalid ModelState — minimal APIs need explicit validation.",
+    "Configure System.Text.Json naming once; camelCase JSON to PascalCase C# is the production default.",
+    "60s: After routing, ParameterBinder runs per parameter. Complex types from body on POST. Simple types from route/query. ModelState captures errors. Custom IModelBinder for domain types. Not the same as validation.",
+    "Follow-up: how do you bind a composite query object without putting every field as a separate parameter?"
+  ],
+  "commonPitfalls": [
+    "Saying 'binding validates business rules' gets you rejected — binding is type conversion; validation is separate.",
+    "Two [FromBody] parameters on one action — only one body per HTTP request.",
+    "Strong answer: 'Binding sources inferred or explicit. ApiController gives 400 ProblemDetails. Share JsonOptions. Custom binders for value objects. Culture matters for decimals.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; inference rules evolved with [ApiController] in 2.1",
+  "relatedTopicIds": [
+    "dotnet-03-parameter-binding-sources",
+    "dotnet-03-controllers-vs-minimal-apis",
+    "dotnet-08-validation-filters-problems",
+    "dotnet-02-http-fundamentals",
+    "csharp-13-task-async-await"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "express.json() middleware",
+      "note": "Express parses body in middleware before the handler; ASP.NET binds at invocation time per parameter. Express req.body is untyped; C# binding produces strongly typed objects with conversion errors in ModelState.",
+      "futureTopicSlug": "javascript/express/middleware"
+    },
+    {
+      "language": "typescript",
+      "concept": "class-validator + ValidationPipe",
+      "note": "NestJS ValidationPipe runs after binding — similar to DataAnnotations + [ApiController] 400. NestJS @Body() DTO parallels inferred [FromBody] on complex types.",
+      "futureTopicSlug": "typescript/nestjs/pipes"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Model binding in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/mvc/models/model-binding"
+    },
+    {
+      "title": "Parameter binding in minimal APIs",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

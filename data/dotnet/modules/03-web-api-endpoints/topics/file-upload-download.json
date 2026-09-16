@@ -1,0 +1,294 @@
+{
+  "id": "dotnet-03-file-upload-download",
+  "slug": "file-upload-download",
+  "title": "File upload and download endpoints (IFormFile, streaming)",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 7,
+  "hook": "File endpoints move bytes — not JSON. Uploads arrive as multipart/form-data bound to IFormFile; downloads stream from disk or cloud storage with correct Content-Type and Content-Disposition headers without loading entire files into memory.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "File uploads in ASP.NET Core use multipart/form-data encoding. IFormFile represents one uploaded file with FileName, ContentType, Length, and OpenReadStream(). IFormFileCollection handles multiple files. Downloads return FileResult variants — PhysicalFile, FileStreamResult, or Results.File — streaming bytes to the client with Content-Disposition: attachment or inline. For large files, always stream; never read the entire file into a byte[] unless size is bounded and small."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IFormFile",
+              "plainDefinition": "Represents an uploaded file from a multipart form POST.",
+              "example": "[FromForm] IFormFile avatar",
+              "longForm": "IFormFile"
+            },
+            {
+              "term": "multipart/form-data",
+              "plainDefinition": "HTTP content type for forms with files — body contains parts separated by boundaries.",
+              "example": "Content-Type: multipart/form-data; boundary=----WebKitFormBoundary",
+              "longForm": "multipart/form-data"
+            },
+            {
+              "term": "Content-Disposition",
+              "plainDefinition": "Response header telling the browser to download (attachment) or display inline.",
+              "example": "Content-Disposition: attachment; filename=\"report.pdf\"",
+              "longForm": "Content-Disposition"
+            },
+            {
+              "term": "Request size limit",
+              "plainDefinition": "Kestrel and form options cap upload size — override per endpoint or globally.",
+              "example": "[RequestSizeLimit(52_428_800)] // 50 MB",
+              "longForm": "Request size limit"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Naive file handling causes out-of-memory crashes, security holes (path traversal, unrestricted extensions), and slow responses. Production APIs validate file type and size, scan for malware, store in blob storage (S3, Azure Blob), and return URLs — not raw paths. Streaming downloads keep memory flat for large PDFs and exports. Senior interviews cover limits, buffering, and async streaming."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Stream, don't buffer",
+          "body": "Use await file.CopyToAsync(stream) or OpenReadStream() piped to blob upload. For downloads, return FileStreamResult with FileShare.Read and enable range requests for large media if needed."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Upload and download lifecycle",
+          "items": [
+            {
+              "title": "Client sends multipart POST",
+              "body": "Browser or client sets Content-Type: multipart/form-data with file and metadata fields."
+            },
+            {
+              "title": "Form model binder runs",
+              "body": "IFormFile parameters populated from form sections. Size checked against limits."
+            },
+            {
+              "title": "Handler validates and stores",
+              "body": "Check extension, magic bytes, virus scan; stream to blob storage or disk with safe name."
+            },
+            {
+              "title": "Download request",
+              "body": "GET endpoint opens stream from storage — never expose raw file system paths."
+            },
+            {
+              "title": "FileResult executes",
+              "body": "Sets Content-Type, Content-Disposition, streams bytes asynchronously to response."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "File upload path",
+            "source": "flowchart LR\n  C[Client multipart POST] --> K[Kestrel buffers\\nwithin size limit]\n  K --> B[IFormFile binder]\n  B --> H[Handler validates]\n  H --> S[Stream to blob\\nS3 / Azure Blob]\n  S --> R[Return 201 + metadata URL]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Upload with IFormFile and size limit",
+            "code": "[HttpPost(\"upload\")]\n[Consumes(\"multipart/form-data\")]\n[RequestSizeLimit(10 * 1024 * 1024)] // 10 MB\npublic async Task<ActionResult<FileMetadataDto>> Upload(\n    [FromForm] IFormFile file,\n    [FromForm] string category,\n    IBlobStorage storage,\n    CancellationToken ct)\n{\n    if (file.Length == 0) return BadRequest(\"Empty file\");\n    if (!IsAllowedContentType(file.ContentType))\n        return BadRequest(\"Unsupported file type\");\n\n    var safeName = Path.GetRandomFileName();\n    await using var stream = file.OpenReadStream();\n    var url = await storage.UploadAsync(safeName, stream, file.ContentType, ct);\n\n    return Created(url, new FileMetadataDto(safeName, file.Length, category));\n}",
+            "explanation": "OpenReadStream() returns a stream — copy async to storage. Validate ContentType and extension; never trust client FileName for storage paths. RequestSizeLimit guards Kestrel memory."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Multiple files and minimal API upload",
+            "code": "[HttpPost(\"batch\")]\npublic async Task<IActionResult> UploadMany([FromForm] List<IFormFile> files)\n{\n    foreach (var file in files)\n    {\n        await using var stream = file.OpenReadStream();\n        // process each stream\n    }\n    return Accepted();\n}\n\n// Minimal API:\napp.MapPost(\"/upload\", async (IFormFile file, IBlobStorage storage) =>\n{\n    await using var stream = file.OpenReadStream();\n    var id = await storage.UploadAsync(stream);\n    return Results.Created($\"/files/{id}\", new { id });\n}).DisableAntiforgery(); // APIs use auth, not CSRF tokens",
+            "explanation": "List<IFormFile> binds multiple parts. Minimal APIs bind IFormFile directly. DisableAntiforgery for bearer-token APIs — antiforgery is for cookie-based forms."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Download — streaming FileResult",
+            "code": "[HttpGet(\"{id:guid}\")]\npublic async Task<IActionResult> Download(Guid id, IFileStore store, CancellationToken ct)\n{\n    var meta = await store.GetMetadataAsync(id, ct);\n    if (meta is null) return NotFound();\n\n    var stream = await store.OpenReadAsync(id, ct);\n    return File(stream, meta.ContentType, meta.DownloadName, enableRangeProcessing: true);\n}\n\n// Minimal API:\napp.MapGet(\"/files/{id:guid}\", async (Guid id, IFileStore store) =>\n{\n    var stream = await store.OpenReadAsync(id);\n    return stream is null ? Results.NotFound() : Results.File(stream, \"application/pdf\", \"invoice.pdf\");\n});",
+            "explanation": "File() sets Content-Disposition and streams asynchronously. enableRangeProcessing supports partial content for video/large PDF. Results.File is the minimal API equivalent."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Global upload limits in Program.cs",
+            "code": "builder.Services.Configure<FormOptions>(o =>\n{\n    o.MultipartBodyLengthLimit = 52_428_800; // 50 MB\n    o.MemoryBufferThreshold = 65_536; // spill to disk above 64 KB\n});\n\nbuilder.WebHost.ConfigureKestrel(o =>\n{\n    o.Limits.MaxRequestBodySize = 52_428_800;\n});\n\n// Per-endpoint override:\n// [RequestFormLimits(MultipartBodyLengthLimit = 104_857_600)]",
+            "explanation": "FormOptions.MemoryBufferThreshold controls when multipart sections buffer to disk vs memory. Align Kestrel MaxRequestBodySize with FormOptions. Reverse proxies (nginx) need client_max_body_size too."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "File handling across frameworks",
+          "headers": [
+            "Aspect",
+            "ASP.NET Core",
+            "Express (multer)",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Upload parsing",
+              "IFormFile built-in binder",
+              "multer middleware",
+              "@UseInterceptors(FileInterceptor)"
+            ],
+            [
+              "Storage pattern",
+              "Stream to blob SDK",
+              "diskStorage / memoryStorage",
+              "Stream to service"
+            ],
+            [
+              "Size limits",
+              "Kestrel + FormOptions + attribute",
+              "limits: { fileSize }",
+              "ParseFilePipe validators"
+            ],
+            [
+              "Download",
+              "File(), Results.File, stream",
+              "res.download(path)",
+              "@Res() StreamableFile"
+            ],
+            [
+              "CSRF",
+              "Antiforgery for cookie forms",
+              "csurf middleware",
+              "Less relevant for JWT APIs"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Saving files with client-provided FileName — path traversal risk (../../etc/passwd). Loading entire IFormFile into byte[] for large uploads. Forgetting reverse proxy body size limits. Returning local file paths to clients instead of opaque IDs or signed URLs. Not disposing streams — use await using."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "MultipartReader parses sections; IFormFile sections above MemoryBufferThreshold write to temp disk. For virus scan, tee stream to scanner while uploading to blob (Pipeline or custom ReadOnlySequence). Use IAsyncEnumerable<byte> or Stream for true streaming responses. Signed URLs (S3 presigned, Azure SAS) offload bandwidth from API servers. Production: WAF file type rules, per-tenant quotas, idempotent upload IDs, and background thumbnail generation. Monitor 413 Payload Too Large and OOM in container limits. DisableAntiforgery on JWT APIs; keep it for cookie-based Blazor forms."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Upload architecture tradeoffs",
+          "headers": [
+            "Pattern",
+            "Pros",
+            "Cons"
+          ],
+          "rows": [
+            [
+              "Direct upload to API → blob",
+              "Simple, full validation control",
+              "API bandwidth bottleneck"
+            ],
+            [
+              "Presigned URL client → blob",
+              "Scales, offloads bytes",
+              "Client uploads before metadata registered"
+            ],
+            [
+              "Chunked/resumable (tus, S3 multipart)",
+              "Large files, mobile networks",
+              "More client complexity"
+            ],
+            [
+              "Base64 in JSON",
+              "Easy for tiny files",
+              "33% overhead, bad for large files"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying you read file.ToByteArray() for a 500 MB upload. Storing uploads under wwwroot with original filenames. Not mentioning reverse proxy body limits. Unable to explain IFormFile vs streaming raw Request.Body."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Uploads use multipart/form-data bound to IFormFile — stream with OpenReadStream(), never buffer unbounded files.",
+    "Downloads return File() or Results.File with correct Content-Type and Content-Disposition; enable range processing for large media.",
+    "Set Kestrel MaxRequestBodySize, FormOptions, and reverse proxy limits consistently; validate type and size server-side.",
+    "60s: IFormFile from form binder. Stream to blob storage with safe names. File() streams download. Presigned URLs scale uploads. RequestSizeLimit per endpoint. Never trust client filenames.",
+    "Follow-up: how would you implement resumable uploads for mobile clients?"
+  ],
+  "commonPitfalls": [
+    "Saying 'read the file into a byte array' for large uploads gets you rejected — stream to storage.",
+    "Using client FileName in storage path — path traversal vulnerability.",
+    "Strong answer: 'IFormFile streams. Validate type and size. Blob storage with opaque IDs. Presigned URLs at scale. Align Kestrel and nginx limits.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 (IFormFile); streaming improvements in 2.0+",
+  "relatedTopicIds": [
+    "dotnet-03-parameter-binding-sources",
+    "dotnet-03-action-results",
+    "dotnet-03-model-binding",
+    "dotnet-01-kestrel-and-reverse-proxy",
+    "dotnet-02-http-fundamentals"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "multer middleware",
+      "note": "Express multer parses multipart before the handler — similar to IFormFile binding. multer.memoryStorage() is the anti-pattern ASP.NET avoids with disk threshold spill. Both need explicit size limits.",
+      "futureTopicSlug": "javascript/express/file-upload"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS FileInterceptor",
+      "note": "NestJS @UploadedFile() parallels [FromForm] IFormFile. ParseFilePipe adds validation like custom content-type checks in ASP.NET handlers.",
+      "futureTopicSlug": "typescript/nestjs/file-upload"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Upload files in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads"
+    },
+    {
+      "title": "Form options and limits",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/mvc/models/file-uploads#file-upload-limits"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

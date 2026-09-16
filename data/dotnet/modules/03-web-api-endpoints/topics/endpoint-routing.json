@@ -1,0 +1,285 @@
+{
+  "id": "dotnet-03-endpoint-routing",
+  "slug": "endpoint-routing",
+  "title": "Endpoint routing (MapGet, MapControllers, route templates)",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 2,
+  "hook": "Endpoint routing is how ASP.NET Core decides which C# method runs for a given URL and HTTP verb. MapControllers and MapGet both write into the same route table — templates, constraints, and precedence rules determine the winner.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Endpoint routing replaced the legacy IRouter stack in ASP.NET Core 3.0. At startup, your app registers RouteEndpoint objects — each has a route pattern (like api/orders/{id:guid}), HTTP methods, and a RequestDelegate handler. At request time, the routing middleware matches the incoming URL against all registered endpoints and selects the best match. MapControllers() registers controller actions; MapGet/MapPost register minimal API handlers. UseRouting() separates route matching from endpoint execution; UseEndpoints() (or WebApplication's implicit pipeline) runs the matched handler."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Route template",
+              "plainDefinition": "A pattern with literals and parameters, e.g. api/products/{id:int}.",
+              "example": "[Route(\"api/[controller]/{id:guid}\")]",
+              "longForm": "Route template"
+            },
+            {
+              "term": "Route constraint",
+              "plainDefinition": "A rule on a parameter segment — :int, :guid, :minlength(3) — to narrow matches.",
+              "example": "{slug:alpha:minlength(3)} matches only alphabetic slugs of 3+ chars.",
+              "longForm": "Route constraint"
+            },
+            {
+              "term": "Route order / precedence",
+              "plainDefinition": "When multiple templates match, more specific routes win over catch-alls.",
+              "example": "api/orders/recent beats api/orders/{id} when URL is /api/orders/recent.",
+              "longForm": "Route order / precedence"
+            },
+            {
+              "term": "Endpoint metadata",
+              "plainDefinition": "Attributes attached to an endpoint: [Authorize], Produces, HttpMethodMetadata.",
+              "example": ".RequireAuthorization() on a MapGroup adds metadata to all child routes.",
+              "longForm": "Endpoint metadata"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Misconfigured routing causes 404s, ambiguous match exceptions, or wrong handlers executing. Understanding route templates lets you design RESTful URLs (nouns, not verbs), apply versioning prefixes, and debug why a request hits the wrong action. In interviews, routing connects to middleware order: routing must run before authorization and endpoint execution."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Debug routing in Development",
+          "body": "Enable logging for Microsoft.AspNetCore.Routing at Debug level. The console shows which endpoint matched and why others were rejected. Use app.MapGet(...).WithName(\"GetOrderById\") for named endpoints in link generation."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Endpoint matching lifecycle",
+          "items": [
+            {
+              "title": "Build route table at startup",
+              "body": "Controller discovery and MapGet calls populate EndpointDataSource with all RouteEndpoints."
+            },
+            {
+              "title": "Request enters routing middleware",
+              "body": "DfaMatcher (deterministic finite automaton) finds candidate endpoints for the path."
+            },
+            {
+              "title": "Filter by HTTP method",
+              "body": "GET request discards POST-only endpoints. Method mismatch yields 405 if route exists."
+            },
+            {
+              "title": "Select best match",
+              "body": "More specific templates and constraints beat generic {id} catch segments."
+            },
+            {
+              "title": "Store endpoint in HttpContext",
+              "body": "HttpContext.GetEndpoint() returns the match. Later middleware and the handler read metadata."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Route template matching",
+            "source": "flowchart LR\n  URL[\"/api/orders/3fa85f64\"] --> M[DfaMatcher]\n  M --> C1[\"api/orders/{id:guid}\\n✓ constraint match\"]\n  M --> C2[\"api/orders/recent\\n✗ literal mismatch\"]\n  M --> C3[\"api/{resource}/{id}\\n✓ but less specific\"]\n  C1 --> W[\"Winner: OrdersController.GetById\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Controller route templates and constraints",
+            "code": "[ApiController]\n[Route(\"api/v{version:apiVersion}/[controller]\")]\npublic sealed class ProductsController : ControllerBase\n{\n    // GET api/v1/products/42\n    [HttpGet(\"{id:int}\")]\n    public ActionResult<ProductDto> GetById(int id) => Ok(new ProductDto(id));\n\n    // GET api/v1/products/search?q=phone — literal segment beats {id}\n    [HttpGet(\"search\")]\n    public ActionResult<IEnumerable<ProductDto>> Search([FromQuery] string q)\n        => Ok([]);\n\n    // GET api/v1/products/featured — same precedence lesson\n    [HttpGet(\"featured\")]\n    public ActionResult<ProductDto> Featured() => Ok(new ProductDto(0));\n}",
+            "explanation": "Literal segments (search, featured) must be declared to avoid being captured by {id:int}. [controller] token substitutes the class name minus 'Controller'."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal API MapGroup with route constraints",
+            "code": "var api = app.MapGroup(\"/api/v1/products\");\n\napi.MapGet(\"/{id:int}\", (int id) => Results.Ok(new { id }))\n   .WithName(\"GetProduct\");\n\napi.MapGet(\"/search\", (string q) => Results.Ok(new { q }))\n   .WithName(\"SearchProducts\");\n\n// Catch-all must be last and is rarely needed in REST APIs\napi.MapGet(\"/{**slug}\", (string slug) => Results.NotFound($\"Unknown: {slug}\"));",
+            "explanation": "MapGroup prefixes all routes. WithName enables CreatedAtRoute and link generation. Order of registration matters when templates overlap."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Link generation with named routes",
+            "code": "[HttpPost]\npublic IActionResult Create([FromBody] CreateProductRequest request)\n{\n    var id = 42;\n    // Generates URL using route name and values\n    var url = Url.Link(\"GetProduct\", new { id });\n    return Created(url!, new ProductDto(id));\n}\n\n// Minimal API equivalent:\nproducts.MapPost(\"/\", (CreateProductRequest req) =>\n{\n    var id = 42;\n    return Results.CreatedAtRoute(\"GetProduct\", new { id }, new { id });\n});",
+            "explanation": "Named routes decouple URL construction from hard-coded strings. CreatedAtAction/CreatedAtRoute produce Location headers per REST conventions."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Routing: ASP.NET Core vs Express vs NestJS",
+          "headers": [
+            "Feature",
+            "ASP.NET Core",
+            "Express",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Route registration",
+              "Attributes + MapControllers / MapGet at startup",
+              "app.get/post at startup",
+              "@Get/@Post on controller methods"
+            ],
+            [
+              "Parameter constraints",
+              ":int, :guid, :regex(...) in template",
+              "Manual parsing in handler",
+              "Pipes transform params"
+            ],
+            [
+              "Route groups",
+              "MapGroup, [Route] prefix on controller",
+              "express.Router() mount",
+              "@Controller('prefix')"
+            ],
+            [
+              "Ambiguous routes",
+              "Throws at startup or first request",
+              "First registered wins (order matters)",
+              "Throws at bootstrap if duplicate"
+            ],
+            [
+              "Link generation",
+              "Url.Link, CreatedAtRoute",
+              "Manual string concat",
+              "Not built-in"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Overlapping routes where {id} captures literal paths like 'search' — add explicit literal routes first. Forgetting HTTP method attribute — a controller action without [HttpGet]/[HttpPost] may not map. Using catch-all {**path} too eagerly — hides routing bugs. Calling MapControllers before UseAuthorization — auth metadata won't run (middleware order topic)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Endpoint routing uses a DFA built at startup for O(path length) matching. EndpointDataSource is observable — hot reload in development can refresh routes. RouteEndpoint.Order and IEndpointRouteBuilder extension order affect precedence when specificity is equal. LinkGenerator resolves URLs from endpoint metadata without hitting the network. For production debugging, log HttpContext.GetEndpoint()?.DisplayName in middleware and correlate with 404 spikes in Application Insights. Custom IEndpointMatcherPolicy can implement versioning or tenant-prefix routing."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Routing tradeoffs",
+          "headers": [
+            "Approach",
+            "Pros",
+            "Cons"
+          ],
+          "rows": [
+            [
+              "Attribute routing",
+              "Colocated with action, IDE navigation",
+              "Harder to see full route table at a glance"
+            ],
+            [
+              "Centralized MapGroup",
+              "One file shows all minimal routes",
+              "Large files if not split by feature"
+            ],
+            [
+              "Conventional routing",
+              "Legacy MVC {controller}/{action}",
+              "Rare in modern Web APIs — prefer attributes"
+            ],
+            [
+              "Catch-all routes",
+              "SPA fallback, proxy patterns",
+              "Masks 404s if placed too early"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing routing runs in middleware before the endpoint executes. Saying Express and ASP.NET routing are identical — Express has no compile-time route validation or constraint system. Unable to explain why /api/orders/search hits {id} instead of a search action — literal route specificity."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Endpoint routing registers all routes at startup; DfaMatcher selects the best template + HTTP method per request.",
+    "Literal route segments must be declared before generic {id} parameters to avoid accidental capture.",
+    "Name endpoints (WithName) for CreatedAtRoute and link generation — avoid hard-coded URLs in production.",
+    "60s: MapControllers and MapGet write to the same table. Templates use constraints like :guid. Specificity wins. Routing middleware sets HttpContext.Endpoint before auth and handler run.",
+    "Follow-up: where does routing sit relative to UseAuthentication and UseAuthorization in the pipeline?"
+  ],
+  "commonPitfalls": [
+    "Saying 'first registered route wins' like Express — ASP.NET uses specificity and constraints, not just order.",
+    "Letting {id} capture reserved literals like 'search' or 'health' — add explicit routes first.",
+    "Strong answer: 'DFA matcher at startup. Literal beats parameter. Name routes for link gen. Debug with endpoint DisplayName logging.'"
+  ],
+  "introducedIn": "ASP.NET Core 3.0 (endpoint routing)",
+  "relatedTopicIds": [
+    "dotnet-03-controllers-vs-minimal-apis",
+    "dotnet-03-model-binding",
+    "dotnet-04-middleware-order",
+    "dotnet-02-api-versioning",
+    "dotnet-02-rest-principles"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express Router mounting",
+      "note": "express.Router() with router.get('/:id') parallels MapGroup — a shared prefix and middleware. Express has no :guid constraint; you validate manually. ASP.NET rejects bad guids at routing with 404.",
+      "futureTopicSlug": "javascript/express/router"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS route path parameters",
+      "note": "NestJS @Get(':id') maps like {id} but validation pipes run after routing. ASP.NET route constraints filter before the handler is invoked.",
+      "futureTopicSlug": "typescript/nestjs/routing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Routing in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/routing"
+    },
+    {
+      "title": "Route templates and constraints",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/routing#route-template-reference"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

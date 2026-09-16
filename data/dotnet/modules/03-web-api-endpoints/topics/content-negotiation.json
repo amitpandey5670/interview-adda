@@ -1,0 +1,293 @@
+{
+  "id": "dotnet-03-content-negotiation",
+  "slug": "content-negotiation",
+  "title": "Content negotiation and formatters (JSON, XML, custom)",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 6,
+  "hook": "Content negotiation decides whether your API responds with JSON, XML, or another format based on the Accept header and your registered output formatters. Most modern Web APIs fix JSON only — but interviews still test how formatters plug into ObjectResult execution.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "When a handler returns an object or Ok(dto), ASP.NET Core wraps it in ObjectResult and selects an IOutputFormatter based on content negotiation. The client sends Accept: application/json (or */*), and the framework picks System.Text.JsonOutputFormatter by default. If the client requests an unsupported type, the API may return 406 Not Acceptable — unless you configure a default formatter regardless of Accept. Input formatters (IInputFormatter) deserialize request bodies on the way in; output formatters serialize on the way out."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Content negotiation",
+              "plainDefinition": "Selecting a response representation based on Accept, Accept-Charset, and registered formatters.",
+              "example": "Accept: application/xml → XmlSerializerOutputFormatter if registered.",
+              "longForm": "Content negotiation"
+            },
+            {
+              "term": "Output formatter",
+              "plainDefinition": "IOutputFormatter implementation that writes a CLR object to the response stream with a specific content type.",
+              "example": "SystemTextJsonOutputFormatter writes application/json.",
+              "longForm": "Output formatter"
+            },
+            {
+              "term": "Input formatter",
+              "plainDefinition": "IInputFormatter reads the request body into a model — paired with [Consumes] attribute.",
+              "example": "JsonInputFormatter for application/json POST bodies.",
+              "longForm": "Input formatter"
+            },
+            {
+              "term": "[Produces]",
+              "plainDefinition": "Declares response content types for an action — affects negotiation and OpenAPI.",
+              "example": "[Produces(\"application/json\", \"application/xml\")]",
+              "longForm": "[Produces]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Most greenfield Web APIs standardize on JSON and disable XML negotiation — simpler clients, smaller payloads, better tooling. You still need to understand negotiation when integrating with legacy SOAP/XML consumers, returning CSV exports, or debugging why a client gets 406. Misconfigured formatters cause empty bodies, wrong Content-Type headers, or camelCase vs PascalCase mismatches."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "JSON-only is the modern default",
+          "body": "Configure AddControllers().AddJsonOptions() once. For public REST APIs, document JSON only in OpenAPI and return 415/406 honestly when clients send wrong Content-Type or Accept. Do not register XML unless a consumer requires it."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Output formatter selection",
+          "items": [
+            {
+              "title": "Handler returns ObjectResult",
+              "body": "Ok(dto), return dto, or Results.Ok(dto) all become ObjectResult with the value."
+            },
+            {
+              "title": "Read Accept header",
+              "body": "ObjectResultExecutor asks OutputFormatterSelector to rank formatters against Accept values."
+            },
+            {
+              "title": "Match formatter",
+              "body": "First IOutputFormatter that CanWriteResult returns true wins — typically JSON."
+            },
+            {
+              "title": "Set Content-Type",
+              "body": "Response header set to application/json; charset=utf-8."
+            },
+            {
+              "title": "Serialize value",
+              "body": "Formatter writes async to Response.Body using configured JsonSerializerOptions."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Content negotiation flow",
+            "source": "flowchart TD\n  A[Handler returns OrderDto] --> B[ObjectResult]\n  B --> C{Accept header}\n  C -->|application/json| D[SystemTextJsonOutputFormatter]\n  C -->|application/xml| E{XmlFormatter\\nregistered?}\n  E -->|yes| F[Xml output]\n  E -->|no| G[406 Not Acceptable\\nor default JSON]\n  D --> H[Response body JSON]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Configure JSON as the primary formatter",
+            "code": "builder.Services.AddControllers()\n    .AddJsonOptions(options =>\n    {\n        options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;\n        options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;\n        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());\n    });\n\n// Minimal APIs:\nbuilder.Services.ConfigureHttpJsonOptions(o =>\n    o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase);",
+            "explanation": "JsonOptions apply to controller output formatters. HttpJsonOptions apply to minimal API Results.Json and WriteAsJsonAsync. Keep both aligned to avoid inconsistent serialization."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "[Produces] and fixed content type",
+            "code": "[HttpGet(\"{id:guid}\")]\n[Produces(\"application/json\")]\n[ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]\npublic ActionResult<OrderDto> Get(Guid id) => Ok(new OrderDto(id));\n\n// Force a specific format — skip negotiation:\n[HttpGet(\"export.csv\")]\npublic IActionResult ExportCsv()\n{\n    var csv = \"id,name\\n1,Widget\";\n    return File(Encoding.UTF8.GetBytes(csv), \"text/csv\", \"orders.csv\");\n}",
+            "explanation": "[Produces] documents and constrains response types for OpenAPI. File() bypasses JSON formatters — sets Content-Type and Content-Disposition directly."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Adding XML formatter (legacy interop)",
+            "code": "builder.Services.AddControllers()\n    .AddXmlSerializerFormatters(); // or AddXmlDataContractSerializerFormatters\n\n// Client must send: Accept: application/xml\n// Controller returns same DTO — formatter selection changes output shape",
+            "explanation": "XML formatters are opt-in. Public JSON-only APIs should not add this unless required. XmlSerializer respects public properties; DataContractSerializer uses [DataContract] attributes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom output formatter for CSV",
+            "code": "public sealed class CsvOutputFormatter : TextOutputFormatter\n{\n    public CsvOutputFormatter()\n    {\n        SupportedMediaTypes.Add(MediaTypeHeaderValue.Parse(\"text/csv\"));\n        SupportedEncodings.Add(Encoding.UTF8);\n    }\n\n    protected override bool CanWriteType(Type? type)\n        => type != null && typeof(IEnumerable<OrderDto>).IsAssignableFrom(type);\n\n    public override async Task WriteResponseBodyAsync(\n        OutputFormatterWriteContext context, Encoding encoding)\n    {\n        var items = (IEnumerable<OrderDto>)context.Object!;\n        var writer = context.HttpContext.Response.BodyWriter.AsStream();\n        await writer.WriteAsync(Encoding.UTF8.GetBytes(\"id\\n\"));\n        foreach (var o in items)\n            await writer.WriteAsync(Encoding.UTF8.GetBytes($\"{o.Id}\\n\"));\n    }\n}\n\nbuilder.Services.AddControllers(o =>\n    o.OutputFormatters.Add(new CsvOutputFormatter()));",
+            "explanation": "Custom formatters implement CanWriteType and WriteResponseBodyAsync. Register in MvcOptions.OutputFormatters. Client sends Accept: text/csv to trigger it."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Serialization across ecosystems",
+          "headers": [
+            "Aspect",
+            "ASP.NET Core",
+            "Express",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Default format",
+              "JSON via System.Text.Json",
+              "JSON via JSON.stringify",
+              "JSON via class-serializer"
+            ],
+            [
+              "Negotiation",
+              "Accept header + formatters",
+              "Manual if (accept) branches",
+              "Rare — JSON fixed"
+            ],
+            [
+              "Naming policy",
+              "JsonNamingPolicy.CamelCase",
+              "Keys as defined in object",
+              "@SerializedName or interceptors"
+            ],
+            [
+              "406 handling",
+              "Built-in when no formatter matches",
+              "Manual",
+              "Manual"
+            ],
+            [
+              "Custom format",
+              "IOutputFormatter",
+              "res.type('text/csv').send()",
+              "@Header + StreamableFile"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Mismatched JsonOptions vs HttpJsonOptions — controllers and minimal APIs serialize differently. Returning anonymous objects with circular references — serializer throws. Expecting XML without AddXmlSerializerFormatters. Client sends Content-Type: text/plain on JSON body — model binding fails with 415."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OutputFormatterSelector scores formatters by media type match quality. [Produces] and format filters can short-circuit negotiation. System.Text.Json replaced Newtonsoft as default in ASP.NET Core 3.0 — AddNewtonsoftJson() still available for JsonProperty attributes and reference loop handling. Minimal APIs bypass full formatter pipeline for Results.Json but share HttpJsonOptions. For performance, source generators (JsonSerializable) reduce reflection. Production: fix JSON contract in OpenAPI; disable unused formatters to shrink attack surface; log 406 rates to detect client misconfiguration."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Formatter strategy tradeoffs",
+          "headers": [
+            "Strategy",
+            "Pros",
+            "Cons"
+          ],
+          "rows": [
+            [
+              "JSON only",
+              "Simple, fast, universal tooling",
+              "No legacy XML consumers"
+            ],
+            [
+              "JSON + XML negotiation",
+              "Backward compatible",
+              "Larger pipeline, test matrix doubles"
+            ],
+            [
+              "Dedicated export endpoints",
+              "File() / custom route for CSV",
+              "Clearer than Accept negotiation"
+            ],
+            [
+              "Custom IOutputFormatter",
+              "Pluggable media types",
+              "Must maintain CanWriteType logic"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying content negotiation is 'always used' — most APIs are JSON-fixed. Not knowing System.Text.Json is default. Confusing Content-Type (request body format) with Accept (response preference). Unable to explain 406 vs 415."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Output formatters serialize ObjectResult values; Accept header drives selection among registered IOutputFormatter implementations.",
+    "Modern Web APIs standardize on JSON — configure JsonOptions and HttpJsonOptions consistently for controllers and minimal APIs.",
+    "Use File() or dedicated export routes for CSV/binary instead of over-engineering negotiation unless clients require Accept-driven formats.",
+    "60s: Handler returns object → ObjectResult → formatter selector reads Accept → System.Text.Json writes body. JSON-only is normal. 406 when no match. Content-Type is for request body; Accept is for response.",
+    "Follow-up: when would you choose Newtonsoft.Json over System.Text.Json?"
+  ],
+  "commonPitfalls": [
+    "Saying 'ASP.NET always negotiates XML and JSON' gets you rejected — JSON is default; XML is opt-in.",
+    "Only configuring AddJsonOptions but not ConfigureHttpJsonOptions — minimal and controller APIs serialize differently.",
+    "Strong answer: 'Formatters plug into ObjectResult execution. JSON via System.Text.Json. Align options. JSON-only for new APIs. Custom formatters or File() for exports.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; System.Text.Json default in 3.0",
+  "relatedTopicIds": [
+    "dotnet-03-action-results",
+    "dotnet-03-model-binding",
+    "dotnet-02-http-fundamentals",
+    "dotnet-02-openapi-swagger"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "res.json() vs res.send()",
+      "note": "Express res.json() sets Content-Type: application/json explicitly. ASP.NET formatters set Content-Type during ObjectResult execution. Express has no Accept-driven formatter pipeline — you branch manually.",
+      "futureTopicSlug": "javascript/express/response-format"
+    },
+    {
+      "language": "typescript",
+      "concept": "class-transformer serialization",
+      "note": "NestJS @Exclude() and @Expose() control JSON shape like JsonIgnoreCondition. ASP.NET uses System.Text.Json attributes ([JsonIgnore], [JsonPropertyName]).",
+      "futureTopicSlug": "typescript/nestjs/serialization"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Format response data in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/web-api/advanced/formatting"
+    },
+    {
+      "title": "System.Text.Json overview",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/serialization/system-text-json/overview"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

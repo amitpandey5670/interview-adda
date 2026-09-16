@@ -1,0 +1,326 @@
+{
+  "id": "dotnet-03-controllers-vs-minimal-apis",
+  "slug": "controllers-vs-minimal-apis",
+  "title": "Controllers versus minimal APIs (when to use each)",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 1,
+  "hook": "ASP.NET Core gives you two ways to define HTTP endpoints: controller classes with action methods, or inline minimal API delegates. Both compile to the same endpoint routing table — the choice is about team structure, OpenAPI, and how much ceremony you want.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Controller-based APIs group related Hypertext Transfer Protocol (HTTP) actions into a class decorated with [ApiController]. Each public method is an action mapped by attributes like [HttpGet(\"{id}\")]. Minimal APIs register routes directly on WebApplication with app.MapGet, app.MapPost, and lambda or method-group handlers. Under the hood, both use endpoint routing: a route template, a handler delegate, and metadata for authorization, model binding, and OpenAPI generation."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Controller",
+              "plainDefinition": "A class inheriting ControllerBase (or Controller for views) that groups related HTTP actions as methods.",
+              "example": "[ApiController] [Route(\"api/[controller]\")] public class OrdersController : ControllerBase",
+              "longForm": "Controller"
+            },
+            {
+              "term": "Minimal API",
+              "plainDefinition": "A route registered inline on WebApplication with MapGet/MapPost and a handler delegate — no controller class.",
+              "example": "app.MapGet(\"/api/orders/{id}\", (Guid id, IOrderService svc) => svc.GetAsync(id));",
+              "longForm": "Minimal API"
+            },
+            {
+              "term": "Endpoint routing",
+              "plainDefinition": "The system that matches a URL and HTTP method to a handler and runs filters, binding, and authorization before your code.",
+              "example": "MapControllers() and MapGet both register endpoints in the same routing table.",
+              "longForm": "Endpoint routing"
+            },
+            {
+              "term": "ApiController",
+              "plainDefinition": "An attribute that enables opinionated Web API behavior: automatic 400 on model errors, attribute routing, and binding source inference.",
+              "example": "[ApiController] on a class activates inference rules for [FromBody], [FromRoute], etc.",
+              "longForm": "ApiController"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The decision affects project structure, testability, filter usage, and how OpenAPI documents are generated. Controllers shine when you have many endpoints sharing filters, validation, and base-class behavior — similar to NestJS @Controller classes. Minimal APIs reduce ceremony for microservices, internal tools, and prototypes where each route is a few lines. Neither is faster at runtime; both resolve to Endpoint objects in the same routing middleware."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Same pipeline, different syntax",
+          "body": "Whether you write app.MapGet or [HttpGet], the request still flows through middleware → routing → model binding → handler → result execution. Pick based on team conventions and maintainability, not micro-benchmarks."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request to handler — both styles",
+          "items": [
+            {
+              "title": "Startup registers endpoints",
+              "body": "builder.Services.AddControllers() + app.MapControllers(), or app.MapGet/MapPost directly. All entries land in the endpoint data source."
+            },
+            {
+              "title": "Routing middleware matches URL",
+              "body": "UseRouting (or implicit in WebApplication) selects the best endpoint by template and HTTP method."
+            },
+            {
+              "title": "Filters and binding run",
+              "body": "Authorization, model binding, and validation execute via endpoint metadata — IActionFilter for controllers, IEndpointFilter for minimal APIs."
+            },
+            {
+              "title": "Handler executes",
+              "body": "Controller action method or minimal API delegate runs and returns IActionResult, TypedResults, or a plain object."
+            },
+            {
+              "title": "Result is written",
+              "body": "Result executors serialize JSON, set status codes, or stream files to the response."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Controllers and minimal APIs share one routing table",
+            "source": "flowchart TD\n  A[HTTP request] --> B[Middleware pipeline]\n  B --> C[Endpoint routing]\n  C --> D{Matched endpoint}\n  D -->|Controller action| E[IActionFilter chain\\nModel binding\\nAction method]\n  D -->|Minimal API| F[IEndpointFilter chain\\nParameter binding\\nDelegate handler]\n  E --> G[Result execution\\nJSON / ProblemDetails]\n  F --> G\n  G --> H[HTTP response]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Controller-based Web API",
+            "code": "[ApiController]\n[Route(\"api/orders\")]\npublic sealed class OrdersController(IOrderService orders) : ControllerBase\n{\n    [HttpGet(\"{id:guid}\")]\n    [ProducesResponseType(typeof(OrderDto), StatusCodes.Status200OK)]\n    [ProducesResponseType(StatusCodes.Status404NotFound)]\n    public async Task<ActionResult<OrderDto>> GetById(Guid id, CancellationToken ct)\n    {\n        var order = await orders.FindAsync(id, ct);\n        return order is null ? NotFound() : Ok(order);\n    }\n\n    [HttpPost]\n    public async Task<ActionResult<OrderDto>> Create(\n        [FromBody] CreateOrderRequest request, CancellationToken ct)\n    {\n        var created = await orders.CreateAsync(request, ct);\n        return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);\n    }\n}",
+            "explanation": "Primary constructor injection works on controllers (.NET 8+). [ApiController] enables automatic 400 responses for validation errors. ActionResult<T> documents the success type while allowing NotFound() and other results."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal API with route group and filters",
+            "code": "var orders = app.MapGroup(\"/api/orders\")\n    .WithTags(\"Orders\")\n    .RequireAuthorization();\n\norders.MapGet(\"/{id:guid}\", async (Guid id, IOrderService svc, CancellationToken ct) =>\n{\n    var order = await svc.FindAsync(id, ct);\n    return order is null ? Results.NotFound() : Results.Ok(order);\n})\n.Produces<OrderDto>(StatusCodes.Status200OK)\n.Produces(StatusCodes.Status404NotFound);\n\norders.MapPost(\"/\", async (CreateOrderRequest request, IOrderService svc, CancellationToken ct) =>\n{\n    var created = await svc.CreateAsync(request, ct);\n    return Results.Created($\"/api/orders/{created.Id}\", created);\n});",
+            "explanation": "MapGroup applies a prefix and shared metadata (tags, auth). Handler parameters are bound like controller action parameters. TypedResults (Results.Ok, Results.NotFound) give compile-time return types."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Program.cs — registering both styles in one app",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddControllers();\nbuilder.Services.AddEndpointsApiExplorer();\nbuilder.Services.AddSwaggerGen();\n\nvar app = builder.Build();\napp.UseHttpsRedirection();\napp.UseAuthorization();\n\n// Minimal API routes\napp.MapGet(\"/health\", () => Results.Ok(new { status = \"healthy\" }));\n\n// Controller routes\napp.MapControllers();\n\napp.Run();",
+            "explanation": "A single app can mix minimal APIs and controllers. MapControllers() must be called to dispatch to controller actions. AddControllers() registers controller services and model binding infrastructure."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Decision matrix — when teams pick each style",
+            "code": "// Choose CONTROLLERS when:\n// - Large surface area with shared filters, base classes, or [Authorize] policies per controller\n// - Heavy use of IActionFilter, IAsyncActionFilter, or exception filters\n// - Team comes from Spring MVC / NestJS @Controller mental model\n// - You need ApiController's automatic validation ProblemDetails (400) behavior\n\n// Choose MINIMAL APIs when:\n// - Microservice with < 15 endpoints, vertical slice layout\n// - Prototypes, internal tools, or cloud functions style\n// - You want endpoint-local IEndpointFilter without filter classes\n// - AOT / trimming scenarios where fewer reflection-based conventions help\n\n// HYBRID: health/minimal probes as MapGet; domain CRUD in controllers",
+            "explanation": "Runtime performance is equivalent. The matrix is about maintainability, team familiarity, and filter/OpenAPI ergonomics — not requests per second."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "ASP.NET Core vs Express vs NestJS",
+          "headers": [
+            "Aspect",
+            "ASP.NET Core controllers",
+            "ASP.NET Core minimal APIs",
+            "Express (Node.js)",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Route definition",
+              "[HttpGet] attributes on class methods",
+              "app.MapGet inline delegates",
+              "app.get('/path', handler)",
+              "@Get() decorators on @Controller class"
+            ],
+            [
+              "Dependency injection",
+              "Constructor injection on controller",
+              "Handler parameter injection",
+              "Manual require or wrapper",
+              "Constructor injection via @Injectable"
+            ],
+            [
+              "Validation",
+              "[ApiController] + DataAnnotations → 400",
+              "AddEndpointFilter or manual",
+              "Middleware (e.g. express-validator)",
+              "class-validator + ValidationPipe"
+            ],
+            [
+              "Filters / middleware",
+              "IActionFilter, IAsyncActionFilter",
+              "IEndpointFilter",
+              "app.use() middleware chain",
+              "Guards, interceptors, pipes"
+            ],
+            [
+              "Return type",
+              "IActionResult, ActionResult<T>",
+              "TypedResults, IResult",
+              "res.json() side effect",
+              "@Res() or return value (interceptor)"
+            ],
+            [
+              "OpenAPI",
+              "Swashbuckle reads controller metadata",
+              ".WithOpenApi() / metadata on MapGet",
+              "swagger-jsdoc annotations",
+              "@ApiTags, @ApiResponse decorators"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forgetting app.MapControllers() when using controller classes — routes exist in code but never register. Putting business logic directly in minimal API lambdas without extracting to services — hard to test. Assuming minimal APIs skip model binding — they use the same binding infrastructure. Mixing [FromBody] on GET requests in controllers — binding will fail silently or return 400."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Both styles compile to Microsoft.AspNetCore.Routing.Endpoint instances with RequestDelegate handlers. Controllers use ControllerActionInvoker which runs filter pipelines (authorization filters, action filters, exception filters). Minimal APIs invoke the delegate directly with IEndpointFilter as the filter equivalent. ApiController applies ApiBehaviorApplicationModelProvider conventions — automatic [FromBody] for complex types, [FromRoute] for route keys, and ClientErrorResultFilter for 400 on invalid models. Minimal APIs lack [ApiController] unless you call AddControllers() and replicate validation with AddEndpointFilter<ValidationFilter>. For Native AOT, minimal APIs with source-generated JSON and explicit DTOs trim better than controller convention scanning. Prove routing with dotnet-trace or logging EndpointName in a custom middleware."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Senior decision matrix",
+          "headers": [
+            "Criterion",
+            "Controllers",
+            "Minimal APIs",
+            "Interview signal"
+          ],
+          "rows": [
+            [
+              "Filter ecosystem",
+              "Mature IActionFilter, IAsyncExceptionFilter",
+              "IEndpointFilter (newer, fewer built-ins)",
+              "Know filter migration cost"
+            ],
+            [
+              "Validation 400",
+              "Automatic with [ApiController]",
+              "Manual or custom filter",
+              "Production APIs need consistent ProblemDetails"
+            ],
+            [
+              "OpenAPI / Swashbuckle",
+              "Excellent out of box",
+              "Good with .WithOpenApi() in .NET 7+",
+              "Contract-first teams may prefer controllers"
+            ],
+            [
+              "Unit testing",
+              "Test action methods with mocked services",
+              "Extract handlers to static/service methods",
+              "Lambdas inline are harder to test"
+            ],
+            [
+              "AOT / trimming",
+              "More reflection on conventions",
+              "Explicit routes, less convention",
+              "Microservices on AOT lean minimal"
+            ],
+            [
+              "Team scale",
+              "Familiar MVC structure",
+              "Vertical slices, less boilerplate",
+              "Hybrid is valid and common"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'minimal APIs are faster' — they share the same endpoint routing and binding. Claiming you must pick one style for the entire solution — hybrid is normal. Not knowing that [ApiController] automatic 400 validation does not apply to minimal APIs without extra work. Unable to explain the NestJS parallel: controllers ≈ @Controller, minimal APIs ≈ functional route handlers with DI."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Controllers and minimal APIs register into the same endpoint routing table — choice is structure and filters, not performance.",
+    "Use controllers for large APIs with shared filters and [ApiController] validation; minimal APIs for small services, prototypes, and AOT-friendly explicit routes.",
+    "In production, enforce consistent ProblemDetails for validation — [ApiController] gives this free; minimal APIs need an IEndpointFilter or manual checks.",
+    "60s: Both compile to Endpoint objects. Controllers use filter pipelines and ApiController conventions. Minimal APIs use MapGet with parameter DI and IEndpointFilter. Pick by team structure and filter needs. NestJS controllers map cleanly; Express app.get maps to MapGet.",
+    "Follow-up: how do you add global exception handling and validation to minimal APIs to match [ApiController] behavior?"
+  ],
+  "commonPitfalls": [
+    "Saying 'minimal APIs are faster' gets you rejected — same routing middleware and binding infrastructure.",
+    "Forgetting MapControllers() — controller routes never register and return 404 for every path.",
+    "Strong answer: 'Same endpoint routing underneath. Controllers for filter-heavy CRUD with ApiController validation. Minimal for small vertical slices. Hybrid is fine. Test handlers via extracted services either way.'"
+  ],
+  "introducedIn": ".NET Core 3.0 (endpoint routing); Minimal APIs in .NET 6",
+  "relatedTopicIds": [
+    "dotnet-03-endpoint-routing",
+    "dotnet-03-action-results",
+    "dotnet-03-model-binding",
+    "dotnet-04-middleware-order",
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-01-dotnet-vs-node-express",
+    "dotnet-02-openapi-swagger"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express route handlers",
+      "note": "app.get('/orders/:id', handler) is the minimal API mental model — inline function, manual req.params parsing. ASP.NET Core binds route values to parameters automatically. Express has no built-in DI; you pass services via closure or app.set.",
+      "futureTopicSlug": "javascript/express/routing"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS @Controller decorators",
+      "note": "NestJS @Controller('orders') + @Get(':id') mirrors ASP.NET [Route] + [HttpGet]. Constructor DI and guard pipes parallel IActionFilter and [Authorize]. Minimal APIs are closer to Fastify route plugins without the class wrapper.",
+      "futureTopicSlug": "typescript/nestjs/controllers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Compare controller-based and minimal APIs",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/apis"
+    },
+    {
+      "title": "Minimal APIs overview",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/overview"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

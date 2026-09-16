@@ -1,0 +1,305 @@
+{
+  "id": "dotnet-03-action-results",
+  "slug": "action-results",
+  "title": "Action results and TypedResults (Results.Ok, Results.Problem)",
+  "moduleId": "dotnet-03-web-api-endpoints",
+  "order": 5,
+  "hook": "Returning a plain object from your handler is not the whole story — IActionResult and IResult let you set status codes, headers, and Problem Details explicitly. TypedResults and Results.Ok give compile-time return types so callers and OpenAPI know exactly what success and failure look like.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Controller actions typically return IActionResult, ActionResult<T>, or a concrete result type (OkObjectResult, NotFoundResult, CreatedAtActionResult). The framework executes the result asynchronously — serializing JSON, setting status codes, or writing redirects. Minimal APIs return IResult implementations via the static Results and TypedResults classes. TypedResults.Ok<T>(value) returns Results<T> — a union type that documents the success payload in the signature. IActionResult is the controller equivalent but is untyped at compile time unless you use ActionResult<T>."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IActionResult",
+              "plainDefinition": "Interface for controller results — executed by IActionResultExecutor to write the HTTP response.",
+              "example": "return NotFound(); return Ok(order); return StatusCode(429);",
+              "longForm": "IActionResult"
+            },
+            {
+              "term": "ActionResult<T>",
+              "plainDefinition": "Typed wrapper: compile-time T for success, still allows NotFound() and other results.",
+              "example": "public ActionResult<OrderDto> Get() => order ?? NotFound();",
+              "longForm": "ActionResult<T>"
+            },
+            {
+              "term": "IResult",
+              "plainDefinition": "Minimal API result interface — executed by IResult.ExecuteAsync.",
+              "example": "return Results.Ok(dto); return Results.Problem(statusCode: 503);",
+              "longForm": "IResult"
+            },
+            {
+              "term": "TypedResults",
+              "plainDefinition": "Static helpers returning strongly typed IResult variants for minimal APIs and controllers.",
+              "example": "return TypedResults.Created($\"/api/orders/{id}\", dto);",
+              "longForm": "TypedResults"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Correct status codes and response shapes are core REST hygiene — 201 with Location for creates, 204 for deletes, 404 when a resource is missing, 409 for conflicts. Problem Details (RFC 7807) standardize error bodies for clients and observability. TypedResults improves OpenAPI generation and refactor safety. Returning raw objects without IActionResult works but always yields 200 and hides failure semantics."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Prefer ActionResult<T> and TypedResults",
+          "body": "ActionResult<T> and TypedResults.Ok<T> document the success type while allowing NotFound() and Problem(). OpenAPI tools read these types. Avoid returning object or dynamic in public APIs."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Result execution pipeline",
+          "items": [
+            {
+              "title": "Handler returns result",
+              "body": "Action method or minimal delegate returns IActionResult, IResult, or plain object."
+            },
+            {
+              "title": "Object result conversion",
+              "body": "Plain objects are wrapped in ObjectResult with status 200 by convention."
+            },
+            {
+              "title": "Result executor runs",
+              "body": "ObjectResultExecutor serializes via output formatters (System.Text.Json). ProblemDetails uses ProblemDetailsService."
+            },
+            {
+              "title": "Headers and status set",
+              "body": "StatusCode, Content-Type, Location (Created), Retry-After (429) applied."
+            },
+            {
+              "title": "Response body written",
+              "body": "JSON, empty body (204), or file stream sent to client."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IActionResult vs IResult execution",
+            "source": "flowchart TD\n  H[Handler return] --> Q{Result type?}\n  Q -->|IActionResult| A[IActionResultExecutor]\n  Q -->|IResult| B[IResult.ExecuteAsync]\n  Q -->|Plain T| C[ObjectResult 200]\n  A --> F[Output formatters\\nJSON / ProblemDetails]\n  B --> F\n  C --> F\n  F --> R[HTTP Response]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Controller — ActionResult<T> with honest status codes",
+            "code": "[HttpGet(\"{id:guid}\")]\npublic async Task<ActionResult<OrderDto>> GetById(Guid id, IOrderService svc, CancellationToken ct)\n{\n    var order = await svc.FindAsync(id, ct);\n    if (order is null) return NotFound();\n    return order; // implicit Ok(order) — compiler knows success type is OrderDto\n}\n\n[HttpPost]\npublic async Task<ActionResult<OrderDto>> Create(CreateOrderRequest req, IOrderService svc, CancellationToken ct)\n{\n    var created = await svc.CreateAsync(req, ct);\n    return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);\n}\n\n[HttpDelete(\"{id:guid}\")]\npublic async Task<IActionResult> Delete(Guid id, IOrderService svc, CancellationToken ct)\n{\n    var deleted = await svc.DeleteAsync(id, ct);\n    return deleted ? NoContent() : NotFound();\n}",
+            "explanation": "ActionResult<T> allows returning T directly for 200 or explicit NotFound/CreatedAtAction. Delete returns 204 NoContent on success — REST convention for deletes without a body."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal API — TypedResults vs untyped Results",
+            "code": "app.MapGet(\"/api/orders/{id:guid}\", async Task<Results<Ok<OrderDto>, NotFound>> (\n    Guid id, IOrderService svc, CancellationToken ct) =>\n{\n    var order = await svc.FindAsync(id, ct);\n    return order is null ? TypedResults.NotFound() : TypedResults.Ok(order);\n});\n\n// Untyped Results still work but lose compile-time union:\napp.MapGet(\"/api/health\", () => Results.Ok(new { status = \"ok\" }));\n\n// Problem Details for errors:\napp.MapPost(\"/api/orders\", async (CreateOrderRequest req, IOrderService svc) =>\n{\n    try { /* ... */ }\n    catch (ConflictException ex)\n        return TypedResults.Problem(ex.Message, statusCode: StatusCodes.Status409Conflict);\n});",
+            "explanation": "Results<Ok<T>, NotFound> is a union return type — OpenAPI sees both 200 and 404. TypedResults vs Results: TypedResults preserves generic types for analyzers and Swashbuckle."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidationProblem and RFC 7807 Problem Details",
+            "code": "[ApiController]\npublic class OrdersController : ControllerBase\n{\n    [HttpPost]\n    public IActionResult Create(CreateOrderRequest req)\n    {\n        if (!ModelState.IsValid)\n            return ValidationProblem(ModelState); // 400 + application/problem+json\n\n        // ...\n        return Ok();\n    }\n}\n\n// Global ProblemDetails in Program.cs:\nbuilder.Services.AddProblemDetails();\n\n// Minimal API:\nreturn Results.ValidationProblem(errors, statusCode: 400);",
+            "explanation": "ValidationProblem returns standardized error shape with field-level errors extension. AddProblemDetails() registers IProblemDetailsService for consistent 4xx/5xx bodies across the app."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IActionResult vs IResult — when each applies",
+            "code": "// CONTROLLERS: IActionResult family\n// - Ok(), NotFound(), BadRequest(), File(), Redirect()\n// - ActionResult<T> for typed success + error union\n// - Execute via controller infrastructure + filters\n\n// MINIMAL APIs: IResult family\n// - Results.* and TypedResults.*\n// - Execute via IResult.ExecuteAsync directly\n// - Supports same status codes; some helpers differ (Results.Extensions)\n\n// BOTH can use TypedResults in .NET 7+ controllers:\npublic Results<Ok<OrderDto>, NotFound> Get(Guid id) => ...;",
+            "explanation": "TypedResults is not minimal-API-only — controllers can return Results<Ok<T>, NotFound> for the same union typing benefit."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Returning responses across frameworks",
+          "headers": [
+            "Pattern",
+            "ASP.NET Core",
+            "Express",
+            "NestJS"
+          ],
+          "rows": [
+            [
+              "Success JSON",
+              "return Ok(dto) / TypedResults.Ok(dto)",
+              "res.status(200).json(dto)",
+              "return dto (interceptor sets 200)"
+            ],
+            [
+              "Not found",
+              "NotFound() / TypedResults.NotFound()",
+              "res.status(404).send()",
+              "throw NotFoundException"
+            ],
+            [
+              "Created + Location",
+              "CreatedAtAction / TypedResults.Created",
+              "res.status(201).location(url).json()",
+              "@HttpCode(201) + manual header"
+            ],
+            [
+              "Validation errors",
+              "ValidationProblem (RFC 7807)",
+              "res.status(400).json({ errors })",
+              "BadRequestException with details"
+            ],
+            [
+              "Typed return",
+              "ActionResult<T>, Results<Ok<T>, NotFound>",
+              "No compile-time check",
+              "Promise<T> only for success path"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Returning 200 with an error message in the body — use 4xx/5xx status codes. Forgetting Location header on 201 Created. Using BadRequest() for server errors — that's 500 territory. Mixing return Ok() after already writing to Response.Body — double-write exception. Returning Task<IActionResult> but returning null."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IActionResult.ExecuteResultAsync runs after action filters complete. ObjectResult uses output formatters selected by content negotiation (see content-negotiation topic). TypedResults is a source-generated-friendly pattern — return types appear in endpoint metadata for OpenAPI. ProblemDetailsService (.NET 7+) centralizes exception-to-problem mapping with IProblemDetailsWriter. For production, align all 4xx/5xx with application/problem+json, include traceId extension from Activity.Current, and never leak stack traces. IActionResult vs IResult: functionally similar at HTTP boundary; IActionResult integrates with MVC filter result execution. Benchmark: result allocation is negligible vs serialization — optimize JSON options and payload size first."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "TypedResults vs IActionResult",
+          "headers": [
+            "Aspect",
+            "IActionResult / ActionResult<T>",
+            "TypedResults / Results<T>",
+            "Interview pick"
+          ],
+          "rows": [
+            [
+              "Compile-time return union",
+              "ActionResult<T> partial",
+              "Results<Ok<T>, NotFound> full",
+              "TypedResults for minimal APIs"
+            ],
+            [
+              "OpenAPI inference",
+              "Good with Produces attributes",
+              "Excellent from union types",
+              "TypedResults wins on minimal routes"
+            ],
+            [
+              "Filter integration",
+              "Full IActionFilter support",
+              "IEndpointFilter only",
+              "Controllers need IActionResult"
+            ],
+            [
+              "File/stream results",
+              "File(), PhysicalFile()",
+              "Results.File()",
+              "Equivalent"
+            ],
+            [
+              "Problem Details",
+              "ValidationProblem, Problem()",
+              "Results.Problem, TypedResults.Problem",
+              "Both — configure AddProblemDetails globally"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying IActionResult and IResult are unrelated — both abstract HTTP response generation. Returning 200 for errors 'because the client checks a success flag in JSON'. Not knowing CreatedAtAction vs Created difference. Unable to explain ActionResult<T> vs IActionResult — T documents success type only."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IActionResult (controllers) and IResult (minimal APIs) defer response writing to executors — status, headers, and formatters apply there.",
+    "ActionResult<T> and TypedResults.Ok<T> document success types while allowing NotFound, Problem, and other results.",
+    "Use ValidationProblem / Results.Problem for RFC 7807-shaped errors — consistent 4xx bodies aid clients and observability.",
+    "60s: Don't return raw objects for APIs with multiple outcomes. ActionResult<T> in controllers, TypedResults union types in minimal APIs. 201 + Location for creates, 204 for deletes, Problem Details for errors.",
+    "Follow-up: how does AddProblemDetails map unhandled exceptions to 500 responses?"
+  ],
+  "commonPitfalls": [
+    "Saying 'returning an object is the same as Ok()' in APIs with 404 paths — you lose explicit error results.",
+    "HTTP 200 with { success: false } instead of proper 4xx — gets you rejected in API design interviews.",
+    "Strong answer: 'ActionResult<T> for typed controller returns. TypedResults union for minimal APIs. Problem Details globally. Status codes express outcome, not body flags.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; TypedResults in .NET 7",
+  "relatedTopicIds": [
+    "dotnet-03-controllers-vs-minimal-apis",
+    "dotnet-03-content-negotiation",
+    "dotnet-08-validation-filters-problems",
+    "dotnet-02-http-methods-status-codes",
+    "dotnet-04-exception-handling-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express res.status().json()",
+      "note": "Express uses side-effect response object; ASP.NET returns a result descriptor executed later. This lets action filters short-circuit before writing. Express middleware can also end the response early with res.send().",
+      "futureTopicSlug": "javascript/express/response"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS exception filters vs result types",
+      "note": "NestJS throws HttpException subclasses caught by filters — similar to ProblemDetails mapping. ASP.NET prefers explicit NotFound() returns or IExceptionHandler over throw for control flow in hot paths.",
+      "futureTopicSlug": "typescript/nestjs/exception-filters"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Create responses in Minimal APIs",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/responses"
+    },
+    {
+      "title": "Problem Details support",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling-problem-details"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}
