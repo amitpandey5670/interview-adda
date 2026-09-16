@@ -1,0 +1,242 @@
+{
+  "id": "dotnet-10-response-output-caching",
+  "slug": "response-output-caching",
+  "title": "Response caching and output caching middleware",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 2,
+  "hook": "Response caching stores whole HTTP responses using Cache-Control headers. Output caching (.NET 7+) is server-side middleware that caches rendered responses before they leave your API — faster than rebuilding JSON on every identical GET.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Response Caching Middleware honors HTTP caching semantics — ETag, Cache-Control, Vary — and can store 200 responses in memory on the server or let clients and CDNs cache. Output Caching (Microsoft.AspNetCore.OutputCaching) is a separate pipeline feature: you tag endpoints with policies, vary by query or header, and store response bodies in IMemoryCache or Redis without requiring clients to send cache headers. Both apply to safe GET/HEAD requests; neither replaces authorization checks before cache lookup."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Response caching",
+              "longForm": "HTTP response caching middleware",
+              "plainDefinition": "Middleware that caches responses based on HTTP cache headers and request method.",
+              "example": "[ResponseCache(Duration = 60)] on controller action"
+            },
+            {
+              "term": "Output caching",
+              "longForm": "ASP.NET Core output caching",
+              "plainDefinition": "Server-side response store with named policies, independent of client Cache-Control.",
+              "example": "app.MapGet(\"/api/catalog\", handler).CacheOutput(\"CatalogPolicy\")"
+            },
+            {
+              "term": "ETag",
+              "longForm": "Entity tag",
+              "plainDefinition": "Opaque validator for conditional GET — If-None-Match returns 304 Not Modified.",
+              "example": "ETag: \"abc123\""
+            },
+            {
+              "term": "Vary",
+              "longForm": "Vary header",
+              "plainDefinition": "Tells caches which request headers create separate cache entries.",
+              "example": "Vary: Accept-Encoding, Authorization"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Public catalog endpoints benefit from output caching when millions of identical GETs hit your API — you skip controller, service, and database work entirely on a hit. Misconfigured caching leaks one user's JSON to another (missing Vary on Authorization) or serves stale prices after updates (no invalidation). Interviews contrast HTTP semantics (CDN-friendly) with output cache policies (server-controlled TTL)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Auth and cache order",
+          "body": "Cache lookup must happen only after authentication/authorization when responses differ by user. Default policies should not cache personalized endpoints unless Vary includes the right headers or policies key by user id."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Output caching request flow",
+          "items": [
+            {
+              "title": "Request enters pipeline",
+              "body": "Routing matches endpoint with CacheOutput attribute or extension."
+            },
+            {
+              "title": "Build cache key",
+              "body": "Policy combines route, query keys, vary-by headers, and optional tags."
+            },
+            {
+              "title": "Cache hit",
+              "body": "Middleware short-circuits — returns stored status, headers, body."
+            },
+            {
+              "title": "Cache miss",
+              "body": "Pipeline runs endpoint; response captured on way out."
+            },
+            {
+              "title": "Store with TTL",
+              "body": "Entry expires per policy; EvictByTag on admin writes clears groups."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Response vs output caching in pipeline",
+            "source": "flowchart TD\n  REQ[HTTP GET] --> RL[Rate Limiter]\n  RL --> OC[Output Caching Middleware]\n  OC -->|hit| OUT[200 cached body]\n  OC -->|miss| AUTH[Auth middleware]\n  AUTH --> EP[Endpoint handler]\n  EP --> OC\n  EP --> RC[Response Caching optional]\n  RC --> OUT2[Response with Cache-Control]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register output caching with Redis store",
+            "code": "builder.Services.AddOutputCache(options =>\n{\n    options.AddBasePolicy(b => b.Expire(TimeSpan.FromSeconds(10)));\n    options.AddPolicy(\"Catalog\", b => b\n        .Expire(TimeSpan.FromMinutes(5))\n        .SetVaryByQuery(\"region\", \"page\")\n        .Tag(\"catalog\"));\n});\nbuilder.Services.AddStackExchangeRedisOutputCache(/* redis options */);\n\nvar app = builder.Build();\napp.UseOutputCache();\napp.MapGet(\"/api/catalog\", GetCatalog).CacheOutput(\"Catalog\");",
+            "explanation": "AddOutputCache registers policies. UseOutputCache before MapControllers. Redis store shares output across pods — memory store is per process like IMemoryCache."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Response caching with Cache-Control for CDN",
+            "code": "builder.Services.AddResponseCaching();\nvar app = builder.Build();\napp.UseResponseCaching(); // after UseRouting, before endpoints\n\napp.MapGet(\"/api/public/faq\", async () => Results.Json(await _faq.GetAll()))\n   .CacheOutput(p => p.Expire(TimeSpan.FromHours(1)).Tag(\"faq\"));\n\n// Controller: [ResponseCache(Duration = 120, Location = ResponseCacheLocation.Any)]",
+            "explanation": "ResponseCacheLocation.Any allows CDNs to cache. VaryByQueryKeys prevents page=1 and page=2 collisions. Combine with output cache for origin shielding."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Invalidate by tag after admin update",
+            "code": "app.MapPut(\"/api/admin/catalog/{id}\", async (int id, CatalogUpdate dto,\n    ICatalogService svc, IOutputCacheStore cache) =>\n{\n    await svc.UpdateAsync(id, dto);\n    await cache.EvictByTagAsync(\"catalog\", CancellationToken.None);\n    return Results.NoContent();\n});",
+            "explanation": "Tag-based eviction clears all catalog policy entries without knowing every query combination — critical after bulk price updates."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure-mode — never cache authenticated routes without user key",
+            "code": "options.AddPolicy(\"UserOrders\", b => b\n    .Expire(TimeSpan.FromSeconds(30))\n    .VaryByValue((context) => new KeyValuePair<string, string>(\n        \"user\", context.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? \"anon\"))\n    .SetCacheKeyPrefix(\"orders\"));\n// Without VaryByValue user id, user A receives user B cached JSON — OWASP API1",
+            "explanation": "Personalized output cache keys must include principal identity or tenant. Safer default: CacheOutput only on anonymous reference endpoints."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "HTTP cache vs server cache",
+          "headers": ["Feature", "ASP.NET Core output cache", "Express / Fastify"],
+          "rows": [
+            ["Server-side store", "IOutputCacheStore memory or Redis", "Manual Redis or apicache middleware"],
+            ["Tag eviction", "EvictByTagAsync built-in", "Custom key naming convention"],
+            ["CDN headers", "ResponseCache + Cache-Control", "res.set('Cache-Control', 'public, max-age=60')"],
+            ["Pipeline integration", "UseOutputCache middleware", "Middleware chain order manual"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Caching POST responses. Missing Vary on Authorization for semi-public APIs. UseOutputCache after MapControllers (never runs). Stale admin data because no tag eviction on writes. Assuming response caching works without AddResponseCaching and UseResponseCaching."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: compare output cache hit ratio metric to origin CPU drop. X-Cache or Age response headers on CDN logs. After onboarding spike, if output cache hit rate stays low, keys may be over-varied (unique query per user). Application Insights dependency duration should drop on cached routes — if not, middleware order is wrong."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Response caching vs output caching",
+          "headers": ["Aspect", "Response caching", "Output caching"],
+          "rows": [
+            ["Driver", "HTTP Cache-Control / ETag", "Named policies on endpoints"],
+            ["CDN", "Native HTTP semantics", "Origin optimization; CDN still needs headers"],
+            ["Invalidation", "Short max-age or purge CDN", "EvictByTag, policy TTL"],
+            ["Personalization", "Vary header", "VaryByValue / custom key parts"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Caching authenticated order history without user-specific keys. Placing UseOutputCache after endpoints. Saying output cache replaces Redis data cache — they solve different layers (full HTTP response vs domain object)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Response caching = HTTP Cache-Control semantics; output caching = server-side policy store (.NET 7+).",
+    "When not to use: mutating methods, personalized payloads without proper vary keys, or rapidly changing inventory without eviction.",
+    "Production tip: tag policies for EvictByTag on writes; Redis IOutputCacheStore for multi-instance farms.",
+    "60s: Output cache middleware checks policy key before endpoint runs — hit returns stored body. Response cache honors HTTP headers for CDN. Auth before cache for user-specific data. Invalidate tags on admin updates.",
+    "Follow-up: how do you cache a public GET but still return fresh data within five seconds after a write?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we cache everything with [ResponseCache]' gets you rejected — personalized APIs need vary keys or no cache.",
+    "UseOutputCache registered after MapControllers — middleware never executes.",
+    "Strong answer: 'Anonymous catalog output-cached five minutes with catalog tag; EvictByTag on PUT; user dashboards use IMemoryCache not full response cache.'"
+  ],
+  "introducedIn": "Response caching since ASP.NET Core 1.0; output caching added in .NET 7",
+  "relatedTopicIds": [
+    "dotnet-10-in-memory-distributed-cache",
+    "dotnet-02-idempotency-and-caching-headers",
+    "dotnet-04-middleware-order",
+    "dotnet-07-owasp-api-security"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express apicache / cache-control",
+      "note": "apicache stores responses in memory like output cache; Cache-Control header mirrors ResponseCache Location.Any for CDN.",
+      "futureTopicSlug": "javascript/express/http-caching"
+    },
+    {
+      "language": "typescript",
+      "concept": "Fastify @fastify/caching",
+      "note": "fastify-cache wraps reply.send — similar short-circuit before handler on hit, but lacks built-in tag eviction.",
+      "futureTopicSlug": "typescript/fastify/response-cache"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Output caching in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/output"
+    },
+    {
+      "title": "Response caching",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/response"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

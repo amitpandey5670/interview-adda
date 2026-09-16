@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "title": "Caching, performance, and resilience interview drills",
+  "items": [
+    {
+      "question": "Your API slowed dramatically after onboarding a large customer with millions of order rows. Walk through how you diagnose and fix it.",
+      "answer": "Segment p95 latency by tenant_id and route — confirm regression is isolated to the new tenant not a bad deploy. Run k6 replay against that tenant's traffic while watching dotnet-counters: if threadpool-queue-length is sustained with low CPU, hunt sync-over-async .Result in controllers. If SQL dependency dominates traces, capture EF SQL and execution plan — bulk import often causes index scan on TenantId filter and stale statistics. Fix with composite index on (TenantId, CreatedAt), UPDATE STATISTICS, AsNoTracking projection, and async end-to-end. If Redis miss rate spikes at TTL boundary, add single-flight on rebuild. Verify fix with before/after p95 on the same load profile — not average latency.",
+      "followUps": [
+        "When would you add Redis cache versus fixing the query first?",
+        "How do cursor pagination and offset pagination affect this scenario at scale?"
+      ],
+      "sixtySeconds": "Segment p95 by tenant. Counters for thread pool queue — starvation means .Result. Traces for SQL duration — scan means index plus stats after bulk load. Redis miss storm at expiry means stampede lock. Fix root cause, prove p95 drop under load test."
+    },
+    {
+      "question": "Explain cache stampede on a hot Redis key and how you prevent it in ASP.NET Core.",
+      "answer": "When a popular key expires, hundreds of concurrent requests miss together and each queries the database — thundering herd. IMemoryCache GetOrCreateAsync serializes factory execution per key with an internal lock. IDistributedCache has no equivalent — implement Redis distributed lock (SET key NX EX) or hybrid L1 memory with short TTL in front of L2 Redis. Add jitter to TTL so keys do not all expire simultaneously. Monitor cache.miss counter correlated with DB QPS. After onboarding, dashboard keys per tenant can stampede individually — scope locks per tenant not global.",
+      "followUps": [
+        "What is the tradeoff of L1 memory in front of Redis?",
+        "Does output caching suffer the same stampede pattern?"
+      ],
+      "sixtySeconds": "Many misses at once on hot key expiry — all hit DB. GetOrCreateAsync locks per key in memory. Redis needs explicit single-flight lock. Jitter TTL. L1 absorbs repeat reads. Alert miss spike plus DB QPS."
+    },
+    {
+      "question": "Compare fixed window, sliding window, token bucket, and concurrency rate limiters — when use each?",
+      "answer": "Fixed window: N requests per calendar minute — simple but allows burst at boundary (100 at :59 and 100 at :00). Sliding window: rolling count with segments — fairer tenant quotas, slightly more cost. Token bucket: steady refill with burst capacity — good for mobile apps that sync in spikes then idle. Concurrency limiter: caps simultaneous in-flight requests — ideal for long PDF exports, not requests-per-second. All return 429 with Retry-After. Multi-instance farms need Redis-backed partition for global budget. Partition by tenant_id after B2B onboarding, not only IP behind NAT.",
+      "followUps": [
+        "How do you rate limit health check probes separately?",
+        "What OWASP API category does rate limiting address?"
+      ],
+      "sixtySeconds": "Fixed simple boundary burst. Sliding fairer rolling window. Token bucket allows burst then average rate. Concurrency limits parallel long jobs. 429 Retry-After. Redis partition for multi-pod. Tenant not IP for B2B."
+    },
+    {
+      "question": "Describe Polly circuit breaker states and when you would open the circuit on an HttpClient.",
+      "answer": "Closed: calls pass, failures counted. When failure ratio or consecutive failures exceed threshold within minimum throughput, circuit opens — BrokenCircuitException immediately without calling downstream, fail fast while dependency recovers. After break duration, half-open allows probe call — success closes circuit, failure reopens. Configure via AddStandardResilienceHandler or Polly v8 AddCircuitBreaker with ShouldHandle limited to 5xx and HttpRequestException. Log OnOpened to correlate with incidents. Map to 503 with retryAfter for API clients. Do not retry POST payments through open breaker with aggressive retry — combine with timeout and idempotency keys.",
+      "followUps": [
+        "Difference between attempt timeout and total request timeout?",
+        "Should each pod have independent breaker state?"
+      ],
+      "sixtySeconds": "Closed normal. Failures hit threshold — open fail fast no HTTP. Wait break duration — half-open one probe. Success closes. Log OnOpened. 503 to clients. Retry GET not blind POST."
+    },
+    {
+      "question": "Why does sync-over-async in controllers cause API slowness under load when CPU is idle?",
+      "answer": "ASP.NET Core serves requests on thread-pool threads. await releases the thread during I/O so other requests proceed. .Result, .Wait(), or GetAwaiter().GetResult() block the thread for the entire wait even though no CPU work happens. Under concurrent load, blocked threads exhaust the pool — new requests queue (threadpool-queue-length rises) while CPU stays low. ASP.NET Core lacks request SynchronizationContext so classic deadlock is rare, but starvation is common. Fix: async controller to async service to EF ToListAsync/HttpClient SendAsync. Verify with dotnet-counters under k6. ThreadPool.SetMinThreads masks symptoms.",
+      "followUps": [
+        "Is ConfigureAwait(false) required in ASP.NET Core library code?",
+        "When is Task.Run legitimate?"
+      ],
+      "sixtySeconds": "Pool threads blocked on .Result during I/O — not using CPU but threads unavailable. Queue grows p95 spikes. await frees thread. Fix async all the way. dotnet-counters queue-length proves it."
+    },
+    {
+      "question": "IMemoryCache versus IDistributedCache versus output caching — which layer for what?",
+      "answer": "IMemoryCache: fastest, process-local — L1 hot keys, reference data, fronting Redis with 30s TTL. IDistributedCache Redis: shared across pods — catalog DTOs, rate limit counters, session-like data; serialize bytes, tenant-scoped keys, stampede protection on miss. Output caching: entire HTTP response before endpoint runs — anonymous GET catalog with EvictByTag on admin write; vary by user id for semi-personalized. Response caching middleware: HTTP Cache-Control for CDN semantics. Wrong choice: IMemoryCache on five replicas expecting consistency; output caching authenticated orders without user partition — BOLA leak.",
+      "followUps": [
+        "How does EvictByTag work with output cache policies?",
+        "When does Redis RTT make cache slower than DB?"
+      ],
+      "sixtySeconds": "Memory per pod L1. Redis shared farm data cache. Output cache full GET response with tags. Response cache HTTP headers CDN. Tenant keys always. Stampede lock on Redis miss."
+    },
+    {
+      "question": "How do you optimize an EF Core list endpoint that regressed after bulk data import?",
+      "answer": "Log generated SQL and read execution plan — look for index scan on TenantId filter and high logical reads. Fix shape first: AsNoTracking, Select projection to narrow DTO, pagination with reasonable page size, AsSplitQuery if Include needed, avoid N+1 lazy load in loops. Add composite index matching WHERE TenantId and ORDER BY CreatedAt DESC. After bulk import run UPDATE STATISTICS — optimizer may choose scan on stale stats. Compiled query optional for micro-optimization on hot GET by id. Only add Redis after p95 proves query is fast — cache masks scans on every miss.",
+      "followUps": [
+        "Offset vs keyset pagination tradeoffs?",
+        "When would you use raw SQL instead of EF for this endpoint?"
+      ],
+      "sixtySeconds": "Capture SQL and plan — scan means index plus stats. AsNoTracking project paginate. Fix N+1. Index tenant plus sort column. Update stats after bulk load. Then optional Redis."
+    },
+    {
+      "question": "Which dotnet-counters and trace signals prove thread-pool starvation versus SQL slowness?",
+      "answer": "Starvation: System.Runtime threadpool-queue-length sustained above zero, threadpool-thread-count at ceiling, cpu-usage low, ASP.NET Core current-requests high, request p95 high. dotnet-trace CPU sampling shows blocked stacks in Task.GetResult or Wait. SQL slowness: OpenTelemetry/Application Insights dependency type SQL with multi-second duration, processor may be moderate, thread pool queue normal, EF command text shows scan or missing index. SQL Client counters hard-connects may spike on pool exhaustion — different from thread starvation. Fix starvation with async; fix SQL with index and query shape.",
+      "followUps": [
+        "How do you measure p95 in Prometheus or Application Insights?",
+        "What is the role of Activity TraceId in slow request logs?"
+      ],
+      "sixtySeconds": "Queue-length high CPU low equals blocking async. SQL dependency slow in trace equals index plan. counters plus trace plus p95 segmented by tenant. Never trust average alone."
+    },
+    {
+      "question": "Design output caching and rate limiting for a public catalog API plus authenticated order history.",
+      "answer": "Public GET /api/catalog: output cache policy five minutes, vary by region query, tag catalog, EvictByTag on admin PUT, optional ResponseCache Location.Any for CDN. Rate limit anonymous partition by IP sliding window 200/min. Authenticated GET /api/orders: do not output-cache without VaryByValue on user id or sub claim — safer skip full response cache; use IMemoryCache per-user short TTL if needed. Orders rate limit partition by tenant_id sliding 500/min plus concurrency limit 5 on export. Pipeline order: UseRateLimiter before UseOutputCache before UseAuthentication so limits apply early but output cache only on policies that either run after auth with user vary or on anonymous routes.",
+      "followUps": [
+        "Why must rate limiter not run after expensive EF query?",
+        "How does OWASP API4 relate to this design?"
+      ],
+      "sixtySeconds": "Catalog output cached tagged anonymous. Orders no shared cache without user key. Rate limit early by IP or tenant. EvictByTag on catalog write. Auth before personalized cache lookup."
+    },
+    {
+      "question": "A downstream inventory service is failing — how do retry, circuit breaker, and rate limiting interact to protect your API?",
+      "answer": "Polly retry on GET inventory: max 3 exponential backoff for 503/timeout — idempotent reads only. Circuit breaker opens after failure ratio threshold — fail fast 503 to callers instead of every request waiting 30s timeout, giving inventory time to recover. Timeout policy caps attempt at 2s total 5s. Client-side rate limit on your outbound calls optional bulkhead. Inbound rate limit protects your API from user retry storms when you return 503 — users hammering refresh amplifies outage. Log breaker OnOpened, return Problem Details with retryAfter. Do not retry POST reserve-stock without idempotency key.",
+      "followUps": [
+        "Hedging versus retry — when would you hedge?",
+        "Should you cache stale inventory during breaker open?"
+      ],
+      "sixtySeconds": "Retry transient GET. Breaker opens fail fast protect downstream and thread pool. Timeout kills hung calls. Inbound rate limit stops client retry storm. 503 retryAfter. No POST retry without idempotency."
+    }
+  ]
+}

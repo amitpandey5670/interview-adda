@@ -1,0 +1,242 @@
+{
+  "id": "dotnet-10-polly-resilience",
+  "slug": "polly-resilience",
+  "title": "Polly resilience (retry, circuit breaker, timeout)",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 4,
+  "hook": "Polly adds resilience policies to HTTP clients and service calls — retry transient failures, open a circuit breaker when downstream is unhealthy, and enforce timeouts so slow dependencies do not stall your entire API.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Polly is a .NET resilience library integrated with IHttpClientFactory via Microsoft.Extensions.Http.Resilience (.NET 8+) and Polly v8 pipelines. Policies compose as retry, circuit breaker, timeout, hedging, and bulkhead. HttpClient named clients attach AddStandardResilienceHandler() or custom Polly pipelines. Circuit breaker stops calling a failing dependency for a cooling period — fail fast instead of queueing thread-pool work on timeouts. Retry must be idempotent or limited to safe verbs and known transient status codes."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Retry policy",
+              "longForm": "Retry resilience policy",
+              "plainDefinition": "Re-executes failed operations with backoff for transient errors (503, timeout, socket reset).",
+              "example": "WaitAndRetryAsync(3, attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)))"
+            },
+            {
+              "term": "Circuit breaker",
+              "longForm": "Circuit breaker pattern",
+              "plainDefinition": "After failure threshold, rejects calls immediately until half-open probe succeeds.",
+              "example": "BreakDuration = 30s after 5 consecutive failures"
+            },
+            {
+              "term": "Timeout policy",
+              "longForm": "Timeout resilience policy",
+              "plainDefinition": "Cancels operation exceeding deadline — prevents unbounded waits.",
+              "example": "Timeout.InfiniteTimeSpan vs TimeSpan.FromSeconds(5)"
+            },
+            {
+              "term": "Half-open",
+              "longForm": "Half-open circuit state",
+              "plainDefinition": "Trial period after break — one success closes circuit; failure reopens.",
+              "example": "Single probe request allowed through breaker"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "APIs calling payment, inventory, or identity services need controlled failure modes. Naive retry on POST doubles charges. Missing circuit breaker during outage causes retry storms that starve the thread pool — every request waits for timeout. Polly plus HttpClientFactory avoids socket exhaustion by reusing handlers while policies wrap each call."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Retry only idempotent operations",
+          "body": "Safe: GET, HEAD, PUT with idempotency key. Dangerous: POST payment without idempotency — use circuit breaker and timeout without blind retry, or retry only on 408/429 with idempotency header."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Circuit breaker state machine",
+          "items": [
+            {
+              "title": "Closed (normal)",
+              "body": "Calls pass through; failures increment counter."
+            },
+            {
+              "title": "Threshold exceeded",
+              "body": "Breaker opens — immediate BrokenCircuitException without calling downstream."
+            },
+            {
+              "title": "Open (fail fast)",
+              "body": "API returns 503 or fallback; downstream recovers without load."
+            },
+            {
+              "title": "Half-open",
+              "body": "After break duration, one trial call permitted."
+            },
+            {
+              "title": "Closed again",
+              "body": "Trial success resets failure count; failure reopens circuit."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Polly pipeline on HttpClient",
+            "source": "stateDiagram-v2\n  [*] --> Closed\n  Closed --> Open: failures >= threshold\n  Open --> HalfOpen: break duration elapsed\n  HalfOpen --> Closed: probe success\n  HalfOpen --> Open: probe fails\n  note right of Open: Fail fast — no HTTP call"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": ".NET 8 standard resilience handler on HttpClient",
+            "code": "builder.Services.AddHttpClient<IInventoryClient, InventoryClient>(client =>\n{\n    client.BaseAddress = new Uri(\"https://inventory.internal/\");\n    client.Timeout = Timeout.InfiniteTimeSpan; // Polly timeout owns deadline\n})\n.AddStandardResilienceHandler(options =>\n{\n    options.Retry.MaxRetryAttempts = 3;\n    options.Retry.Delay = TimeSpan.FromMilliseconds(200);\n    options.CircuitBreaker.MinimumThroughput = 10;\n    options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);\n    options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(5);\n});",
+            "explanation": "AddStandardResilienceHandler bundles retry, circuit breaker, attempt timeout, and total timeout. Set HttpClient.Timeout infinite so Polly controls deadlines consistently."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Polly v8 custom pipeline — retry + circuit breaker",
+            "code": "var pipeline = new ResiliencePipelineBuilder<HttpResponseMessage>()\n    .AddRetry(new RetryStrategyOptions<HttpResponseMessage>\n    {\n        MaxRetryAttempts = 3,\n        Delay = TimeSpan.FromSeconds(1),\n        BackoffType = DelayBackoffType.Exponential,\n        ShouldHandle = new PredicateBuilder<HttpResponseMessage>()\n            .Handle<HttpRequestException>()\n            .HandleResult(r => (int)r.StatusCode >= 500)\n    })\n    .AddCircuitBreaker(new CircuitBreakerStrategyOptions<HttpResponseMessage>\n    {\n        FailureRatio = 0.5,\n        MinimumThroughput = 20,\n        BreakDuration = TimeSpan.FromSeconds(30),\n        ShouldHandle = new PredicateBuilder<HttpResponseMessage>()\n            .Handle<HttpRequestException>()\n            .HandleResult(r => (int)r.StatusCode >= 500)\n    })\n    .Build();\n\nvar response = await pipeline.ExecuteAsync(\n    async ct => await httpClient.GetAsync(\"/api/stock/42\", ct));",
+            "explanation": "ShouldHandle limits retry/breaker to 5xx and network errors — not 404. MinimumThroughput avoids opening breaker on first failure in low traffic."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Map BrokenCircuitException to Problem Details",
+            "code": "app.MapGet(\"/api/orders/{id}\", async (int id, IOrdersService svc) =>\n{\n    try\n    {\n        return Results.Ok(await svc.GetOrderAsync(id));\n    }\n    catch (BrokenCircuitException)\n    {\n        return Results.Problem(\n            title: \"Dependency temporarily unavailable\",\n            statusCode: StatusCodes.Status503ServiceUnavailable,\n            extensions: new Dictionary<string, object?> { [\"retryAfter\"] = 30 });\n    }\n});",
+            "explanation": "Clients distinguish breaker open (503 + retryAfter) from business not-found (404). Do not retry 503 from breaker with same storm intensity — honor backoff."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure-mode diagnostic — log breaker state transitions",
+            "code": "options.CircuitBreaker.OnOpened = args =>\n{\n    logger.LogError(\"Circuit OPEN for {Client} duration={Duration}\",\n        nameof(InventoryClient), args.BreakDuration);\n    return default;\n};\noptions.CircuitBreaker.OnClosed = args =>\n{\n    logger.LogInformation(\"Circuit CLOSED for {Client}\", nameof(InventoryClient));\n    return default;\n};",
+            "explanation": "Alert on OnOpened — correlates with downstream outage or latency SLO breach. Pair with dependency metrics in Application Insights."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Resilience in Node vs Polly",
+          "headers": ["Pattern", "Polly / HttpClientFactory", "Node (axios-retry / opossum)"],
+          "rows": [
+            ["Retry + backoff", "RetryStrategyOptions exponential", "axios-retry with exponentialDelay"],
+            ["Circuit breaker", "AddCircuitBreaker built-in", "opossum circuit breaker library"],
+            ["Composition", "ResiliencePipeline builder", "Manual wrapper functions"],
+            ["HttpClient lifetime", "IHttpClientFactory manages handlers", "axios instance per module"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Retry on all exceptions including 400 Bad Request. HttpClient.Timeout shorter than Polly total timeout (double cancel race). No jitter on retry (thundering herd on recovery). Circuit breaker per instance without shared state — each pod opens independently (often acceptable)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights dependency failures drop when breaker opens — latency p95 may improve (fail fast). Log OnOpened events aligned with downstream incident. dotnet-trace shows threads blocked in HttpClient.SendAsync when timeout policy missing. Interview scenario: payment API — retry GET balance, breaker on inventory, never retry POST capture without idempotency key."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Policy mix by operation",
+          "headers": ["Operation", "Retry", "Circuit breaker", "Timeout"],
+          "rows": [
+            ["GET catalog", "Yes 3× exponential", "Yes", "2s attempt, 5s total"],
+            ["POST payment", "No (unless idempotent key)", "Yes", "Strict 3s"],
+            ["Background sync", "Yes with jitter", "Optional", "Longer total timeout"],
+            ["Health check probe", "No", "No", "1s fast fail"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Retrying POST payments blindly. Cannot draw circuit breaker states. Saying Polly replaces need for rate limiting. Ignoring HttpClientFactory — new HttpClient per request exhausts ports."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Polly composes retry, circuit breaker, timeout, and bulkhead on HttpClient via IHttpClientFactory.",
+    "When not to use retry: non-idempotent POST without idempotency key; breaker without minimum throughput tuning.",
+    "Production tip: AddStandardResilienceHandler defaults; log OnOpened; map BrokenCircuitException to 503 with retryAfter.",
+    "60s: Retry handles transient 5xx with backoff. Breaker opens after failure ratio — fail fast, half-open probe, close on success. Timeout cancels hung calls. HttpClientFactory plus Polly avoids socket exhaustion.",
+    "Follow-up: difference between attempt timeout and total request timeout in standard handler?"
+  ],
+  "commonPitfalls": [
+    "Saying 'retry three times on any error' gets you rejected — 400 and 404 are not transient; POST may duplicate side effects.",
+    "Creating new HttpClient() in a loop — SNAT port exhaustion despite Polly.",
+    "Strong answer: 'Standard resilience on GET clients; breaker opens at 50% failures with min throughput 20; payment POST uses timeout and breaker only, idempotency key for safe retry.'"
+  ],
+  "introducedIn": "Polly v8 pipelines; AddStandardResilienceHandler in .NET 8",
+  "relatedTopicIds": [
+    "dotnet-10-rate-limiting",
+    "dotnet-10-async-api-performance",
+    "dotnet-04-exception-handling-middleware",
+    "dotnet-02-idempotency-and-caching-headers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "opossum circuit breaker",
+      "note": "opossum open/halfOpen/closed states mirror Polly CircuitBreakerStrategy — fail fast when inventory service is down.",
+      "futureTopicSlug": "javascript/nodejs/circuit-breaker"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS HttpModule + axios-retry",
+      "note": "Nest wraps axios with retry interceptors — equivalent to Polly retry but composition with breaker is manual.",
+      "futureTopicSlug": "typescript/nestjs/http-resilience"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Build resilient HTTP apps with HttpClientFactory",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/resilience/http-resilience"
+    },
+    {
+      "title": "Polly resilience strategies",
+      "url": "https://www.pollydocs.org/strategies/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

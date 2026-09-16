@@ -1,0 +1,243 @@
+{
+  "id": "dotnet-10-ef-query-performance",
+  "slug": "ef-query-performance",
+  "title": "EF Core query performance (compiled queries, indexes, execution plans)",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 6,
+  "hook": "Entity Framework Core translates LINQ to SQL. Slow APIs often trace to missing indexes, N+1 queries, tracking overhead, or plans that scan millions of rows after a large customer import.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "EF Core builds SQL from LINQ expressions, executes via ADO.NET, and materializes entities or projections. Performance levers include AsNoTracking for read-only APIs, explicit Include vs projection to avoid N+1, compiled queries for hot paths, database indexes matching WHERE and ORDER BY, split queries for large graphs, and reading SQL logs or execution plans. After bulk onboarding inserts millions of rows, statistics drift — queries that used index seeks may regress to scans until UPDATE STATISTICS runs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Compiled query",
+              "longForm": "EF Core compiled query",
+              "plainDefinition": "LINQ expression compiled once and reused — reduces query compilation overhead on hot paths.",
+              "example": "EF.CompileAsyncQuery((DbContext db, int id) => ...)"
+            },
+            {
+              "term": "N+1",
+              "longForm": "N+1 query problem",
+              "plainDefinition": "One query for parent list plus N queries for each child navigation — classic API latency bug.",
+              "example": "foreach order load customer in loop"
+            },
+            {
+              "term": "Execution plan",
+              "longForm": "SQL execution plan",
+              "plainDefinition": "Database optimizer steps — seek vs scan, join order, estimated rows.",
+              "example": "SQL Server SET STATISTICS IO ON"
+            },
+            {
+              "term": "AsNoTracking",
+              "longForm": "AsNoTracking query behavior",
+              "plainDefinition": "Read-only queries skip change tracker — less memory and CPU on list endpoints.",
+              "example": ".AsNoTracking().ToListAsync()"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "API slow after large customer onboarding often means new tenant data shifted cardinality — missing composite index on (TenantId, CreatedAt) causes table scans on order lists. EF makes it easy to accidentally Include entire object graphs or return tracked entities from singleton services. Senior interviews expect EXPLAIN/plan literacy, projection to DTO, pagination, and knowing when raw SQL or Dapper beats EF for reporting."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Measure SQL not guesses",
+          "body": "Enable EF sensitive logging in dev, use MiniProfiler or OpenTelemetry SQL tags, and verify indexes with actual execution plans before adding Redis cache to mask slow queries."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Optimizing a slow list endpoint",
+          "items": [
+            {
+              "title": "Capture SQL",
+              "body": "Log ToQueryString() or Application Insights dependency text for the endpoint."
+            },
+            {
+              "title": "Check plan",
+              "body": "Index seek on filter columns; avoid SELECT * wide rows."
+            },
+            {
+              "title": "Fix shape",
+              "body": "Project to DTO, AsNoTracking, paginate, split query if needed."
+            },
+            {
+              "title": "Add index",
+              "body": "Migration with composite index matching WHERE + ORDER BY."
+            },
+            {
+              "title": "Verify",
+              "body": "Load test p95 and logical reads drop before caching layer."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "EF query pipeline to SQL",
+            "source": "flowchart LR\n  LINQ[LINQ in service] --> TRAN[Expression translator]\n  TRAN --> SQL[SQL command]\n  SQL --> DB[(SQL Server)]\n  DB --> MAT[Materialize DTO or entity]\n  MAT --> API[JSON response]\n  IDX[Missing index] -.->|scan| DB"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Read-only list with projection and pagination",
+            "code": "public async Task<PagedResult<OrderSummaryDto>> ListOrdersAsync(\n    string tenantId, int page, int size, CancellationToken ct)\n{\n    var query = _db.Orders.AsNoTracking()\n        .Where(o => o.TenantId == tenantId)\n        .OrderByDescending(o => o.CreatedAt)\n        .Select(o => new OrderSummaryDto(o.Id, o.Total, o.Status));\n\n    var total = await query.CountAsync(ct);\n    var items = await query.Skip((page - 1) * size).Take(size).ToListAsync(ct);\n    return new PagedResult<OrderSummaryDto>(items, total, page, size);\n}",
+            "explanation": "AsNoTracking for reads. Select projects narrow columns — no N+1. Ensure index on (TenantId, CreatedAt DESC). CountAsync is separate query — cursor pagination avoids total on huge tables."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Compiled async query for hot single-row lookup",
+            "code": "private static readonly Func<AppDbContext, int, Task<Order?>> GetOrderById =\n    EF.CompileAsyncQuery((AppDbContext db, int id) =>\n        db.Orders.AsNoTracking().FirstOrDefault(o => o.Id == id));\n\npublic Task<Order?> GetOrderAsync(int id, CancellationToken ct) =>\n    GetOrderById(_db, id);",
+            "explanation": "CompileAsyncQuery caches expression translation for repeated calls — valuable on high-RPS GET by id. Still needs primary key index."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Fix N+1 with split query Include",
+            "code": "// BAD: lazy loading in loop causes N+1\n// GOOD: explicit Include or projection\nvar orders = await _db.Orders.AsNoTracking()\n    .Where(o => o.TenantId == tenantId)\n    .Include(o => o.Lines)\n    .AsSplitQuery() // avoids cartesian explosion on collection include\n    .Take(50)\n    .ToListAsync(ct);",
+            "explanation": "AsSplitQuery sends separate SQL for includes — better than single JOIN cartesian product for multiple collections. Best: Select DTO with nested list in one projection when possible."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "sql",
+            "label": "Diagnostics — index and plan after bulk onboarding",
+            "code": "-- SQL Server: check missing index after tenant bulk import\nSET STATISTICS IO, TIME ON;\nSELECT Id, Total, Status FROM Orders\nWHERE TenantId = @tenant ORDER BY CreatedAt DESC\nOFFSET 0 ROWS FETCH NEXT 50 ROWS ONLY;\n-- Logical reads high + Index Scan = add composite index:\nCREATE INDEX IX_Orders_TenantId_CreatedAt ON Orders(TenantId, CreatedAt DESC);\n-- Update stats after bulk insert:\nUPDATE STATISTICS Orders WITH FULLSCAN;",
+            "explanation": "Onboarding bulk load skews statistics — optimizer chooses scan. Index plus updated stats often fix API slow without code change."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "ORM query performance parallels",
+          "headers": ["Issue", "EF Core", "TypeORM / Prisma (Node)"],
+          "rows": [
+            ["N+1", "Include / projection", "relations eager load / include"],
+            ["Read-only", "AsNoTracking", "queryRaw without entity manager cache"],
+            ["Hot path", "CompileAsyncQuery", "Prepared statements via driver"],
+            ["Plans", "SQL Server execution plan", "EXPLAIN ANALYZE in PostgreSQL"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Returning IQueryable from repository without pagination cap. Filtering in memory after ToListAsync. Singleton DbContext (not thread-safe). Caching tracked entities. Select * via entity when DTO needs three fields."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights dependency duration on SQL; logical reads via Extended Events. After onboarding, compare scan count on Orders table for new tenant_id. EF Core 8+ tagged queries appear in logs. Interview story: API p95 2s → missing (TenantId, CreatedAt) index + N+1 on Lines → fixed with projection and index → p95 80ms — cache optional afterward."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "EF optimization priority",
+          "headers": ["Technique", "Impact", "When first"],
+          "rows": [
+            ["Correct index", "Very high", "Always — before cache"],
+            ["Projection / AsNoTracking", "High", "Read APIs"],
+            ["Fix N+1", "High", "Graph endpoints"],
+            ["Compiled query", "Medium", "Microsecond-scale hot GET"],
+            ["Redis cache", "High after query fixed", "Read-heavy stable data"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Jumping to Redis without showing SQL. Not knowing N+1. Saying AsNoTracking helps writes. Unable to read basic execution plan seek vs scan."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "EF Core performance = correct SQL shape, indexes, AsNoTracking reads, avoid N+1, then optional cache.",
+    "When not to use EF: heavy reporting aggregations — consider raw SQL or read replica.",
+    "Production tip: composite indexes on tenant + sort columns; UPDATE STATISTICS after bulk onboarding imports.",
+    "60s: Log SQL, read plan for scan vs seek. Project DTOs AsNoTracking. Fix N+1 with Include split or Select. Index WHERE and ORDER BY columns. Compiled query for hot path. Cache only after query is fast.",
+    "Follow-up: offset pagination vs cursor pagination at ten million rows?"
+  ],
+  "commonPitfalls": [
+    "Saying 'add Redis' first gets you rejected — masking scan on ten million rows still hits DB on miss.",
+    "Include five levels deep on list endpoint — cartesian explosion and megabytes per request.",
+    "Strong answer: 'After onboarding, Orders scan on TenantId — added IX_TenantId_CreatedAt, projected DTO, split query on Lines, p95 2s to 90ms per dotnet trace SQL dependency.'"
+  ],
+  "introducedIn": "EF Core compiled queries; AsNoTracking standard for read APIs",
+  "relatedTopicIds": [
+    "dotnet-10-in-memory-distributed-cache",
+    "dotnet-10-diagnosing-slow-apis",
+    "dotnet-05-service-lifetimes",
+    "dotnet-03-controllers-vs-minimal-apis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Sequelize eager loading N+1",
+      "note": "include: [{ model: LineItems }] maps to EF Include — same N+1 failure mode if loaded in loop.",
+      "futureTopicSlug": "javascript/nodejs/orm-n-plus-one"
+    },
+    {
+      "language": "typescript",
+      "concept": "Prisma select and relationLoadStrategy",
+      "note": "Prisma select { id: true } mirrors EF projection; relationLoadStrategy query maps to split queries.",
+      "futureTopicSlug": "typescript/prisma/query-optimization"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "EF Core performance",
+      "url": "https://learn.microsoft.com/en-us/ef/core/performance/"
+    },
+    {
+      "title": "Compiled queries",
+      "url": "https://learn.microsoft.com/en-us/ef/core/performance/advanced-performance-topics#compiled-queries"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

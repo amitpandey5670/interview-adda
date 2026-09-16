@@ -1,0 +1,242 @@
+{
+  "id": "dotnet-10-diagnosing-slow-apis",
+  "slug": "diagnosing-slow-apis",
+  "title": "Diagnosing slow APIs (dotnet-counters, traces, p95 latency)",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 7,
+  "hook": "When an API slows down after a big customer onboarded, averages lie. You need dotnet-counters, dotnet-trace, structured logs, and p95 latency to find thread-pool starvation, SQL scans, or cache stampedes — not guesswork.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Diagnosing slow ASP.NET Core APIs combines runtime counters (thread pool, GC, Kestrel), distributed traces (OpenTelemetry, Application Insights), and percentile latency metrics (p50, p95, p99). The scenario 'API was fine, slow after large customer onboarding' usually involves one of: data volume crossing index threshold, cache key explosion, thread-pool starvation from sync-over-async, connection pool exhaustion, or downstream dependency timeout. Senior engineers structure investigation: reproduce under load, segment by tenant/route, compare p95 not average, then drill into traces."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "p95 latency",
+              "longForm": "95th percentile latency",
+              "plainDefinition": "95% of requests complete faster than this value — catches tail latency averages hide.",
+              "example": "p95 800ms while average 120ms"
+            },
+            {
+              "term": "dotnet-counters",
+              "longForm": "dotnet-counters diagnostic tool",
+              "plainDefinition": "CLI monitoring live System.Runtime and ASP.NET counters from a running process.",
+              "example": "threadpool-queue-length, gc-heap-size"
+            },
+            {
+              "term": "dotnet-trace",
+              "longForm": "dotnet-trace collector",
+              "plainDefinition": "Collects EventPipe traces for CPU stacks, GC, and HTTP events.",
+              "example": "dotnet-trace collect --profile cpu-sampling"
+            },
+            {
+              "term": "Golden signals",
+              "longForm": "Latency traffic errors saturation",
+              "plainDefinition": "SRE framework — latency percentiles, request rate, error rate, resource saturation.",
+              "example": "429 rate + queue length = saturation"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Production incidents without methodology burn hours. Teams restart pods (temporary), scale out (expensive), or add cache (masks SQL scans). Interviewers describe onboarding spike scenarios expecting a systematic answer: check p95 by endpoint, dotnet-counters for starvation, SQL dependencies in traces, Redis hit ratio, rate limit 429s. Prove fix with before/after p95 and counter dashboards."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Average latency misleads",
+          "body": "Average 150ms can hide p95 4s — users experience tail latency. SLO dashboards should chart p50/p95/p99 per route and tenant cohort after onboarding events."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Investigation playbook — slow API after onboarding",
+          "items": [
+            {
+              "title": "Segment metrics",
+              "body": "Filter p95 by route, tenant_id, deployment version — isolate regression scope."
+            },
+            {
+              "title": "Check saturation",
+              "body": "dotnet-counters: threadpool-queue-length, Kestrel current requests, SQL connection pool."
+            },
+            {
+              "title": "Trace slow requests",
+              "body": "OpenTelemetry/Application Insights: longest dependency — SQL, HTTP, Redis."
+            },
+            {
+              "title": "Hypothesis test",
+              "body": "Load test single tenant with k6; compare trace of fast vs slow tenant row counts."
+            },
+            {
+              "title": "Fix and verify",
+              "body": "Index/cache/async fix; redeploy; confirm p95 and counter normalization."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Diagnostic decision tree",
+            "source": "flowchart TD\n  SLOW[API p95 spike after onboarding] --> SEG[Segment by route and tenant]\n  SEG --> TP{threadpool-queue-length high?}\n  TP -->|yes| BLOCK[Find sync-over-async .Result]\n  TP -->|no| SQL{SQL dependency slow?}\n  SQL -->|yes| IDX[Index scan stats bulk import]\n  SQL -->|no| CACHE{Redis miss storm?}\n  CACHE -->|yes| STAMP[Cache stampede TTL]\n  CACHE -->|no| DOWN[Downstream timeout Polly]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "OpenTelemetry metrics — p95 friendly histogram",
+            "code": "builder.Services.AddOpenTelemetry()\n    .WithMetrics(m => m\n        .AddAspNetCoreInstrumentation()\n        .AddHttpClientInstrumentation()\n        .AddRuntimeInstrumentation()\n        .AddMeter(\"OrdersApi\")\n        .AddPrometheusExporter());\n\n// Custom: track cache hit ratio\npublic sealed class CacheMetrics\n{\n    private static readonly Counter<long> Hits =\n        MeterFactory.Create(\"OrdersApi\").CreateCounter<long>(\"cache.hits\");\n    public void Hit() => Hits.Add(1);\n}",
+            "explanation": "Runtime instrumentation exposes GC and thread pool to OTLP. Custom counters explain cache stampede — miss ratio spike aligned with TTL expiry."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "dotnet-counters live session during load test",
+            "code": "# Terminal 1 — load test\nk6 run --vus 100 --duration 2m scripts/orders-list.js\n\n# Terminal 2 — counters\ndotnet-counters monitor -n MyOrdersApi \\\n  --counters \\\n  System.Runtime[threadpool-queue-length,threadpool-thread-count,gc-heap-size,cpu-usage] \\\n  Microsoft.AspNetCore.Hosting[requests-per-second,current-requests,total-requests] \\\n  System.Data.SqlClient[hard-connects,soft-connects]",
+            "explanation": "Correlate rising current-requests with queue-length — starvation. SQL hard-connects spike — pool size too small for new tenant concurrency."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "dotnet-trace CPU sampling on slow pod",
+            "code": "dotnet-trace collect -n MyOrdersApi --profile cpu-sampling --duration 00:01:00\n# Load test during capture\n# Open .nettrace in Visual Studio or Speedscope\n# Look for: Task.GetResult, Wait, synchronous IO, JSON serialize hot paths",
+            "explanation": "CPU sampling under load reveals blocking frames even when average CPU looks low — many threads blocked show up as wait stacks."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Structured log correlation for slow request drill-down",
+            "code": "app.Use(async (ctx, next) =>\n{\n    var sw = Stopwatch.StartNew();\n    await next();\n    sw.Stop();\n    if (sw.ElapsedMilliseconds > 500)\n    {\n        logger.LogWarning(\n            \"Slow request {Method} {Path} {Ms}ms Tenant={Tenant} TraceId={TraceId}\",\n            ctx.Request.Method,\n            ctx.Request.Path,\n            sw.ElapsedMilliseconds,\n            ctx.User.FindFirstValue(\"tenant_id\"),\n            Activity.Current?.TraceId);\n    }\n});",
+            "explanation": "Threshold logging finds onboarding tenant without scanning all traces. TraceId links to distributed trace showing SQL duration vs Redis vs HTTP client."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Observability tooling parallels",
+          "headers": ["Signal", ".NET", "Node.js"],
+          "rows": [
+            ["Live counters", "dotnet-counters", "clinic doctor / prom-client"],
+            ["Traces", "OpenTelemetry + App Insights", "OpenTelemetry + Jaeger"],
+            ["Tail latency", "Prometheus histogram quantile", "Same histogram buckets"],
+            ["CPU profile", "dotnet-trace", "0x / clinic flamegraph"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Optimizing average latency only. Restarting pods without metrics. Enabling EF sensitive data logging in production. No tenant dimension on dashboards — miss onboarding-specific regression. Confusing 499 client cancel with server slowness."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: define SLO p95 < 300ms on GET /api/orders; alert on burn rate. After onboarding runbook: compare row count per tenant, index usage DMVs, Redis evicted_keys, threadpool-queue-length under k6 replay. 60-second interview story: 'p95 spiked for one tenant — trace showed 2s SQL scan — bulk import skipped index on TenantId — added index + stats update — p95 90ms.'"
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Symptom → tool → fix",
+          "headers": ["Observation", "Tool", "Common fix"],
+          "rows": [
+            ["p95 up, CPU low", "dotnet-counters queue-length", "Remove sync-over-async"],
+            ["p95 up, SQL dependency 2s", "EF SQL log / plan", "Index + projection"],
+            ["p95 up, Redis timeout", "Redis INFO latency", "Stampede lock / L1 cache"],
+            ["p95 up, all tenants", "Deploy timeline", "Bad release rollback first"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain p95 vs average. No structured playbook — only 'I would add logging.' Restart pods as first action. Unable to name dotnet-counters or threadpool-queue-length."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Diagnose with p95 latency, dotnet-counters (thread pool), dotnet-trace (CPU/blocking), and distributed traces.",
+    "When not to trust one signal: low average hides tail; always segment by tenant after onboarding.",
+    "Production tip: OpenTelemetry ASP.NET + runtime instrumentation; slow-request log with TraceId; SLO on p95.",
+    "60s: Onboarding spike — segment p95 by tenant. Counters: queue-length starvation? Trace: SQL scan? Redis miss storm? Fix root cause, verify p95 before cache band-aids.",
+    "Follow-up: how would you canary-test a new tenant cohort before full onboarding traffic?"
+  ],
+  "commonPitfalls": [
+    "Saying 'monitor CPU' only gets you rejected — starvation shows low CPU with high latency.",
+    "Using average request duration in dashboards — misses user-visible tail.",
+    "Strong answer: 'k6 replay tenant traffic; dotnet-counters showed queue 150; trace found .Result in OrdersController; async fix cut p95 from 3.2s to 180ms.'"
+  ],
+  "introducedIn": "dotnet-counters and dotnet-trace in .NET Core 3.0+; OpenTelemetry standard in .NET 8 templates",
+  "relatedTopicIds": [
+    "dotnet-10-async-api-performance",
+    "dotnet-10-ef-query-performance",
+    "dotnet-10-in-memory-distributed-cache",
+    "dotnet-04-exception-handling-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "clinic.js diagnostics",
+      "note": "clinic flame and doctor map to dotnet-trace CPU sampling — find event loop or thread pool bottlenecks under load.",
+      "futureTopicSlug": "javascript/nodejs/clinic-diagnostics"
+    },
+    {
+      "language": "typescript",
+      "concept": "OpenTelemetry Node SDK",
+      "note": "Same histogram p95 export model as .NET OpenTelemetry — portable SLO dashboards across services.",
+      "futureTopicSlug": "typescript/opentelemetry/metrics"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "dotnet-counters",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    },
+    {
+      "title": "Observability with OpenTelemetry in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

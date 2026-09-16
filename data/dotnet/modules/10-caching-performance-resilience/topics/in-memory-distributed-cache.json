@@ -1,0 +1,241 @@
+{
+  "id": "dotnet-10-in-memory-distributed-cache",
+  "slug": "in-memory-distributed-cache",
+  "title": "IMemoryCache and IDistributedCache (Redis-backed)",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 1,
+  "hook": "Caching stores expensive results so the next request is fast. IMemoryCache lives inside one server process; IDistributedCache (often Redis) shares cache entries across every instance of your API.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASP.NET Core offers two primary cache abstractions. IMemoryCache stores objects in the current process heap — fastest lookup, but invisible to other pods or servers. IDistributedCache serializes values to a shared store (Redis, SQL Server, NCache) so horizontal scale-out sees the same keys. Both use string keys, optional absolute and sliding expiration, and callbacks on eviction. Neither is a database — treat cache as an acceleration layer with explicit invalidation and TTL (time-to-live) policies."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IMemoryCache",
+              "longForm": "In-memory cache interface",
+              "plainDefinition": "Process-local cache backed by concurrent storage with expiration and optional size limits.",
+              "example": "cache.GetOrCreateAsync(\"product:42\", ...)"
+            },
+            {
+              "term": "IDistributedCache",
+              "longForm": "Distributed cache interface",
+              "plainDefinition": "Cross-process cache storing byte arrays; Redis is the common production backend.",
+              "example": "AddStackExchangeRedisCache"
+            },
+            {
+              "term": "TTL",
+              "longForm": "Time-to-live",
+              "plainDefinition": "Duration a cache entry remains valid before automatic expiration.",
+              "example": "AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)"
+            },
+            {
+              "term": "Cache stampede",
+              "longForm": "Cache stampede (thundering herd)",
+              "plainDefinition": "Many concurrent requests miss cache simultaneously and all hit the database.",
+              "example": "Hot key expires → hundreds of parallel DB queries"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "After onboarding a large customer, read-heavy endpoints suddenly serve ten times more distinct keys — memory pressure rises and Redis round-trips dominate latency. Choosing the wrong cache layer causes stale data across instances (memory-only cache on a farm) or thundering herd on hot keys (no stampede protection). Senior interviews expect you to explain GetOrCreateAsync locking, Redis single-flight patterns, and when cache-aside beats read-through."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Cache is not source of truth",
+          "body": "Always define TTL, invalidation on writes, and graceful degradation when Redis is down — serve from the database with higher latency rather than failing the request unless the data is strictly optional."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Cache-aside read path",
+          "items": [
+            {
+              "title": "Build cache key",
+              "body": "Include tenant id, entity id, and schema version — avoid collisions across customers."
+            },
+            {
+              "title": "Try cache get",
+              "body": "IMemoryCache.TryGetValue or IDistributedCache.GetAsync returns hit or miss."
+            },
+            {
+              "title": "On miss, load source",
+              "body": "Query database or call downstream API once (with stampede protection)."
+            },
+            {
+              "title": "Set with expiration",
+              "body": "Write entry with absolute and sliding expiration; serialize for distributed cache."
+            },
+            {
+              "title": "Return value",
+              "body": "Subsequent requests hit cache until TTL or explicit remove."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IMemoryCache vs IDistributedCache in a web farm",
+            "source": "flowchart LR\n  subgraph PodA[API Pod A]\n    MC[IMemoryCache]\n  end\n  subgraph PodB[API Pod B]\n    MC2[IMemoryCache]\n  end\n  Redis[(Redis IDistributedCache)]\n  DB[(Database)]\n  PodA --> MC\n  PodB --> MC2\n  MC --> Redis\n  MC2 --> Redis\n  MC -. miss .-> DB\n  MC2 -. miss .-> DB"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register memory and Redis distributed cache",
+            "code": "builder.Services.AddMemoryCache(options =>\n{\n    options.SizeLimit = 10_000; // entries must set Size = 1\n});\nbuilder.Services.AddStackExchangeRedisCache(options =>\n{\n    options.Configuration = builder.Configuration[\"Redis:Connection\"];\n    options.InstanceName = \"orders-api:\";\n});\n// IMemoryCache is singleton; inject into scoped services",
+            "explanation": "SizeLimit prevents unbounded heap growth. InstanceName prefixes all Redis keys for this service — critical when sharing a Redis cluster."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "GetOrCreateAsync with stampede protection (memory cache)",
+            "code": "public async Task<ProductDto> GetProductAsync(int id, CancellationToken ct)\n{\n    var key = $\"product:{id}:v2\";\n    return await _memory.GetOrCreateAsync(key, async entry =>\n    {\n        entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10);\n        entry.SlidingExpiration = TimeSpan.FromMinutes(2);\n        entry.Size = 1;\n        return await _db.Products.AsNoTracking()\n            .Where(p => p.Id == id)\n            .Select(p => new ProductDto(p.Id, p.Name, p.Price))\n            .FirstAsync(ct);\n    }) ?? throw new NotFoundException(id);\n}",
+            "explanation": "GetOrCreateAsync holds a per-key lock so only one factory runs on miss — others await the same Task. Always set Size when SizeLimit is configured."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Distributed cache with JSON serialization",
+            "code": "public async Task<CatalogDto?> GetCatalogAsync(string tenantId, CancellationToken ct)\n{\n    var key = $\"catalog:{tenantId}\";\n    var bytes = await _distributed.GetAsync(key, ct);\n    if (bytes is not null)\n        return JsonSerializer.Deserialize<CatalogDto>(bytes);\n\n    var catalog = await _catalogService.BuildAsync(tenantId, ct);\n    await _distributed.SetAsync(key,\n        JsonSerializer.SerializeToUtf8Bytes(catalog),\n        new DistributedCacheEntryOptions\n        {\n            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)\n        }, ct);\n    return catalog;\n}",
+            "explanation": "IDistributedCache stores bytes — you own serialization. Version keys when DTO shape changes to avoid deserializing stale payloads."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure-mode — Redis down, fall back to database",
+            "code": "public async Task<DashboardDto> GetDashboardSafeAsync(string tenantId, CancellationToken ct)\n{\n    try\n    {\n        var bytes = await _distributed.GetAsync($\"dashboard:{tenantId}\", ct);\n        if (bytes is not null)\n            return JsonSerializer.Deserialize<DashboardDto>(bytes)!;\n    }\n    catch (RedisConnectionException ex)\n    {\n        _logger.LogWarning(ex, \"Redis unavailable — bypassing L2 for {Tenant}\", tenantId);\n    }\n    return await _queries.LoadDashboardAsync(tenantId, ct);\n}",
+            "explanation": "Production APIs degrade gracefully when Redis fails open to DB. Alert on RedisConnectionException rate — not every miss should become a DB hit forever."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Process cache vs Redis in Node",
+          "headers": ["Concern", "ASP.NET Core", "Node (ioredis / lru-cache)"],
+          "rows": [
+            ["In-process", "IMemoryCache with SizeLimit", "lru-cache or node-cache Map"],
+            ["Shared", "AddStackExchangeRedisCache", "ioredis.get / set with JSON.stringify"],
+            ["Stampede", "GetOrCreateAsync per-key lock", "Redlock or single-flight helper"],
+            ["Invalidation", "Remove / RemoveAsync on write", "redis.del plus local cache clear"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Caching Entity Framework tracked entities (state leaks across requests). Same cache key for all tenants (cross-tenant data leak). No TTL on IMemoryCache (memory leak after onboarding spike). Assuming IDistributedCache has GetOrCreate — implement single-flight yourself for Redis."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: emit OpenTelemetry counters cache.hit and cache.miss per endpoint. Redis INFO keyspace_hits/misses and evicted_keys explain memory pressure after bulk onboarding. Correlate DB query spikes with Redis key TTL expiry — classic stampede signature. Hybrid L1 (30s memory) + L2 Redis reduces cross-AZ RTT on hot dashboard keys."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "When to use which cache layer",
+          "headers": ["Layer", "Use when", "Avoid when"],
+          "rows": [
+            ["IMemoryCache", "Reference data, per-pod hot keys, L1 in front of Redis", "Must be instantly consistent across all instances"],
+            ["IDistributedCache (Redis)", "Farm-wide catalog, rate limit counters, session-like data", "Large payloads (>1 MB) — cache a pointer to blob storage"],
+            ["CDN / output cache", "Anonymous GET responses", "Personalized JSON without Vary headers"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying IMemoryCache works across Kubernetes pods. Ignoring cache stampede when a hot key expires. Omitting tenant id from keys. Claiming Redis is always faster — network RTT on tiny objects can lose to an indexed database query."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IMemoryCache is process-local; IDistributedCache (Redis) shares entries across scaled API instances.",
+    "When not to use: strongly consistent reads, huge payloads, or when invalidation is harder than the query.",
+    "Production tip: version keys, set SizeLimit, GetOrCreateAsync or Redis lock against stampede, degrade when Redis is down.",
+    "60s: Cache-aside — try get, on miss load DB once with lock, set TTL, return. Memory for L1 speed, Redis for farm consistency. Invalidate on writes. Stampede = parallel misses at expiry — single-flight fixes it.",
+    "Follow-up: how would you invalidate catalog cache for one tenant after bulk import without flushing all Redis?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we use IMemoryCache with five replicas' gets you rejected — each pod has its own heap until TTL diverges.",
+    "Caching EF tracked entities — stale navigation properties and cross-request state bugs.",
+    "Strong answer: 'L1 memory 30s + L2 Redis 5min, tenant-scoped keys, RemoveAsync on write, distributed lock on hot key rebuild after onboarding.'"
+  ],
+  "introducedIn": "IMemoryCache since ASP.NET Core 1.0; StackExchange.Redis provider is the production default",
+  "relatedTopicIds": [
+    "dotnet-10-response-output-caching",
+    "dotnet-10-diagnosing-slow-apis",
+    "dotnet-02-idempotency-and-caching-headers",
+    "dotnet-07-owasp-api-security"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "ioredis cache-aside",
+      "note": "Same read-through pattern as IDistributedCache — JSON serialize, TTL with SETEX, no built-in factory lock.",
+      "futureTopicSlug": "javascript/nodejs/redis-cache-aside"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS cache-manager",
+      "note": "cache-manager supports memory and redis stores — mirrors AddMemoryCache plus AddStackExchangeRedisCache split.",
+      "futureTopicSlug": "typescript/nestjs/cache-manager"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Cache in-memory in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/memory"
+    },
+    {
+      "title": "Distributed Redis cache",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/distributed"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

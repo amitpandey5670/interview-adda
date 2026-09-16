@@ -1,0 +1,242 @@
+{
+  "id": "dotnet-10-async-api-performance",
+  "slug": "async-api-performance",
+  "title": "Async API performance (thread-pool starvation, sync-over-async)",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 5,
+  "hook": "Async endpoints free threads while waiting on I/O. Blocking with .Result or .Wait() in controllers ties up thread-pool threads — under load your API slows to a crawl even when CPU is idle.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASP.NET Core handles each request on a thread-pool thread. async/await releases that thread during I/O (database, HTTP, file) so the pool serves other requests. Sync-over-async means blocking — task.Result, task.Wait(), or GetAwaiter().GetResult() — holding the thread for the entire wait. ASP.NET Core has no request SynchronizationContext, so classic UI deadlocks are rare, but thread-pool starvation is common: 500 concurrent requests each blocking on async I/O can exhaust the pool while CPU stays low."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Thread-pool starvation",
+              "longForm": "CLR thread-pool starvation",
+              "plainDefinition": "All pool threads blocked waiting; new work queues while CPUs idle.",
+              "example": "Queue depth rises; request latency spikes to seconds"
+            },
+            {
+              "term": "Sync-over-async",
+              "longForm": "Synchronous waiting on asynchronous code",
+              "plainDefinition": "Blocking a thread until an async operation completes instead of awaiting.",
+              "example": "return _service.GetDataAsync().Result;"
+            },
+            {
+              "term": "I/O completion port",
+              "longForm": "I/O completion port (IOCP)",
+              "plainDefinition": "Windows mechanism for async I/O; await releases thread until completion.",
+              "example": "await connection.ExecuteReaderAsync()"
+            },
+            {
+              "term": "MinThreads",
+              "longForm": "ThreadPool minimum threads",
+              "plainDefinition": "CLR setting sometimes raised as band-aid — does not fix blocking root cause.",
+              "example": "ThreadPool.SetMinThreads(200, 200) // smell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "After large customer onboarding, traffic doubles. APIs that looked fine at 50 RPS collapse at 200 RPS because controllers call legacy libraries with .Result. Reddit r/dotnet frequently posts 'API slow under load, CPU 10%' — textbook starvation. Senior interviews ask you to trace blocking stack, fix with async all the way, and read dotnet-counters threadpool-queue-length and threadpool-thread-count."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Async all the way",
+          "body": "Controller async → service async → EF Core ToListAsync / HttpClient SendAsync. One .Result in the chain negates the benefit for that request's thread."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Healthy async request vs starvation",
+          "items": [
+            {
+              "title": "Request arrives",
+              "body": "Kestrel assigns thread-pool thread to middleware pipeline."
+            },
+            {
+              "title": "await database",
+              "body": "Thread returns to pool; other requests use it."
+            },
+            {
+              "title": "I/O completes",
+              "body": "Continuation runs on pool thread; response sent."
+            },
+            {
+              "title": "Blocking path",
+              "body": ".Result holds thread entire DB wait — pool thread unavailable."
+            },
+            {
+              "title": "Starvation",
+              "body": "Pool queue grows; new requests wait seconds for free thread."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Async vs sync-over-async under load",
+            "source": "sequenceDiagram\n  participant K as Kestrel\n  participant TP as Thread Pool\n  participant DB as Database\n  Note over K,DB: Healthy async\n  K->>TP: Thread 1 start\n  TP->>DB: await query (release Thread 1)\n  TP->>K: Thread 2 serves other requests\n  DB-->>TP: complete on Thread 3\n  Note over K,DB: Sync-over-async\n  K->>TP: Thread 1 .Result on query\n  TP--xTP: Thread 1 blocked entire wait\n  K--xK: New requests queue — starvation"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Correct async controller end-to-end",
+            "code": "[ApiController]\n[Route(\"api/[controller]\")]\npublic class OrdersController(IOrderService orders) : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    public async Task<ActionResult<OrderDto>> Get(int id, CancellationToken ct)\n    {\n        var order = await orders.GetByIdAsync(id, ct);\n        return order is null ? NotFound() : Ok(order);\n    }\n}\n\npublic class OrderService(AppDbContext db) : IOrderService\n{\n    public Task<OrderDto?> GetByIdAsync(int id, CancellationToken ct) =>\n        db.Orders.AsNoTracking()\n            .Where(o => o.Id == id)\n            .Select(o => new OrderDto(o.Id, o.Total))\n            .FirstOrDefaultAsync(ct);\n}",
+            "explanation": "Action returns Task<ActionResult>; EF uses FirstOrDefaultAsync; CancellationToken propagates on client disconnect."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Anti-pattern — sync-over-async in controller",
+            "code": "[HttpGet(\"report\")]\npublic ActionResult<ReportDto> GetReport()\n{\n    // BAD: blocks thread-pool thread for entire I/O\n    var data = _reportService.BuildReportAsync().Result;\n    return Ok(data);\n}\n\n// Also BAD:\npublic IActionResult GetLegacy() =>\n    Ok(_legacyLibrary.FetchAsync().GetAwaiter().GetResult());",
+            "explanation": "Under concurrency, each blocked thread is unavailable for other requests. Latency p95 explodes while CPU remains low — classic starvation signature."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Fix legacy library with IAsyncEnumerable or Task.Run boundary",
+            "code": "// Prefer: refactor legacy to truly async\n// Temporary isolation — offload CPU-bound sync work only, NOT I/O blocking:\npublic async Task<ReportDto> BuildReportAsync(CancellationToken ct)\n{\n    // If library is sync CPU-only:\n    return await Task.Run(() => _legacy.ComputeReport(), ct);\n    // Never Task.Run(() => httpClient.GetAsync().Result) — still blocks inner thread\n}\n\n[HttpGet(\"report\")]\npublic async Task<ActionResult<ReportDto>> GetReport(CancellationToken ct)\n{\n    return Ok(await _reports.BuildReportAsync(ct));\n}",
+            "explanation": "Task.Run is for CPU-bound isolation, not hiding I/O .Result. Refactor legacy SDK to async or use dedicated worker queue for blocking calls."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Diagnostics — dotnet-counters thread-pool starvation",
+            "code": "dotnet-counters monitor --process-id $(pidof MyApi) \\\n  --counters System.Runtime[threadpool-thread-count,threadpool-queue-length,cpu-usage]\n\n# Starvation signature under load test:\n# threadpool-queue-length >> 0 sustained\n# threadpool-thread-count at max\n# cpu-usage low\n# Fix: find .Wait/.Result in dotnet-trace CPU stacks",
+            "explanation": "Queue length sustained above zero with low CPU means threads blocked waiting — not insufficient cores. dotnet-trace with thread-time profile finds blocking frames."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Concurrency model: .NET thread pool vs Node event loop",
+          "headers": ["Aspect", "ASP.NET Core async", "Node.js"],
+          "rows": [
+            ["Model", "Thread pool + async I/O release", "Single-thread event loop"],
+            ["Blocking sin", ".Result exhausts pool threads", "sync fs.readFileSync blocks entire loop"],
+            ["Scale knob", "Kestrel + async all the way", "Worker threads cluster for CPU"],
+            ["Detection", "dotnet-counters queue length", "Event loop lag metric"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "async void action methods. Returning Task without await (fire-and-forget in controller). ConfigureAwait(false) obsession in ASP.NET Core (no SyncContext). ThreadPool.SetMinThreads as permanent fix. Parallel.ForEach with blocking HTTP inside."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters threadpool-queue-length correlates with p95 latency during onboarding load test. dotnet-trace WallClockTime or ThreadTime shows blocked stacks in GetResult. Application Insights request duration high with low processor time. Fix verified when queue length stays near zero at same RPS. Correlate with C# topic sync-over-async — same mechanism, API hosting context."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Symptom vs root cause",
+          "headers": ["Symptom", "Likely cause", "Fix"],
+          "rows": [
+            ["p95 5s, CPU 8%", "Thread-pool starvation", "Remove .Result; async EF/HttpClient"],
+            ["p95 5s, CPU 95%", "CPU-bound work on request thread", "Cache, optimize, background queue"],
+            ["Timeouts only under load", "Pool exhaustion + downstream slow", "Async + Polly timeout + scale"],
+            ["MinThreads helped briefly", "Masking blocking", "Find blocking call sites"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying async is only for UI. Recommending ThreadPool.SetMinThreads without finding .Result. Claiming ASP.NET Core cannot deadlock (true for SyncContext, false for starvation). Using Task.Run to wrap every async call."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "async/await releases thread-pool threads during I/O; .Result/.Wait() causes thread-pool starvation under load.",
+    "When not to use Task.Run: wrapping I/O .Result — still blocks a thread somewhere.",
+    "Production tip: dotnet-counters threadpool-queue-length + dotnet-trace; async from controller to EF/HttpClient.",
+    "60s: Kestrel uses pool threads. await frees thread during DB/HTTP wait. .Result blocks — under concurrency pool exhausts, queue grows, p95 spikes, CPU low. Fix async all the way; trace blocking stacks.",
+    "Follow-up: why is ConfigureAwait(false) usually unnecessary in ASP.NET Core?"
+  ],
+  "commonPitfalls": [
+    "Saying 'just add more servers' gets you rejected — each instance starves its own pool the same way.",
+    "Task.Run(() => client.GetAsync().Result) — hides blocking on another pool thread, does not add throughput.",
+    "Strong answer: 'API slow after onboarding — counters showed queue length 200, CPU 12%. Trace found .Result in controller calling legacy SDK. Refactored to async; p95 dropped from 4s to 120ms.'"
+  ],
+  "introducedIn": "async controllers since ASP.NET Core 1.0; thread-pool diagnostics in dotnet-counters",
+  "relatedTopicIds": [
+    "dotnet-10-polly-resilience",
+    "dotnet-10-diagnosing-slow-apis",
+    "dotnet-03-controllers-vs-minimal-apis",
+    "dotnet-05-service-lifetimes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Event loop blocking",
+      "note": "readFileSync blocking the single Node thread is analogous to .Result starving ASP.NET thread pool — different runtime, same 'blocking under concurrency' interview theme.",
+      "futureTopicSlug": "javascript/nodejs/event-loop-blocking"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS async controllers",
+      "note": "Nest implicitly awaits Promise return values like ASP.NET Task — returning sync blocking call from async handler still blocks pool/thread.",
+      "futureTopicSlug": "typescript/nestjs/async-controllers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Async programming in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/best-practices"
+    },
+    {
+      "title": "dotnet-counters diagnostic tool",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

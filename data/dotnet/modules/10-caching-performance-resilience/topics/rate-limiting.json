@@ -1,0 +1,242 @@
+{
+  "id": "dotnet-10-rate-limiting",
+  "slug": "rate-limiting",
+  "title": "Rate limiting (fixed window, sliding window, concurrency)",
+  "moduleId": "dotnet-10-caching-performance-resilience",
+  "order": 3,
+  "hook": "Rate limiting caps how many requests a client can send in a time window. ASP.NET Core 7+ ships built-in middleware with fixed, sliding, token-bucket, and concurrency limiters — return 429 Too Many Requests before your database does.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Rate limiting protects APIs from abuse, accidental retry storms, and noisy neighbors after large customer onboarding. Microsoft.AspNetCore.RateLimiting provides partition keys (IP, user id, API key client_id), multiple algorithms, and OnRejected callbacks for Problem Details responses. Limiters run early in the pipeline — typically after routing so endpoint metadata can select policies. Distributed rate limiting requires a shared store (Redis) when multiple API instances must enforce one global budget."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Fixed window",
+              "longForm": "Fixed window rate limiter",
+              "plainDefinition": "Allows N requests per fixed time slice (e.g. 100 per minute starting at :00).",
+              "example": "PermitLimit = 100, Window = TimeSpan.FromMinutes(1)"
+            },
+            {
+              "term": "Sliding window",
+              "longForm": "Sliding window rate limiter",
+              "plainDefinition": "Counts requests in a rolling interval — smoother than fixed window burst at boundary.",
+              "example": "SegmentsPerWindow = 4 smooths one-minute window"
+            },
+            {
+              "term": "Token bucket",
+              "longForm": "Token bucket algorithm",
+              "plainDefinition": "Tokens refill at steady rate; burst allowed up to bucket capacity.",
+              "example": "TokenLimit = 50, TokensPerPeriod = 10"
+            },
+            {
+              "term": "Concurrency limiter",
+              "longForm": "Concurrency rate limiter",
+              "plainDefinition": "Caps simultaneous in-flight requests per partition — not requests per second.",
+              "example": "PermitLimit = 10 concurrent exports"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OWASP API Security Top 10 lists unrestricted resource consumption (API4) — rate limiting is the first line of defense alongside pagination caps and body size limits. After onboarding a tenant that runs aggressive integration tests, fixed-window limiters may allow 200 requests at 12:00:59 and 12:01:00 (boundary burst). Senior engineers explain algorithm tradeoffs, Retry-After headers, and per-tenant vs global partitions."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "429 is not authentication",
+          "body": "Return 429 Too Many Requests with Retry-After when quota exceeded. Do not confuse with 401/403. Log partition key and policy name for support tickets — never log raw API keys."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Built-in rate limiter flow",
+          "items": [
+            {
+              "title": "Select partition key",
+              "body": "IP address, authenticated user id, or API key client_id from claims."
+            },
+            {
+              "title": "Acquire permit",
+              "body": "Limiter algorithm decrements quota for this partition."
+            },
+            {
+              "title": "Rejected",
+              "body": "OnRejected writes 429, Retry-After, and optional Problem Details."
+            },
+            {
+              "title": "Accepted",
+              "body": "Request continues to auth, caching, and endpoint."
+            },
+            {
+              "title": "Release (concurrency)",
+              "body": "Concurrency limiter releases slot when response completes."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Rate limit algorithms compared",
+            "source": "flowchart TB\n  subgraph Fixed[Fixed Window]\n    F1[0-60s: 100 req] --> F2[60-120s: reset to 100]\n  end\n  subgraph Sliding[Sliding Window]\n    S1[Rolling 60s count] --> S2[No double burst at boundary]\n  end\n  subgraph Token[Token Bucket]\n    T1[Refill 10/s] --> T2[Burst up to bucket size]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register multiple limiter policies",
+            "code": "builder.Services.AddRateLimiter(options =>\n{\n    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;\n    options.OnRejected = async (ctx, ct) =>\n    {\n        ctx.HttpContext.Response.Headers.RetryAfter =\n            ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retry)\n                ? ((int)retry.TotalSeconds).ToString() : \"60\";\n        await ctx.HttpContext.Response.WriteAsJsonAsync(\n            new { title = \"Too many requests\", status = 429 }, ct);\n    };\n    options.AddFixedWindowLimiter(\"fixed\", o =>\n    {\n        o.PermitLimit = 100;\n        o.Window = TimeSpan.FromMinutes(1);\n        o.QueueLimit = 0;\n    });\n    options.AddSlidingWindowLimiter(\"sliding\", o =>\n    {\n        o.PermitLimit = 100;\n        o.Window = TimeSpan.FromMinutes(1);\n        o.SegmentsPerWindow = 4;\n    });\n    options.AddConcurrencyLimiter(\"export\", o => o.PermitLimit = 5);\n});\napp.UseRateLimiter();",
+            "explanation": "Fixed window is simplest but boundary-bursts. Sliding window smooths spikes. Concurrency caps long-running exports — different axis than requests/minute."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Partition by authenticated tenant after onboarding",
+            "code": "options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>\n{\n    var tenant = ctx.User.FindFirstValue(\"tenant_id\")\n        ?? ctx.Connection.RemoteIpAddress?.ToString()\n        ?? \"anonymous\";\n    return RateLimitPartition.GetSlidingWindowLimiter(tenant, _ => new SlidingWindowRateLimiterOptions\n    {\n        PermitLimit = 500,\n        Window = TimeSpan.FromMinutes(1),\n        SegmentsPerWindow = 6\n    });\n});\n\napp.MapGet(\"/api/orders\", GetOrders).RequireRateLimiting(\"sliding\");",
+            "explanation": "Large customers get tenant_id claim — partition by tenant not shared IP (NAT). Fallback to IP for anonymous health probes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Token bucket for bursty mobile clients",
+            "code": "options.AddTokenBucketLimiter(\"mobile\", o =>\n{\n    o.TokenLimit = 100;\n    o.TokensPerPeriod = 20;\n    o.ReplenishmentPeriod = TimeSpan.FromSeconds(1);\n    o.AutoReplenishment = true;\n});\napp.MapGroup(\"/api/mobile\").RequireRateLimiting(\"mobile\");",
+            "explanation": "Token bucket allows short bursts (app launch sync) while maintaining average rate — better UX than strict fixed window for mobile."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — log rejections with partition key",
+            "code": "options.OnRejected = async (context, token) =>\n{\n    var log = context.HttpContext.RequestServices\n        .GetRequiredService<ILoggerFactory>().CreateLogger(\"RateLimit\");\n    log.LogWarning(\"Rate limit rejected Path={Path} Partition={Partition}\",\n        context.HttpContext.Request.Path,\n        context.HttpContext.Items[\"RateLimitPartition\"] ?? \"unknown\");\n    context.HttpContext.Response.StatusCode = 429;\n    await context.HttpContext.Response.WriteAsync(\"Rate limit exceeded.\", token);\n};",
+            "explanation": "Track 429 rate per tenant after onboarding — spike may mean integration misconfigured retry loop, not attack."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Rate limiting in Node ecosystems",
+          "headers": ["Aspect", "ASP.NET Core RateLimiter", "Express rate-limit / Nest Throttler"],
+          "rows": [
+            ["Algorithms", "Fixed, sliding, token, concurrency built-in", "Often fixed window; Redis store via plugin"],
+            ["Partition", "PartitionedRateLimiter<TKey>", "Custom keyGenerator on IP or user"],
+            ["Pipeline", "UseRateLimiter middleware", "express-rate-limit middleware order manual"],
+            ["Distributed", "Custom Redis partition (community patterns)", "rate-limit-redis npm package"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Rate limiting after expensive middleware (auth + DB before 429). Same global limit for health checks and heavy exports. No Retry-After header (clients exponential-backoff blindly). In-memory limiter on multi-instance farm without shared Redis — each pod allows full quota."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: metric http.server.requests{status=429} per route and tenant. Compare fixed vs sliding — if 429s cluster at minute boundaries, switch to sliding or token bucket. For farm-wide limits, implement Redis-backed PartitionedRateLimiter or Azure API Management front door. dotnet-counters does not expose rate limits — use app metrics and load test with k6 verifying 429 ratio."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Algorithm selection",
+          "headers": ["Algorithm", "Best for", "Weakness"],
+          "rows": [
+            ["Fixed window", "Simple per-IP caps, low memory", "2× burst at window boundary"],
+            ["Sliding window", "Fairer per-tenant API quotas", "Slightly more CPU/memory"],
+            ["Token bucket", "Mobile burst then steady rate", "Tuning token limit requires load tests"],
+            ["Concurrency", "Heavy reports, file generation", "Does not limit requests per second"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain fixed-window boundary burst. Saying rate limiting replaces authentication. No mention of distributed store when running ten pods. Using concurrency limiter when you meant requests-per-minute."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Built-in RateLimiter (.NET 7+) supports fixed, sliding, token bucket, and concurrency algorithms with partition keys.",
+    "When not to use as sole defense: authenticated abuse needs per-user quotas; DDoS needs edge/WAF not app-tier limiter alone.",
+    "Production tip: partition by tenant_id after onboarding; Retry-After on 429; Redis for farm-wide counts.",
+    "60s: Acquire permit early in pipeline per partition. Fixed window resets at boundary — can double burst. Sliding rolls. Token bucket allows burst. Concurrency caps in-flight work. 429 with Retry-After.",
+    "Follow-up: how would you implement global rate limit across ten Kubernetes pods?"
+  ],
+  "commonPitfalls": [
+    "Saying '100 req/min fixed window stops all abuse' gets you rejected — clients can send 200 at minute rollover.",
+    "Per-pod in-memory limiter on scaled deployment — effective limit is N × PermitLimit.",
+    "Strong answer: 'Sliding window per tenant_id in Redis partition; concurrency limit on export endpoint; 429 with Retry-After; alert when one tenant hits 429 constantly after onboarding.'"
+  ],
+  "introducedIn": "Microsoft.AspNetCore.RateLimiting built-in since .NET 7",
+  "relatedTopicIds": [
+    "dotnet-10-polly-resilience",
+    "dotnet-07-owasp-api-security",
+    "dotnet-04-middleware-order",
+    "dotnet-10-diagnosing-slow-apis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "express-rate-limit",
+      "note": "Default store is in-memory Map like fixed window per IP — same multi-instance multiplication problem without Redis.",
+      "futureTopicSlug": "javascript/express/rate-limiting"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS ThrottlerGuard",
+      "note": "ThrottlerModule uses TTL + limit similar to fixed window; custom storage needed for Redis farm-wide.",
+      "futureTopicSlug": "typescript/nestjs/throttler"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Rate limiting middleware in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/rate-limit"
+    },
+    {
+      "title": "OWASP API Security Top 10",
+      "url": "https://owasp.org/API-Security/editions/2023/en/0xa4-unrestricted-resource-consumption/"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}
