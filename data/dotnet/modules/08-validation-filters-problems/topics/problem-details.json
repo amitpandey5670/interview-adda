@@ -1,0 +1,239 @@
+{
+  "id": "dotnet-08-problem-details",
+  "slug": "problem-details",
+  "title": "Problem Details (RFC 7807) and Results.Problem",
+  "moduleId": "dotnet-08-validation-filters-problems",
+  "order": 5,
+  "hook": "Problem Details is the standard JSON format for HTTP API errors defined by RFC 7807. ASP.NET Core ships ProblemDetails, ValidationProblemDetails, and Results.Problem so every 4xx and 5xx response shares the same predictable shape.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "RFC 7807 (Problem Details for HTTP Application Programming Interfaces (APIs)) defines a media type application/problem+json with core fields: type (URI identifying the problem), title (short human summary), status (HTTP status code), detail (specific explanation), and instance (URI for this occurrence). ASP.NET Core provides Microsoft.AspNetCore.Mvc.ProblemDetails and ValidationProblemDetails (adds an errors dictionary for field validation). Minimal APIs use Results.Problem(...) and Results.ValidationProblem(...). AddProblemDetails() registers customization via IProblemDetailsService and IProblemDetailsWriter for consistent production error bodies."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "RFC 7807",
+              "longForm": "Request for Comments 7807",
+              "plainDefinition": "IETF standard defining application/problem+json error document structure for HTTP APIs.",
+              "example": "{ \"type\": \"...\", \"title\": \"Bad Request\", \"status\": 400 }"
+            },
+            {
+              "term": "ProblemDetails",
+              "longForm": "ProblemDetails class",
+              "plainDefinition": "ASP.NET Core model for RFC 7807 with Type, Title, Status, Detail, Instance, Extensions.",
+              "example": "new ProblemDetails { Status = 404, Title = \"Not found\" }"
+            },
+            {
+              "term": "ValidationProblemDetails",
+              "longForm": "ValidationProblemDetails",
+              "plainDefinition": "ProblemDetails subclass with Errors dictionary mapping field names to message arrays.",
+              "example": "errors.Email = [\"Invalid email format.\"]"
+            },
+            {
+              "term": "IProblemDetailsService",
+              "longForm": "IProblemDetailsService",
+              "plainDefinition": ".NET 7+ service that writes ProblemDetails to the response with customization hooks.",
+              "example": "await problemDetailsService.TryWriteAsync(new ProblemDetailsContext { ... });"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Clients, API gateways, and mobile apps parse one error contract across all endpoints. Custom ad-hoc shapes like { error: true, msg: \"...\" } break gateway routing and client SDKs. Problem Details extensions carry correlationId, traceId, error codes, and retry hints without polluting top-level fields. Senior interviews contrast Problem Details vs custom errors — when extensions are enough versus when a completely custom envelope is justified."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Problem Details vs custom errors",
+          "body": "Prefer RFC 7807 with extensions for domain codes (extensions.code = \"ORDER_NOT_FOUND\"). Custom top-level wrappers duplicate what extensions provide and break standards-aware clients. Only wrap if a legacy client cannot migrate."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Producing Problem Details in ASP.NET Core",
+          "items": [
+            {
+              "title": "Register services",
+              "body": "builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = ctx => { ... });"
+            },
+            {
+              "title": "Return from handler or filter",
+              "body": "Results.Problem, ValidationProblemDetails, or BadRequestObjectResult with ProblemDetails."
+            },
+            {
+              "title": "IProblemDetailsService serializes",
+              "body": "Sets Content-Type application/problem+json and writes JSON including extensions."
+            },
+            {
+              "title": "Global handler uses same shape",
+              "body": "IExceptionHandler calls TryWriteAsync for unhandled 500 errors with correlationId extension."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Problem Details response flow",
+            "source": "flowchart LR\n  Handler[Handler / Filter] --> PD[ProblemDetails object]\n  PD --> Svc[IProblemDetailsService]\n  Svc --> JSON[application/problem+json]\n  JSON --> Client[API Client]\n  EH[IExceptionHandler] --> Svc"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Results.Problem in minimal APIs",
+            "code": "app.MapGet(\"/orders/{id:int}\", (int id, OrderService orders) =>\n{\n    var order = orders.Find(id);\n    if (order is null)\n    {\n        return Results.Problem(\n            title: \"Order not found\",\n            detail: $\"No order with id {id}.\",\n            statusCode: StatusCodes.Status404NotFound,\n            type: \"https://api.example.com/problems/order-not-found\",\n            extensions: new Dictionary<string, object?> { [\"orderId\"] = id });\n    }\n    return Results.Ok(order);\n});",
+            "explanation": "type URI identifies problem kind for clients and docs. extensions add machine-readable orderId without breaking RFC shape."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidationProblemDetails from ModelState",
+            "code": "[ApiController]\npublic class OrdersController : ControllerBase\n{\n    [HttpPost]\n    public IActionResult Create([FromBody] CreateOrderRequest request)\n    {\n        if (!ModelState.IsValid)\n            return ValidationProblem(ModelState); // ValidationProblemDetails\n\n        return CreatedAtAction(nameof(Get), new { id = 1 }, request);\n    }\n}\n\n// JSON shape:\n// { \"title\": \"One or more validation errors occurred.\",\n//   \"status\": 400, \"errors\": { \"Quantity\": [\"Must be >= 1\"] } }",
+            "explanation": "ValidationProblem helper returns 400 with errors dictionary — same shape as automatic [ApiController] invalid model response."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Global customization with correlation ID",
+            "code": "builder.Services.AddProblemDetails(options =>\n{\n    options.CustomizeProblemDetails = context =>\n    {\n        var http = context.HttpContext;\n        var correlationId = http.Request.Headers[\"X-Correlation-ID\"].FirstOrDefault()\n            ?? http.TraceIdentifier;\n\n        context.ProblemDetails.Extensions[\"correlationId\"] = correlationId;\n        context.ProblemDetails.Instance = http.Request.Path;\n\n        if (!http.Response.HasStarted && context.ProblemDetails.Status is >= 500)\n            context.ProblemDetails.Detail = null; // hide internals in prod\n    };\n});",
+            "explanation": "CustomizeProblemDetails runs for all Problem Details writes — validation, Results.Problem, and IExceptionHandler. correlationId links client error to logs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Problem Details vs ad-hoc custom error (avoid)",
+            "code": "// Prefer RFC 7807:\nreturn Results.Problem(\n    title: \"Insufficient funds\",\n    statusCode: 402,\n    extensions: new Dictionary<string, object?> { [\"code\"] = \"INSUFFICIENT_FUNDS\", [\"balance\"] = 12.50 });\n\n// Avoid unless legacy client requires it:\nreturn Results.Json(new { success = false, errorCode = 42, message = \"Pay up\" }, statusCode: 402);\n// Gateways and OpenAPI clients cannot rely on non-standard shape",
+            "explanation": "extensions.code gives domain identity inside standard format. Custom wrapper forces every client to branch on two error schemas."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Error response standards",
+          "headers": ["Aspect", "ASP.NET Core Problem Details", "JavaScript / TypeScript"],
+          "rows": [
+            ["Standard", "RFC 7807 built-in", "No single standard; often custom { message, code }"],
+            ["Content-Type", "application/problem+json", "Usually application/json"],
+            ["Validation errors", "errors map on ValidationProblemDetails", "Zod flatten fieldErrors; NestJS 400 array"],
+            ["Correlation", "extensions.correlationId", "req.id in Fastify; x-request-id header"],
+            ["OpenAPI", "ProblemDetails schema in Swashbuckle", "Manual error response schema"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Returning exception.StackTrace in Detail in production. Mixing Problem Details endpoints with legacy { error: string } on other routes — clients need one parser. Forgetting AddProblemDetails before IExceptionHandler — TryWriteAsync fails silently or returns empty body. Using generic type URI for every error — type should identify problem category for client branching."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights queries on customDimensions where contentType != application/problem+json on 4xx/5xx reveals inconsistent handlers. Alert when 500 responses lack correlationId extension — indicates CustomizeProblemDetails bypass. Problem Details vs custom errors: use extensions for tenantId, errorCode, retryAfter; reserve fully custom JSON for backward-compatible BFF layers only. IProblemDetailsWriter allows multiple writers (logging + response). For Hypertext Transfer Protocol (HTTP) 422 Unprocessable Entity, some teams use status 422 with ValidationProblemDetails when distinguishing semantic validation from malformed JSON 400."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["RFC 7807 + extensions", "Standard; gateway friendly; one client parser", "Legacy clients may ignore extensions"],
+            ["Custom error envelope", "Matches old mobile app contract", "Breaks OpenAPI tooling; two schemas forever"],
+            ["ValidationProblemDetails", "Field-level errors built-in", "Flat errors map — nested objects need custom keys"],
+            ["Results.Problem", "Minimal API terse syntax", "Long extension dictionaries verbose inline"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying Problem Details is just ASP.NET-specific — it is RFC 7807. Returning different JSON shapes per controller. Unable to explain correlationId in extensions vs Instance field. Claiming custom errors are always better for 'flexibility' without mentioning extensions."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Problem Details (RFC 7807) standardizes API errors with type, title, status, detail, instance, and extensions.",
+    "When not to use pure custom shape: greenfield APIs — extensions carry domain codes inside RFC 7807.",
+    "Production tip: CustomizeProblemDetails adds correlationId from X-Correlation-ID or TraceIdentifier; strip Detail on 500.",
+    "60s: RFC 7807 application/problem+json. ValidationProblemDetails adds errors map. AddProblemDetails customizes globally. Results.Problem for minimal APIs. extensions for codes — avoid parallel custom envelope.",
+    "Follow-up: how do you map domain exceptions to Problem Details type URIs?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we return { message: ex.Message } for errors' gets you rejected — no standard, leaks internals, no correlationId.",
+    "Different error JSON per team in one API — clients and API gateways cannot unify retry/idempotency logic.",
+    "Strong answer: 'RFC 7807 everywhere. ValidationProblemDetails for 400 field errors. CustomizeProblemDetails sets correlationId extension. Domain codes in extensions.code. IExceptionHandler uses IProblemDetailsService for 500.'"
+  ],
+  "introducedIn": "ProblemDetails in ASP.NET Core 2.1; IProblemDetailsService .NET 7+",
+  "relatedTopicIds": [
+    "dotnet-08-data-annotations-validation",
+    "dotnet-08-global-exception-handling",
+    "dotnet-04-exception-handling-middleware",
+    "dotnet-02-http-methods-status-codes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "RFC 7807 in OpenAPI",
+      "note": "OpenAPI 3.1 references problem+json. NestJS HttpException can serialize to similar shape when configured; ASP.NET Core is first-class. TypeScript clients should type ProblemDetails interface with index signature for extensions.",
+      "futureTopicSlug": "typescript/openapi/error-responses"
+    },
+    {
+      "language": "javascript",
+      "concept": "Fastify @fastify/sensible httpErrors",
+      "note": "Fastify errors include statusCode and message; @fastify/rfc7807 plugin adds RFC 7807 serialization. ASP.NET AddProblemDetails is built-in without plugins.",
+      "futureTopicSlug": "javascript/fastify/error-handling"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Handle errors in ASP.NET Core APIs",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling-api"
+    },
+    {
+      "title": "RFC 7807 — Problem Details for HTTP APIs",
+      "url": "https://www.rfc-editor.org/rfc/rfc7807"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
+}

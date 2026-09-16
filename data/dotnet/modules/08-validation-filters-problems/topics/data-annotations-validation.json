@@ -1,0 +1,245 @@
+{
+  "id": "dotnet-08-data-annotations-validation",
+  "slug": "data-annotations-validation",
+  "title": "Data annotations validation ([Required], [Range], IValidatableObject)",
+  "moduleId": "dotnet-08-validation-filters-problems",
+  "order": 1,
+  "hook": "Data annotations let you declare validation rules on C# properties with attributes like [Required] and [Range]. ASP.NET Core runs them automatically after model binding and returns HTTP 400 with structured errors when input is invalid.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Data annotations are attributes from System.ComponentModel.DataAnnotations that describe constraints on model properties — required fields, string length, numeric ranges, email format, and cross-property rules via IValidatableObject. When a request body or form is bound to a Data Transfer Object (DTO), the Object Model Validator runs these attributes and populates ModelState with field-level errors. On [ApiController] classes, invalid ModelState automatically becomes a 400 Bad Request with a validation problem response without writing manual if checks in every action."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Data annotations",
+              "longForm": "System.ComponentModel.DataAnnotations",
+              "plainDefinition": "Declarative attributes on properties that describe validation constraints checked by the framework.",
+              "example": "[Required] public string Name { get; init; }"
+            },
+            {
+              "term": "[Required]",
+              "longForm": "Required attribute",
+              "plainDefinition": "Fails validation when the property is null or an empty string for string types.",
+              "example": "[Required(ErrorMessage = \"Name is required.\")]"
+            },
+            {
+              "term": "[Range]",
+              "longForm": "Range attribute",
+              "plainDefinition": "Ensures a numeric or DateTime value falls between minimum and maximum inclusive bounds.",
+              "example": "[Range(1, 120)] public int Age { get; init; }"
+            },
+            {
+              "term": "IValidatableObject",
+              "longForm": "IValidatableObject interface",
+              "plainDefinition": "Implement Validate(ValidationContext) for cross-property rules that single attributes cannot express.",
+              "example": "EndDate must be after StartDate on a booking DTO."
+            },
+            {
+              "term": "ModelState",
+              "longForm": "ModelState dictionary",
+              "plainDefinition": "Collects binding and validation errors keyed by property name; IsValid is false when any error exists.",
+              "example": "ModelState[\"Email\"].Errors"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every public Web API receives untrusted input. Data annotations give you a single source of truth for input rules that OpenAPI generators can read, client code generators can mirror, and integration tests can assert against. Without declarative validation, teams duplicate checks in controllers, services, and database layers — and clients receive inconsistent error shapes. Annotations are the fastest path for simple DTOs; senior engineers know when they outgrow attributes and need FluentValidation or domain invariants instead."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Binding vs validation",
+          "body": "Model binding converts HTTP data to types — 'abc' for an int fails binding. Data annotations validate successfully bound values — Age = -5 fails [Range]. Both errors land in ModelState but at different stages."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Validation after model binding",
+          "items": [
+            {
+              "title": "Request arrives and binding runs",
+              "body": "JSON body deserializes into CreateUserRequest. Missing properties may be null or default values."
+            },
+            {
+              "title": "Object Model Validator executes",
+              "body": "Each property's data annotation attributes run. IValidatableObject.Validate runs last for cross-field rules."
+            },
+            {
+              "title": "Errors recorded in ModelState",
+              "body": "ValidationResult entries map to property keys like 'Email' or empty key for object-level errors."
+            },
+            {
+              "title": "[ApiController] short-circuits invalid models",
+              "body": "Automatic 400 response with ValidationProblemDetails — field errors in extensions.errors dictionary."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Data annotation validation flow",
+            "source": "flowchart LR\n  HTTP[HTTP Request] --> Bind[Model Binding]\n  Bind --> Ann[Data Annotations]\n  Ann --> IVO[IValidatableObject]\n  IVO --> MS{ModelState.IsValid?}\n  MS -->|yes| Action[Action executes]\n  MS -->|no| VPD[400 ValidationProblemDetails]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "DTO with common data annotations",
+            "code": "public sealed record CreateUserRequest\n{\n    [Required, StringLength(100, MinimumLength = 2)]\n    public string Name { get; init; } = \"\";\n\n    [Required, EmailAddress]\n    public string Email { get; init; } = \"\";\n\n    [Range(13, 120, ErrorMessage = \"Age must be between 13 and 120.\")]\n    public int Age { get; init; }\n\n    [RegularExpression(@\"^(?=.*[A-Z])(?=.*\\d).{8,}$\")]\n    public string Password { get; init; } = \"\";\n}\n\n[ApiController]\n[Route(\"api/users\")]\npublic class UsersController : ControllerBase\n{\n    [HttpPost]\n    public IActionResult Create([FromBody] CreateUserRequest request)\n    {\n        // ModelState already validated — only reached when valid\n        return Created($\"/api/users/1\", request);\n    }\n}",
+            "explanation": "Attributes on the record properties define rules. [ApiController] enables automatic 400 on invalid ModelState before Create body runs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IValidatableObject for cross-property rules",
+            "code": "public sealed record DateRangeRequest : IValidatableObject\n{\n    [Required] public DateOnly Start { get; init; }\n    [Required] public DateOnly End { get; init; }\n\n    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)\n    {\n        if (End < Start)\n        {\n            yield return new ValidationResult(\n                \"End must be on or after Start.\",\n                [nameof(Start), nameof(End)]);\n        }\n    }\n}",
+            "explanation": "Validate yields ValidationResult for rules spanning multiple properties. Both Start and End appear in the errors dictionary."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Manual ModelState check (non-ApiController or custom response)",
+            "code": "app.MapPost(\"/legacy/users\", (CreateUserRequest request, HttpContext http) =>\n{\n    // Minimal APIs: annotations run only if you validate explicitly\n    var context = new ValidationContext(request);\n    var results = new List<ValidationResult>();\n    if (!Validator.TryValidateObject(request, context, results, validateAllProperties: true))\n    {\n        var errors = results.ToDictionary(\n            r => r.MemberNames.FirstOrDefault() ?? \"\",\n            r => new[] { r.ErrorMessage ?? \"Invalid.\" });\n        return Results.ValidationProblem(errors);\n    }\n    return Results.Created(\"/users/1\", request);\n});",
+            "explanation": "Minimal APIs do not auto-validate like [ApiController]. Validator.TryValidateObject runs the same annotation pipeline manually."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Integration test — prove 400 shape",
+            "code": "[Fact]\npublic async Task Invalid_email_returns_validation_problem_details()\n{\n    await using var factory = new WebApplicationFactory<Program>();\n    var client = factory.CreateClient();\n    var response = await client.PostAsJsonAsync(\"/api/users\",\n        new { name = \"A\", email = \"not-an-email\", age = 5, password = \"weak\" });\n\n    Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);\n    var doc = await response.Content.ReadFromJsonAsync<JsonElement>();\n    Assert.True(doc.TryGetProperty(\"errors\", out var errors));\n    Assert.True(errors.TryGetProperty(\"Email\", out _));\n}",
+            "explanation": "Assert errors dictionary keys match property names. Proves annotations and automatic 400 pipeline work end-to-end."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Declarative validation: ASP.NET Core vs JS/TS",
+          "headers": ["Aspect", "ASP.NET Core data annotations", "JavaScript / TypeScript"],
+          "rows": [
+            ["Declaration", "Attributes on C# properties", "Zod schemas, class-validator decorators, Joi objects"],
+            ["When it runs", "After model binding in MVC; manual in minimal APIs", "Usually manual in route handler after parse"],
+            ["Error shape", "ValidationProblemDetails with errors map", "Framework-specific; often custom JSON"],
+            ["OpenAPI", "Swashbuckle reads some attributes", "zod-to-openapi or manual schema"],
+            ["Cross-field", "IValidatableObject or FluentValidation", "schema.refine() or superRefine in Zod"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming minimal APIs validate annotations automatically — they do not unless you add a filter or call Validator.TryValidateObject. Using [Required] on non-nullable reference types without enabling nullable context — compiler and runtime disagree. Putting business rules (unique email) in annotations instead of the domain layer — annotations are for input shape, not database checks."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: log 400 rate by endpoint in Application Insights; spike on one route often means a client sent wrong shape or a breaking API change. Data annotations execute synchronously on the request thread — heavy async rules (database uniqueness) belong in services, not IValidatableObject. For minimal APIs, register AddEndpointsApiExplorer and use AddValidation or an IEndpointFilter that calls the same validation pipeline as controllers. Nullable reference types plus [Required] require SuppressImplicitRequiredAttributeForNonNullableReferenceTypes if you rely on compiler nullability alone."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["Data annotations", "Zero boilerplate on [ApiController]; OpenAPI friendly", "Hard to unit test in isolation; async rules impossible"],
+            ["IValidatableObject", "Cross-property without extra package", "Still synchronous; clutters DTOs"],
+            ["FluentValidation", "Testable rules; async support", "Extra dependency; separate rule classes"],
+            ["Manual Validator in minimal API", "Explicit control", "Easy to forget on new endpoints"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying data annotations run on minimal APIs automatically like [ApiController]. Claiming [Required] replaces domain validation for uniqueness or authorization. Unable to describe ValidationProblemDetails or how ModelState maps to the errors extension. Putting database calls inside IValidatableObject without discussing performance."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Data annotations declare input constraints; Object Model Validator runs them after binding into ModelState.",
+    "When not to use: complex async rules, large rule sets — prefer FluentValidation or domain validation.",
+    "Production tip: alert on 400 spikes per route; integration-test invalid payloads assert errors.Email keys.",
+    "60s: Attributes on DTO properties. [ApiController] auto-returns 400 ValidationProblemDetails. Minimal APIs need explicit validation. IValidatableObject for cross-field. Annotations are input shape, not business invariants.",
+    "Follow-up: how do you unify validation between controllers and minimal APIs?"
+  ],
+  "commonPitfalls": [
+    "Saying 'annotations validate minimal APIs automatically' gets you rejected — only [ApiController] gets automatic 400.",
+    "Using annotations for 'email must be unique' — that is a domain/database rule, not input format validation.",
+    "Strong answer: 'Annotations for DTO input shape. [ApiController] wires ModelState to ValidationProblemDetails. Minimal APIs use IEndpointFilter or Validator.TryValidateObject. Business rules in services with Problem Details for conflicts.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; ValidationProblemDetails in 2.1+",
+  "relatedTopicIds": [
+    "dotnet-03-model-binding",
+    "dotnet-08-fluentvalidation",
+    "dotnet-08-problem-details",
+    "csharp-16-attributes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Zod schema validation",
+      "note": "Zod safeParse mirrors Validator.TryValidateObject — parse then collect field errors. ASP.NET annotations are compile-time metadata; Zod is runtime schema objects. Both feed structured 400 responses when wired to handlers.",
+      "futureTopicSlug": "typescript/zod/request-validation"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express express-validator",
+      "note": "express-validator chains run per-route like manual Validator calls in minimal APIs. [ApiController] automatic validation is closer to NestJS ValidationPipe with class-validator decorators on DTOs.",
+      "futureTopicSlug": "javascript/express/express-validator"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Model validation in ASP.NET Core MVC",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation"
+    },
+    {
+      "title": "IValidatableObject interface",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.componentmodel.dataannotations.ivalidatableobject"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

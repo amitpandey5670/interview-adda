@@ -1,0 +1,243 @@
+{
+  "id": "dotnet-08-action-filters",
+  "slug": "action-filters",
+  "title": "Action filters and IAsyncActionFilter (cross-cutting endpoint logic)",
+  "moduleId": "dotnet-08-validation-filters-problems",
+  "order": 3,
+  "hook": "Action filters run inside the controller pipeline before and after your action method — ideal for logging, validation short-circuits, and response shaping without duplicating code in every action.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Action filters are attributes or global services implementing IActionFilter or IAsyncActionFilter that wrap controller action execution. They run after model binding and validation (for resource filters, order differs) but before the action method body. OnActionExecuting can set ActionContext.Result to short-circuit — returning 400 without calling the action. OnActionExecuted runs after the action returns, letting you transform IActionResult or log elapsed time. Filter scopes include global (all actions), controller-level, and action-level attributes with a defined run order."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IAsyncActionFilter",
+              "longForm": "IAsyncActionFilter interface",
+              "plainDefinition": "Async filter with OnActionExecutionAsync — preferred over sync IActionFilter to avoid thread-pool blocking.",
+              "example": "await next(); runs the action and subsequent filters."
+            },
+            {
+              "term": "ActionExecutingContext",
+              "longForm": "ActionExecutingContext",
+              "plainDefinition": "Context before action runs; setting Result short-circuits the pipeline.",
+              "example": "context.Result = new BadRequestObjectResult(modelState);"
+            },
+            {
+              "term": "Filter order",
+              "longForm": "Filter pipeline order",
+              "plainDefinition": "IOrderedFilter.Order controls sequence; lower runs first on the way in, reverse on the way out.",
+              "example": "Authorization filters run before action filters."
+            },
+            {
+              "term": "TypeFilterAttribute",
+              "longForm": "TypeFilterAttribute",
+              "plainDefinition": "Applies a filter class resolved from DI with constructor injection.",
+              "example": "[TypeFilter(typeof(AuditActionFilter))]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Cross-cutting concerns that belong after routing and auth but before business logic fit action filters: idempotency keys, tenant header validation, wrapping responses in a standard envelope, or enforcing If-Match concurrency headers. Middleware cannot see bound models or IActionResult easily; filters sit at the right layer for controller-specific behavior. Senior interviews contrast filters with middleware and endpoint filters for minimal APIs."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Filters vs middleware",
+          "body": "Middleware sees every HTTP request on a branch. Action filters only run for MVC controller actions after endpoint selection — not for minimal API delegates unless you use IEndpointFilter instead."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Action filter execution order",
+          "items": [
+            {
+              "title": "Authorization and resource filters",
+              "body": "[Authorize] and IResourceFilter run first; can short-circuit before binding completes on resource filters."
+            },
+            {
+              "title": "Model binding and validation",
+              "body": "Default model binders populate parameters; validation filters and ModelState checked."
+            },
+            {
+              "title": "Action filters — executing",
+              "body": "OnActionExecuting / OnActionExecutionAsync before action; set Result to skip action."
+            },
+            {
+              "title": "Action method runs",
+              "body": "Your controller method executes if no short-circuit."
+            },
+            {
+              "title": "Action filters — executed",
+              "body": "OnActionExecuted runs reverse order; inspect or replace Result."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Controller filter pipeline",
+            "source": "flowchart TD\n  AuthZ[Authorization Filter] --> Bind[Model Binding]\n  Bind --> Val[Validation]\n  Val --> AFIn[Action Filters In]\n  AFIn --> Action[Action Method]\n  Action --> AFOut[Action Filters Out]\n  AFOut --> Result[IActionResult]\n  AFIn -->|context.Result set| Short[Short-circuit skip action]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IAsyncActionFilter with short-circuit",
+            "code": "public sealed class ValidateModelFilter : IAsyncActionFilter\n{\n    public async Task OnActionExecutionAsync(\n        ActionExecutingContext context, ActionExecutionDelegate next)\n    {\n        if (!context.ModelState.IsValid)\n        {\n            context.Result = new ValidationProblemDetailsResult(context.ModelState);\n            return; // action never runs\n        }\n        await next();\n    }\n}\n\n// Register globally\nbuilder.Services.AddControllers(options =>\n    options.Filters.Add<ValidateModelFilter>());",
+            "explanation": "Setting context.Result before await next() skips the action. ValidationProblemDetailsResult returns RFC 7807-compatible 400."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "TypeFilter with DI injection",
+            "code": "public sealed class IdempotencyFilter(\n    IIdempotencyStore store,\n    ILogger<IdempotencyFilter> logger) : IAsyncActionFilter\n{\n    public async Task OnActionExecutionAsync(\n        ActionExecutingContext context, ActionExecutionDelegate next)\n    {\n        var key = context.HttpContext.Request.Headers[\"Idempotency-Key\"].FirstOrDefault();\n        if (key is null) { await next(); return; }\n\n        if (await store.TryGetCachedResponseAsync(key) is { } cached)\n        {\n            context.Result = cached;\n            return;\n        }\n\n        var executed = await next();\n        if (executed.Result is ObjectResult ok)\n            await store.SaveAsync(key, ok);\n    }\n}\n\n[TypeFilter(typeof(IdempotencyFilter))]\n[HttpPost(\"orders\")]\npublic IActionResult CreateOrder(CreateOrderRequest req) => Ok(new { id = 1 });",
+            "explanation": "TypeFilter resolves filter from DI with scoped store. Post-action block caches successful ObjectResult."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Ordered filter for timing",
+            "code": "public sealed class TimingFilter : IAsyncActionFilter, IOrderedFilter\n{\n    public int Order => int.MaxValue - 10; // late on way in, early on way out\n\n    public async Task OnActionExecutionAsync(\n        ActionExecutingContext context, ActionExecutionDelegate next)\n    {\n        var sw = Stopwatch.StartNew();\n        var executed = await next();\n        sw.Stop();\n        context.HttpContext.Response.Headers[\"X-Action-Ms\"] = sw.ElapsedMilliseconds.ToString();\n    }\n}",
+            "explanation": "IOrderedFilter.Order positions filter in the stack. Timing wraps await next() to measure action duration."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exception filter contrast (IExceptionFilter)",
+            "code": "public sealed class DomainExceptionFilter : IExceptionFilter\n{\n    public void OnException(ExceptionContext context)\n    {\n        if (context.Exception is DomainValidationException ex)\n        {\n            context.Result = new ObjectResult(new ValidationProblemDetails(ex.Errors))\n            {\n                StatusCode = StatusCodes.Status400BadRequest\n            };\n            context.ExceptionHandled = true;\n        }\n    }\n}\n// Exception filters only catch exceptions from actions/filters after them — not middleware",
+            "explanation": "IExceptionFilter maps domain exceptions to 400. Global unhandled errors still need IExceptionHandler middleware."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Action filters vs JS/TS patterns",
+          "headers": ["Aspect", "ASP.NET Core action filters", "JavaScript / TypeScript"],
+          "rows": [
+            ["Scope", "Controller actions only", "NestJS interceptors; Express per-route middleware"],
+            ["Short-circuit", "context.Result before next()", "return res.status() in middleware"],
+            ["DI", "TypeFilter / ServiceFilter", "NestJS injectable interceptors"],
+            ["Async", "IAsyncActionFilter native", "async (req,res,next) in Express"],
+            ["Minimal APIs", "Not applied — use IEndpointFilter", "Same route handler middleware pattern"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using action filters for global correlation IDs — middleware runs earlier for all endpoints including minimal APIs. Sync IActionFilter with blocking I/O — use IAsyncActionFilter. Forgetting that setting Result without return still calls next() in some patterns — return after short-circuit in OnActionExecuting. Expecting filters on minimal API MapGet routes — they never run there."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights dependency tracking on filter execution is limited — add custom ActivitySource spans in OnActionExecutionAsync. Filter order bugs show up as authorization bypass or double validation — log filter Order in staging. ServiceFilterAttribute requires registering the filter type in DI. For Problem Details consistency, prefer ValidationProblemDetails or IProblemDetailsService over ad-hoc BadRequestObjectResult shapes. Exception filters do not replace outer UseExceptionHandler — they miss exceptions from middleware and minimal APIs."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["Global action filter", "DRY across all controllers", "Controllers only; hidden magic"],
+            ["Attribute per action", "Explicit opt-in", "Easy to forget on new endpoints"],
+            ["Middleware", "All endpoints including minimal", "No bound model or IActionResult"],
+            ["IEndpointFilter", "Minimal API equivalent", "Separate from controller filters"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying action filters replace global exception middleware. Using filters for authentication instead of [Authorize] and policies. Unable to explain filter order vs middleware order. Claiming one filter class applies to both controllers and minimal APIs without IEndpointFilter."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Action filters wrap controller actions after binding; IAsyncActionFilter with await next() is the async pattern.",
+    "When not to use: transport-wide concerns (correlation ID, HTTPS) — use middleware; minimal APIs — use endpoint filters.",
+    "Production tip: custom ActivitySource span around await next(); log Order conflicts in staging integration tests.",
+    "60s: Filters run inside MVC pipeline after auth and binding. Set context.Result to short-circuit. TypeFilter for DI. Exception filters for controller exceptions only. Minimal APIs need IEndpointFilter instead.",
+    "Follow-up: what is the full filter order relative to authorization and result filters?"
+  ],
+  "commonPitfalls": [
+    "Saying 'I put global error handling in an action filter' gets you rejected — minimal API throws and middleware errors bypass filters.",
+    "Sync IActionFilter calling .Result on Task — thread-pool starvation under load.",
+    "Strong answer: 'IAsyncActionFilter for cross-cutting controller logic after binding. Short-circuit via context.Result. Global errors use IExceptionHandler middleware. Minimal APIs mirror with IEndpointFilter. Middleware for transport concerns.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; IAsyncActionFilter from early versions",
+  "relatedTopicIds": [
+    "dotnet-08-endpoint-filters",
+    "dotnet-08-global-exception-handling",
+    "dotnet-04-middleware-order",
+    "dotnet-03-action-results"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS interceptors",
+      "note": "NestJS @Injectable() interceptors wrap handler execution like IAsyncActionFilter — tap, map, or short-circuit before/after. Nest interceptors apply to both HTTP and RPC; ASP.NET action filters are controller-specific.",
+      "futureTopicSlug": "typescript/nestjs/interceptors"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express route-level middleware",
+      "note": "app.post('/x', validateMiddleware, handler) stacks per-route middleware similar to [ServiceFilter] on one action. ASP.NET global filters apply without repeating on each route.",
+      "futureTopicSlug": "javascript/express/route-middleware"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Filters in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/mvc/controllers/filters"
+    },
+    {
+      "title": "IAsyncActionFilter interface",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.mvc.filters.iasyncactionfilter"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

@@ -133,6 +133,15 @@
             "code": "public sealed class FeatureFlags\n{\n    public bool EnableNewCheckout { get; set; }\n    public bool EnableBetaSearch { get; set; }\n}\n\npublic sealed class FeatureFlagService\n{\n    private volatile FeatureFlags _flags;\n\n    public FeatureFlagService(IOptionsMonitor<FeatureFlags> monitor)\n    {\n        _flags = monitor.CurrentValue;\n        monitor.OnChange(updated => _flags = updated);\n    }\n\n    public bool IsEnabled(string feature) => feature switch\n    {\n        \"NewCheckout\" => _flags.EnableNewCheckout,\n        \"BetaSearch\" => _flags.EnableBetaSearch,\n        _ => false\n    };\n}",
             "explanation": "IOptionsMonitor is singleton-safe for hot reload. OnChange fires when JSON with reloadOnChange updates or Azure App Configuration pushes changes. volatile or lock if multiple threads read _flags."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure-mode — IOptionsMonitor mid-request vs IOptionsSnapshot atomicity",
+            "code": "// RISK: singleton reads IOptionsMonitor.CurrentValue twice in one request\npublic async Task<OrderDto> PlaceOrderAsync(OrderRequest req, CancellationToken ct)\n{\n    var maxItems = _monitor.CurrentValue.MaxItemsPerOrder; // e.g. 10\n    // ... await SaveChangesAsync(ct) — config file saved mid-request ...\n    var limit = _monitor.CurrentValue.MaxItemsPerOrder; // now 5\n    if (req.Lines.Count > limit) throw new ValidationException(); // inconsistent!\n}\n\n// FIX: capture once per request scope\npublic class OrdersController(IOptionsSnapshot<OrdersApiOptions> options)\n{\n    [HttpPost]\n    public async Task<IActionResult> Post(OrderRequest req)\n    {\n        var opts = options.Value; // frozen for this HTTP request scope\n        if (req.Lines.Count > opts.MaxItemsPerOrder) return ValidationProblem(...);\n        // ... entire handler uses same opts ...\n    }\n}",
+            "explanation": "Reddit r/dotnet discusses mid-request config reload: IOptionsMonitor CurrentValue can change during a long request; IOptionsSnapshot gives one consistent snapshot per scope. Singletons needing live flags should cache via OnChange, not re-read CurrentValue per line of logic."
+          }
         }
       ]
     },
@@ -142,13 +151,37 @@
         {
           "type": "comparisonTable",
           "title": "Typed config injection patterns",
-          "headers": ["Concern", "NestJS / Node", "ASP.NET Core options"],
+          "headers": [
+            "Concern",
+            "NestJS / Node",
+            "ASP.NET Core options"
+          ],
           "rows": [
-            ["Typed config", "ConfigService.get<T>('key')", "IOptions<T>.Value strongly typed"],
-            ["Per-request fresh", "Request-scoped provider", "IOptionsSnapshot<T> (scoped)"],
-            ["Hot reload", "Manual file watcher or env reload", "IOptionsMonitor<T>.OnChange with reloadOnChange"],
-            ["Registration", "ConfigModule.register({ load: [...] })", "services.Configure<T>(section)"],
-            ["Validation", "Joi/class-validator on config object", "IValidateOptions<T> or DataAnnotations"]
+            [
+              "Typed config",
+              "ConfigService.get<T>('key')",
+              "IOptions<T>.Value strongly typed"
+            ],
+            [
+              "Per-request fresh",
+              "Request-scoped provider",
+              "IOptionsSnapshot<T> (scoped)"
+            ],
+            [
+              "Hot reload",
+              "Manual file watcher or env reload",
+              "IOptionsMonitor<T>.OnChange with reloadOnChange"
+            ],
+            [
+              "Registration",
+              "ConfigModule.register({ load: [...] })",
+              "services.Configure<T>(section)"
+            ],
+            [
+              "Validation",
+              "Joi/class-validator on config object",
+              "IValidateOptions<T> or DataAnnotations"
+            ]
           ]
         }
       ]
@@ -174,12 +207,37 @@
         {
           "type": "comparisonTable",
           "title": "IOptions family tradeoffs",
-          "headers": ["Interface", "DI lifetime", "Reload", "Use when"],
+          "headers": [
+            "Interface",
+            "DI lifetime",
+            "Reload",
+            "Use when"
+          ],
           "rows": [
-            ["IOptions<T>", "Singleton", "No", "Static settings: JWT issuer, fixed API URLs"],
-            ["IOptionsSnapshot<T>", "Scoped", "Per request", "Controllers needing fresh config each request"],
-            ["IOptionsMonitor<T>", "Singleton", "Yes + OnChange", "Feature flags, singleton services needing live updates"],
-            ["IOptionsMonitor.Get(name)", "Singleton", "Yes", "Named options (multiple sections same type)"]
+            [
+              "IOptions<T>",
+              "Singleton",
+              "No",
+              "Static settings: JWT issuer, fixed API URLs"
+            ],
+            [
+              "IOptionsSnapshot<T>",
+              "Scoped",
+              "Per request",
+              "Controllers needing fresh config each request"
+            ],
+            [
+              "IOptionsMonitor<T>",
+              "Singleton",
+              "Yes + OnChange",
+              "Feature flags, singleton services needing live updates"
+            ],
+            [
+              "IOptionsMonitor.Get(name)",
+              "Singleton",
+              "Yes",
+              "Named options (multiple sections same type)"
+            ]
           ]
         },
         {
@@ -208,7 +266,7 @@
     "dotnet-06-configuration-binding",
     "dotnet-06-hot-reload-config",
     "dotnet-05-service-lifetimes",
-    "dotnet-05-service-registration"
+    "dotnet-05-registration-patterns"
   ],
   "jsTsCorrelations": [
     {

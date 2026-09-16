@@ -128,6 +128,15 @@
             "code": "var builder = WebApplication.CreateBuilder(args);\nvar startupTimer = Stopwatch.StartNew();\n\nbuilder.Services.AddControllers();\nbuilder.Services.AddSingleton<IConnectionMultiplexer>(sp =>\n{\n    var config = sp.GetRequiredService<IConfiguration>();\n    return ConnectionMultiplexer.Connect(config[\"Redis:Connection\"]!);\n});\n\nvar app = builder.Build();\n\nvar lifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();\nlifetime.ApplicationStarted.Register(() =>\n{\n    startupTimer.Stop();\n    app.Logger.LogInformation(\"Startup completed in {Ms}ms\", startupTimer.ElapsedMilliseconds);\n});\n\napp.MapGet(\"/health\", () => Results.Ok());\napp.Run();",
             "explanation": "Log startup duration to catch slow Redis or EF initialization before readiness probes timeout in Kubernetes."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Failure-mode diagnostic — Production running as Development",
+            "code": "# Kubernetes manifest accidentally left Development:\n# env:\n#   - name: ASPNETCORE_ENVIRONMENT\n#     value: Development\n\n# Symptom checklist:\n# curl https://api.example.com/swagger/index.html  → 200 (should 404)\n# curl -i https://api.example.com/api/orders/999   → 500 with stack trace body\n\n# Verify from pod:\nkubectl exec deploy/orders-api -- printenv ASPNETCORE_ENVIRONMENT\n# Expected: Production\n\n# Fix manifest; redeploy. Add CI policy:\n# grep -R 'ASPNETCORE_ENVIRONMENT.*Development' k8s/ && exit 1",
+            "explanation": "Reddit and production postmortems often trace public Swagger and stack traces to Development env in a prod cluster — verify the env var before blaming application code."
+          }
         }
       ]
     },
@@ -156,6 +165,32 @@
           "variant": "warning",
           "title": "Pitfalls to avoid",
           "body": "Leaving ASPNETCORE_ENVIRONMENT=Development in production Kubernetes manifests. Using Staging connection strings in Production because the wrong appsettings file shipped. Running EF Migrate() on every startup in Production without a migration strategy. Forgetting that IsProduction() is the negation of Development and Staging — use explicit checks for Staging-only behavior."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: kubectl exec printenv ASPNETCORE_ENVIRONMENT on every deploy — mismatches explain Swagger on public URLs and verbose 500 bodies. Application Insights startup duration metric spikes when Redis or EF blocks ApplicationStarted — readiness probe fails while liveness passes. Staging must mirror Production middleware (no DeveloperExceptionPage) but use test databases — teams that skip Staging middleware miss auth-order bugs until Production. IHostApplicationLifetime.ApplicationStopping should drain in-flight requests before SIGKILL in Kubernetes terminationGracePeriodSeconds."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Environment", "When to use", "Pitfall"],
+          "rows": [
+            ["Development", "Local F5, detailed errors, Swagger", "Never in public K8s manifest"],
+            ["Staging", "Pre-prod integration, load tests", "Using dev connection strings or skipping auth middleware"],
+            ["Production", "Live traffic", "Assuming IsProduction() covers Staging-only toggles"],
+            ["Custom (Test)", "CI integration tests", "Forgetting to set in WebApplicationFactory"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying NODE_ENV and ASPNETCORE_ENVIRONMENT behave the same — .NET defaults to Production when unset. Claiming launchSettings.json applies in Docker production. Not knowing UseDeveloperExceptionPage must never run in Production. Unable to explain ApplicationStarted vs first request for readiness probes."
         }
       ]
     }

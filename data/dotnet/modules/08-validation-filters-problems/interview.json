@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-08-validation-filters-problems",
+  "title": "Validation, filters, and Problem Details interview drills",
+  "items": [
+    {
+      "question": "How does validation differ between [ApiController] actions and minimal API MapPost handlers?",
+      "answer": "[ApiController] enables automatic model validation after binding: data annotations and FluentValidation auto-validation populate ModelState, and invalid models short-circuit to HTTP 400 with ValidationProblemDetails before the action runs. Minimal APIs have no equivalent convention — bound parameters are passed to the handler even when annotations would fail. You must add an IEndpointFilter (ValidationFilter<T> with IValidator<T> or DataAnnotationsFilter calling Validator.TryValidateObject) or manually validate inside the handler and return Results.ValidationProblem(errors). Both paths should produce the same application/problem+json errors dictionary for client consistency.",
+      "followUps": [
+        "How do you attach one FluentValidation validator to both controllers and minimal APIs?",
+        "Does ModelState exist in minimal API handlers?"
+      ],
+      "sixtySeconds": "ApiController auto 400 on invalid ModelState. Minimal APIs need IEndpointFilter with validator or Validator.TryValidateObject. Return Results.ValidationProblem. Same RFC 7807 errors shape both ways."
+    },
+    {
+      "question": "When would you choose FluentValidation over data annotations?",
+      "answer": "Choose FluentValidation when rules become conditional (When clauses), cross multiple properties with readable chains, require async database checks (MustAsync for uniqueness), or need isolated unit tests via TestValidate without HTTP. Annotations remain fine for simple DTO shape constraints — required strings, email format, numeric ranges. Avoid duplicating rules in both layers. Senior teams keep DTOs as plain records, validators in separate classes registered with AddValidatorsFromAssembly, and share the same IValidator<T> through controller auto-validation and minimal API endpoint filters.",
+      "followUps": [
+        "What is the performance concern with MustAsync validators?",
+        "How does TestValidate improve CI compared to integration tests alone?"
+      ],
+      "sixtySeconds": "Annotations for simple shape. FluentValidation for complex, conditional, async rules in testable classes. No duplicate rules. Controllers auto-validate; minimal APIs use endpoint filter with same IValidator."
+    },
+    {
+      "question": "Explain Problem Details (RFC 7807) vs a custom { success: false, errorCode: N } envelope.",
+      "answer": "RFC 7807 defines application/problem+json with type, title, status, detail, instance, and an extensions bag for custom fields. ASP.NET Core ProblemDetails and ValidationProblemDetails implement this natively; gateways, OpenAPI tooling, and standards-aware clients expect it. Custom envelopes force every consumer to support two parsers and break generic API management policies. The senior approach is Problem Details with extensions — extensions.code for domain identity, extensions.correlationId for support, extensions.orderId for context — not a parallel top-level schema. Reserve fully custom JSON only for immovable legacy clients behind a BFF.",
+      "followUps": [
+        "What goes in type vs extensions.code?",
+        "How does ValidationProblemDetails differ from ProblemDetails?"
+      ],
+      "sixtySeconds": "RFC 7807 standard JSON errors. extensions carry domain codes and correlationId. Avoid parallel custom envelope. ValidationProblemDetails adds errors map for 400 field validation."
+    },
+    {
+      "question": "Describe IExceptionHandler in .NET 8+ and how it fits with UseExceptionHandler middleware.",
+      "answer": "Register builder.Services.AddExceptionHandler<T>() for one or more IExceptionHandler implementations and call app.UseExceptionHandler() as the outermost middleware (before routing and endpoints). When any inner code throws an unhandled exception, the middleware invokes handlers in registration order until TryHandleAsync returns true. Inside the handler, use IProblemDetailsService.TryWriteAsync to emit RFC 7807 JSON with appropriate status — map domain exceptions to 404/400/409 and unknown faults to 500 with sanitized detail in production. AddProblemDetails() registers customization (correlationId, strip stack details). This replaces ad-hoc inline ExceptionHandler Run delegates with DI-friendly, unit-testable classes. Exception filters still supplement controller-specific mapping but do not catch minimal API or middleware throws.",
+      "followUps": [
+        "What happens if every IExceptionHandler returns false?",
+        "Why must UseExceptionHandler be before MapControllers?"
+      ],
+      "sixtySeconds": "AddExceptionHandler plus outermost UseExceptionHandler. TryHandleAsync maps to Problem Details via IProblemDetailsService. Chain specific handlers before fallback. Filters supplement only. AddProblemDetails required."
+    },
+    {
+      "question": "How do you propagate correlation IDs into error responses for production support?",
+      "answer": "Read X-Correlation-ID from the incoming request header or generate one; fall back to HttpContext.TraceIdentifier which aligns with ASP.NET logging. In AddProblemDetails CustomizeProblemDetails, set context.ProblemDetails.Extensions[\"correlationId\"] on every error — validation 400, Results.Problem 404, and IExceptionHandler 500. Log the same value in structured logs inside the exception handler (logger.LogError with correlationId parameter). Optionally echo the ID on response headers via middleware using Response.OnStarting. Clients include the correlationId from the error body when contacting support; operators search Application Insights or OpenTelemetry traces by that ID. Integration-test by sending X-Correlation-ID and asserting it appears in the Problem Details JSON.",
+      "followUps": [
+        "What is the difference between TraceIdentifier and W3C traceparent?",
+        "Should correlationId be in headers only or also in the body?"
+      ],
+      "sixtySeconds": "X-Correlation-ID header or TraceIdentifier. CustomizeProblemDetails sets extensions.correlationId. Same ID in structured logs. IExceptionHandler includes it on 500. Integration-test header round-trip."
+    },
+    {
+      "question": "Compare action filters, endpoint filters, and middleware for cross-cutting validation logic.",
+      "answer": "Middleware runs for every request on a pipeline branch before endpoint selection — good for correlation IDs, HTTPS, global exception shell, but it does not receive bound handler arguments as typed objects. IAsyncActionFilter runs inside the MVC controller pipeline after model binding — sees ActionExecutingContext and ModelState; use for controller-only idempotency, audit, or manual ValidationProblemDetails. IEndpointFilter is the minimal API equivalent — EndpointFilterInvocationContext.Arguments holds bound parameters; attach ValidationFilter<T> on MapGroup for shared rules. Pick the innermost layer that has the data you need: endpoint filter for minimal API validation, action filter for controller-only concerns, middleware for transport-wide behavior affecting all endpoint types.",
+      "followUps": [
+        "Can one class implement both IActionFilter and IEndpointFilter?",
+        "Where does authorization run relative to endpoint filters?"
+      ],
+      "sixtySeconds": "Middleware — transport, no bound args. Action filter — controllers after binding. Endpoint filter — minimal APIs with Arguments. Validate at filter layer with typed models, not body-parsing middleware."
+    },
+    {
+      "question": "Production returns HTML 500 instead of JSON Problem Details on controller exceptions. Diagnose.",
+      "answer": "First verify UseExceptionHandler is the outermost middleware — registration after UseRouting or MapControllers means controller exceptions never reach the handler and Kestrel may return generic HTML. Confirm AddProblemDetails and AddExceptionHandler are in DI for .NET 8 apps. Ensure UseDeveloperExceptionPage is disabled in production. Check no custom middleware swallows exceptions without rethrow. Write a WebApplicationFactory integration test hitting a /throw endpoint: expect Status500, Content-Type application/problem+json, and correlationId extension. Application Insights showing exceptions without matching structured responses indicates handler bypass or missing TryWriteAsync.",
+      "followUps": [
+        "When is an MVC exception filter still worth adding?",
+        "What is a double-fault in exception handling?"
+      ],
+      "sixtySeconds": "Exception handler outermost before endpoints. AddProblemDetails plus IExceptionHandler. No dev page in prod. WebApplicationFactory test /throw for problem+json. Handler after MapControllers is the usual bug."
+    },
+    {
+      "question": "How do IValidatableObject and FluentValidation relate to ModelState and ValidationProblemDetails?",
+      "answer": "Both feed the same validation pipeline for [ApiController]: after binding, IValidatableObject.Validate runs alongside data annotation attributes, and FluentValidation auto-validation merges errors into ModelState keyed by property name. Invalid ModelState triggers automatic 400 with ValidationProblemDetails where errors is a dictionary of property name to string array. IValidatableObject suits small cross-field rules without a package. FluentValidation replaces large attribute sets with testable rule classes. For minimal APIs, neither runs automatically — an endpoint filter must invoke the same validators and return Results.ValidationProblem(errors) to produce identical JSON. Do not mix duplicate annotation and FluentValidation rules on the same property.",
+      "followUps": [
+        "Can IValidatableObject perform async database calls?",
+        "What HTTP status distinguishes binding failure from validation failure?"
+      ],
+      "sixtySeconds": "Both merge into ModelState on ApiController. Auto 400 ValidationProblemDetails. IValidatableObject sync cross-field. FluentValidation for complex rules. Minimal APIs need filter to produce same errors map."
+    },
+    {
+      "question": "A candidate says try/catch in every action is their error strategy. Correct them.",
+      "answer": "Per-action try/catch duplicates mapping logic, produces inconsistent response shapes across endpoints, and is easy to forget on new minimal API routes — one unhandled throw leaks a stack trace. The correct architecture is outermost UseExceptionHandler with IExceptionHandler mapping known domain exceptions to appropriate Problem Details status codes and a fallback for unknown 500 faults, plus AddProblemDetails customization for correlationId. Use ValidationProblemDetails or Results.ValidationProblem for expected client errors (validation, not found) returned explicitly from handlers or filters — those are not exceptions. Exception filters may add controller-specific tweaks but cannot replace global handling for a mixed API. Prove the design with integration tests, not manual catch blocks.",
+      "followUps": [
+        "When is catching an exception inside a service layer appropriate?",
+        "How do you map FluentValidation.ValidationException globally?"
+      ],
+      "sixtySeconds": "Global IExceptionHandler plus Problem Details — not try/catch everywhere. Expected errors are Results not exceptions. Filters optional supplement. Integration-test global handler. correlationId in extensions."
+    },
+    {
+      "question": "Design validation and error handling for an API with both controllers and minimal APIs sharing DTOs.",
+      "answer": "Define plain DTO records without mixing annotation and FluentValidation duplication — pick FluentValidation AbstractValidator<T> for non-trivial rules. Register AddValidatorsFromAssembly and AddFluentValidationAutoValidation for controllers. Create ValidationFilter<T> : IEndpointFilter that resolves IValidator<T>, validates context.Arguments, returns Results.ValidationProblem on failure. Apply the filter on MapGroup for minimal API routes. Register AddProblemDetails with CustomizeProblemDetails adding correlationId. Add GlobalExceptionHandler : IExceptionHandler for unhandled faults and optional ValidationExceptionHandler for FluentValidation throws. UseExceptionHandler outermost. Controllers and minimal APIs now share validators and error JSON. Integration-test one controller POST and one MapPost with invalid body asserting identical errors structure.",
+      "followUps": [
+        "Would you use data annotations at all in this design?",
+        "How does OpenAPI document ValidationProblemDetails for both styles?"
+      ],
+      "sixtySeconds": "Shared FluentValidation validators. Auto-validation controllers. ValidationFilter on MapGroup for minimal APIs. AddProblemDetails correlationId. IExceptionHandler global. Same ValidationProblemDetails shape. Integration-test both."
+    }
+  ]
+}

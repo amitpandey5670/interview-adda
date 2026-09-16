@@ -129,6 +129,15 @@
             "code": "// Node: Bull queue processor\n// const Queue = require('bull');\n// const emailQueue = new Queue('email', 'redis://localhost:6379');\n// emailQueue.process(async (job) => { await sendEmail(job.data); });\n\n// ASP.NET Core: SQS consumer as hosted service\npublic sealed class EmailQueueWorker(IAmazonSQS sqs) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        while (!stoppingToken.IsCancellationRequested)\n        {\n            var resp = await sqs.ReceiveMessageAsync(\"https://sqs.../email\", stoppingToken);\n            foreach (var msg in resp.Messages)\n                await ProcessEmailAsync(msg, stoppingToken);\n        }\n    }\n}\n// builder.Services.AddHostedService<EmailQueueWorker>();",
             "explanation": "Bull uses Redis as a queue broker; AWS deployments often use SQS with a BackgroundService. Both run alongside the HTTP host in NestJS/ASP.NET Core or as a separate Node process."
           }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure-mode — sync-over-async (.NET) vs sync I/O (Node) under load",
+            "code": "// Node: blocks entire event loop — one slow request stalls ALL clients\n// const data = fs.readFileSync('/big/file'); // BAD\n\n// .NET: blocks ONE thread-pool thread — under concurrency pool starves\n// var data = _service.GetDataAsync().Result; // BAD — same interview theme, different runtime\n\n// Correct both stacks: async all the way\n// Node: await fs.promises.readFile(...)\n// .NET: return await _service.GetDataAsync(ct);\n\n// Diagnose .NET: dotnet-counters threadpool-queue-length\n// Diagnose Node: event loop lag / blocked-at metric",
+            "explanation": "Reddit r/dotnet and Node performance threads converge on the same lesson: blocking under concurrency kills throughput — but the failure signature differs (thread-pool queue vs event loop lag)."
+          }
         }
       ]
     },
@@ -159,6 +168,33 @@
           "variant": "warning",
           "title": "Pitfalls when switching stacks",
           "body": "Using sync I/O in .NET controllers because 'Express did it fine' — different scheduler, different failure mode. Assuming npm middleware concepts map 1:1 without learning ASP.NET Core middleware order rules. Porting fire-and-forget async void handlers from Node — return Task in .NET so the host observes exceptions. Expecting hot reload and nodemon parity without dotnet watch."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: when migrating Express to ASP.NET Core, load-test the same RPS — if .NET p95 spikes with low CPU, grep for .Result (thread-pool starvation); if Node p95 spikes with event loop lag, grep for readFileSync. NestJS is the closest TypeScript analog for DI and guards — map JwtAuthGuard to UseAuthentication, RolesGuard to IAuthorizationHandler. Choose .NET for typed performance-critical APIs with EF and long-running thread-pool async; choose Node for JS ecosystem velocity and I/O-heavy glue services — hybrid fleets use REST at the edge and gRPC internally regardless of language."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Factor", "Prefer ASP.NET Core", "Prefer Node/NestJS"],
+          "rows": [
+            ["Strong typing + EF Core", "Enterprise CRUD, regulated domains", "Rapid prototypes, JS-only teams"],
+            ["CPU-bound workloads", "Thread pool + SIMD, native perf", "Worker threads / separate service"],
+            ["Real-time at massive scale", "SignalR, gRPC streaming", "Mature WS ecosystem, single-thread simplicity"],
+            ["Hiring / ecosystem", ".NET enterprise, Azure", "Startup velocity, npm packages"],
+            ["Failure under blocking", "Thread-pool starvation (dotnet-counters)", "Event loop blocked (lag metric)"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying the stacks are identical — concurrency models differ fundamentally. Porting .Result from legacy C# because 'Node uses sync code fine'. Not knowing NestJS maps closer to ASP.NET than Express does. Claiming one stack is always faster without workload context."
         }
       ]
     }

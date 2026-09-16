@@ -126,7 +126,16 @@
             "language": "csharp",
             "label": "Distributed cache with JSON serialization",
             "code": "public async Task<CatalogDto?> GetCatalogAsync(string tenantId, CancellationToken ct)\n{\n    var key = $\"catalog:{tenantId}\";\n    var bytes = await _distributed.GetAsync(key, ct);\n    if (bytes is not null)\n        return JsonSerializer.Deserialize<CatalogDto>(bytes);\n\n    var catalog = await _catalogService.BuildAsync(tenantId, ct);\n    await _distributed.SetAsync(key,\n        JsonSerializer.SerializeToUtf8Bytes(catalog),\n        new DistributedCacheEntryOptions\n        {\n            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(15)\n        }, ct);\n    return catalog;\n}",
-            "explanation": "IDistributedCache stores bytes — you own serialization. Version keys when DTO shape changes to avoid deserializing stale payloads."
+            "explanation": "IDistributedCache stores bytes — you own serialization. Version keys when DTO shape changes to avoid deserializing stale payloads. This naive path has no stampede protection — see Redis lock snippet next."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Redis distributed lock — cache stampede protection on hot key",
+            "code": "public async Task<DashboardDto> GetDashboardAsync(string tenantId, CancellationToken ct)\n{\n    var key = $\"dashboard:{tenantId}\";\n    var cached = await _distributed.GetAsync(key, ct);\n    if (cached is not null) return JsonSerializer.Deserialize<DashboardDto>(cached)!;\n\n    var lockKey = $\"lock:{key}\";\n    var db = _redis.GetDatabase();\n    var gotLock = await db.StringSetAsync(lockKey, \"1\", TimeSpan.FromSeconds(30), When.NotExists);\n    if (!gotLock)\n    {\n        await Task.Delay(50, ct);\n        cached = await _distributed.GetAsync(key, ct);\n        if (cached is not null) return JsonSerializer.Deserialize<DashboardDto>(cached)!;\n    }\n\n    try\n    {\n        var dto = await _queries.LoadDashboardAsync(tenantId, ct);\n        await _distributed.SetAsync(key, JsonSerializer.SerializeToUtf8Bytes(dto),\n            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5) }, ct);\n        return dto;\n    }\n    finally { await db.KeyDeleteAsync(lockKey); }\n}",
+            "explanation": "IDistributedCache has no GetOrCreateAsync lock — Redis SET NX single-flight prevents 500 parallel DB hits when a hot tenant dashboard key expires after onboarding. Add TTL jitter so keys do not all expire together."
           }
         },
         {

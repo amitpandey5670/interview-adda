@@ -1,0 +1,239 @@
+{
+  "id": "dotnet-08-fluentvalidation",
+  "slug": "fluentvalidation",
+  "title": "FluentValidation (complex rules and testability)",
+  "moduleId": "dotnet-08-validation-filters-problems",
+  "order": 2,
+  "hook": "FluentValidation moves validation rules out of DTO attributes into dedicated, testable validator classes with a fluent API. It is the standard choice when data annotations become unreadable or you need async database checks.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "FluentValidation is a popular open-source library that defines rules in AbstractValidator<T> classes using a chainable API — RuleFor, Must, When, and WithMessage. Rules live separately from DTOs, which keeps models as plain records and makes unit testing validation without HTTP context straightforward. The FluentValidation.AspNetCore integration registers validators in dependency injection and plugs into the same ModelState pipeline as data annotations, producing the same ValidationProblemDetails 400 responses for [ApiController] apps."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "AbstractValidator<T>",
+              "longForm": "AbstractValidator generic base class",
+              "plainDefinition": "Base class where you define validation rules for type T in the constructor.",
+              "example": "public class CreateUserValidator : AbstractValidator<CreateUserRequest>"
+            },
+            {
+              "term": "RuleFor",
+              "longForm": "RuleFor expression",
+              "plainDefinition": "Selects a property and attaches validators like NotEmpty, EmailAddress, or custom Must predicates.",
+              "example": "RuleFor(x => x.Email).NotEmpty().EmailAddress();"
+            },
+            {
+              "term": "IValidator<T>",
+              "longForm": "IValidator interface",
+              "plainDefinition": "FluentValidation service interface; Validate or ValidateAsync returns ValidationResult with errors.",
+              "example": "await validator.ValidateAsync(request, cancellationToken);"
+            },
+            {
+              "term": "Automatic validation",
+              "longForm": "FluentValidation automatic validation",
+              "plainDefinition": "Auto-validation filter runs all registered IValidator<T> for action parameters before the action executes.",
+              "example": "services.AddFluentValidationAutoValidation();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Real APIs accumulate conditional rules: password strength depends on account type, dates depend on timezone, SKUs depend on catalog version. Cramming that into attributes produces unmaintainable DTOs. FluentValidation supports dependent rules, collections, async MustAsync for database lookups, and clear error messages per rule. Interviewers expect you to know when FluentValidation beats annotations and how to test validators in isolation with TestValidate."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Keep DTOs thin",
+          "body": "DTOs carry data; validators carry rules. Duplicate rules in both annotations and FluentValidation causes double errors — pick one strategy per DTO."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "FluentValidation in the MVC pipeline",
+          "items": [
+            {
+              "title": "Register validators in DI",
+              "body": "AddValidatorsFromAssemblyContaining<CreateUserValidator>() discovers IValidator<T> implementations."
+            },
+            {
+              "title": "Auto-validation filter runs",
+              "body": "Before the action, FluentValidation resolves IValidator<T> for each parameter and runs ValidateAsync."
+            },
+            {
+              "title": "Errors merge into ModelState",
+              "body": "Property names map to ModelState keys; action short-circuits with 400 like annotation failures."
+            },
+            {
+              "title": "Action executes only when valid",
+              "body": "Same ValidationProblemDetails shape clients expect from data annotations."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "FluentValidation registration and execution",
+            "source": "flowchart TD\n  Reg[AddValidatorsFromAssembly] --> DI[DI container IValidator T]\n  Req[HTTP Request] --> Bind[Model Binding]\n  Bind --> FV[FluentValidation Auto Filter]\n  DI --> FV\n  FV --> MS[ModelState]\n  MS -->|valid| Action[Action method]\n  MS -->|invalid| VPD[400 ValidationProblemDetails]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Validator class with conditional rules",
+            "code": "public sealed class CreateUserValidator : AbstractValidator<CreateUserRequest>\n{\n    public CreateUserValidator(IUserRepository users)\n    {\n        RuleFor(x => x.Name)\n            .NotEmpty().MinimumLength(2).MaximumLength(100);\n\n        RuleFor(x => x.Email)\n            .NotEmpty().EmailAddress()\n            .MustAsync(async (email, ct) => !await users.ExistsAsync(email, ct))\n            .WithMessage(\"Email is already registered.\");\n\n        RuleFor(x => x.Password)\n            .MinimumLength(8)\n            .When(x => x.AccountType == AccountType.Standard);\n\n        RuleFor(x => x.Age).InclusiveBetween(13, 120);\n    }\n}",
+            "explanation": "MustAsync performs async uniqueness check — impossible with data annotations alone. When scopes rules to account type."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Registration in Program.cs",
+            "code": "builder.Services.AddValidatorsFromAssemblyContaining<CreateUserValidator>();\nbuilder.Services.AddFluentValidationAutoValidation();\nbuilder.Services.AddFluentValidationClientsideAdapters(); // optional for MVC views\n\n// Minimal APIs: use filter instead of auto-validation\nbuilder.Services.AddScoped<ValidationFilter<CreateUserRequest>>();",
+            "explanation": "Assembly scanning registers all validators. Auto-validation applies to controller actions; minimal APIs need IEndpointFilter pattern."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Unit test with TestValidate",
+            "code": "[Fact]\npublic void Should_fail_when_email_invalid()\n{\n    var validator = new CreateUserValidator(new FakeUserRepository());\n    var result = validator.TestValidate(new CreateUserRequest\n    {\n        Name = \"Ada\",\n        Email = \"bad\",\n        Age = 30,\n        Password = \"ValidPass1\",\n        AccountType = AccountType.Standard\n    });\n\n    result.ShouldHaveValidationErrorFor(x => x.Email);\n    result.ShouldNotHaveValidationErrorFor(x => x.Name);\n}",
+            "explanation": "TestValidate runs rules without HTTP pipeline. Fake repository keeps async MustAsync deterministic in tests."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IEndpointFilter for minimal API FluentValidation",
+            "code": "public sealed class ValidationFilter<T>(IValidator<T> validator) : IEndpointFilter\n{\n    public async ValueTask<object?> InvokeAsync(\n        EndpointFilterInvocationContext context, EndpointFilterDelegate next)\n    {\n        var model = context.Arguments.OfType<T>().FirstOrDefault();\n        if (model is null) return Results.BadRequest(\"Missing body.\");\n\n        var result = await validator.ValidateAsync(model, context.HttpContext.RequestAborted);\n        if (!result.IsValid)\n        {\n            var errors = result.Errors\n                .GroupBy(e => e.PropertyName)\n                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());\n            return Results.ValidationProblem(errors);\n        }\n        return await next(context);\n    }\n}\n\napp.MapPost(\"/users\", handler).AddEndpointFilter<ValidationFilter<CreateUserRequest>>();",
+            "explanation": "Endpoint filter reuses the same IValidator<T> as controllers. Returns ValidationProblem-compatible errors dictionary."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "FluentValidation vs JS/TS validation libraries",
+          "headers": ["Aspect", "FluentValidation", "JavaScript / TypeScript"],
+          "rows": [
+            ["Rule location", "Separate validator classes", "Zod/Joi schema files or NestJS DTO decorators"],
+            ["Async rules", "MustAsync with DI services", "Zod superRefine async; class-validator limited"],
+            ["Testing", "TestValidate without HTTP", "schema.safeParse in Jest/Vitest"],
+            ["Framework hook", "Auto-validation filter / endpoint filter", "NestJS ValidationPipe global"],
+            ["License", "Apache 2.0 (FluentValidation)", "Various OSS licenses"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Registering both data annotations and FluentValidation on the same properties — duplicate errors in ModelState. Using MustAsync without cancellation token — request abort does not cancel DB lookup. Forgetting AddFluentValidationAutoValidation — validators registered but never invoked. Resolving scoped DbContext in validator registered as singleton — use IValidator with scoped lifetime via DI."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: validators with MustAsync add latency to every POST — track p95 validation duration in OpenTelemetry spans around the filter. Cache negative uniqueness checks carefully or you leak existence information. FluentValidation 11+ split packages: FluentValidation.DependencyInjectionExtensions for AddValidatorsFromAssembly. For high-throughput APIs, consider validating only at domain boundaries and using annotations for trivial shape checks — full FluentValidation on every field has a cost. Interviewers ask how you avoid N+1 in validators that hit the database per property."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["FluentValidation auto", "Same 400 shape as annotations on controllers", "Does not apply to minimal APIs by default"],
+            ["Endpoint filter", "Unified minimal API + shared validators", "Must attach per route or convention"],
+            ["MediatR pipeline behavior", "Validation before handler in CQRS", "Extra architectural layer"],
+            ["Domain invariants", "True business rules in entity", "Not a substitute for input sanitization"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying FluentValidation replaces all domain validation — it validates input DTOs, not aggregate invariants. Unable to test validators without spinning up WebApplicationFactory. Putting DbContext in validator constructor on singleton registration. Not knowing minimal APIs need IEndpointFilter for the same behavior."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "FluentValidation puts rules in AbstractValidator<T> classes — testable, async-capable, separate from DTOs.",
+    "When not to use: trivial two-field DTOs where annotations suffice; avoid duplicate annotation + FV rules.",
+    "Production tip: span MustAsync DB calls; watch p95 on POST endpoints with uniqueness validators.",
+    "60s: Register AddValidatorsFromAssembly and auto-validation for controllers. Validators use RuleFor and MustAsync. Test with TestValidate. Minimal APIs need ValidationFilter IEndpointFilter. DTOs stay thin.",
+    "Follow-up: how do you share one validator between minimal APIs and MediatR handlers?"
+  ],
+  "commonPitfalls": [
+    "Saying 'FluentValidation runs automatically on MapPost' gets you rejected — only controller auto-validation unless you add endpoint filters.",
+    "Duplicate [Required] on DTO plus RuleFor NotEmpty — clients see two errors per field.",
+    "Strong answer: 'Validators in separate classes, registered in DI, tested with TestValidate. Controllers via auto-validation; minimal APIs via IEndpointFilter. Async uniqueness in MustAsync with cancellation. Domain rules stay in entities.'"
+  ],
+  "introducedIn": "FluentValidation.AspNetCore integration; endpoint filters .NET 7+",
+  "relatedTopicIds": [
+    "dotnet-08-data-annotations-validation",
+    "dotnet-08-endpoint-filters",
+    "dotnet-08-problem-details",
+    "dotnet-05-service-lifetimes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS ValidationPipe with class-validator",
+      "note": "NestJS global ValidationPipe mirrors FluentValidation auto-validation — decorators on DTO vs separate validator classes. FluentValidation's separation is cleaner for large rule sets and unit tests.",
+      "futureTopicSlug": "typescript/nestjs/validation-pipe"
+    },
+    {
+      "language": "javascript",
+      "concept": "Joi object schemas",
+      "note": "Joi.validate() in Express handlers is the manual equivalent of calling IValidator.Validate in an endpoint filter. Both produce field-keyed error maps for 400 responses.",
+      "futureTopicSlug": "javascript/joi/schema-validation"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "FluentValidation ASP.NET Core integration",
+      "url": "https://docs.fluentvalidation.net/en/latest/aspnet.html"
+    },
+    {
+      "title": "Model validation in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/mvc/models/validation"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}
