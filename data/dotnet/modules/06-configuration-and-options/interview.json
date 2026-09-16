@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-06-configuration-and-options",
+  "title": "Configuration and options interview drills",
+  "items": [
+    {
+      "question": "Explain the default configuration provider chain in WebApplication.CreateBuilder and which source wins when keys conflict.",
+      "answer": "CreateBuilder registers: appsettings.json, appsettings.{Environment}.json (optional), user secrets when Development, environment variables, then command-line arguments. Each provider contributes to the same IConfiguration key space. When the same key exists in multiple sources, the last registered provider wins — so environment variables override JSON, and command line overrides everything. Keys use colon notation internally (Section:Sub:Key). Environment variables map double underscore to colon: ConnectionStrings__OrdersDb becomes ConnectionStrings:OrdersDb.",
+      "followUps": [
+        "How do you debug which provider supplied a specific key?",
+        "Does adding AddJsonFile after CreateBuilder change override order?"
+      ],
+      "sixtySeconds": "Default chain: base JSON, environment JSON, user secrets in dev, env vars, CLI. Last wins. Env vars use __ for colon. GetDebugView shows merged tree in development."
+    },
+    {
+      "question": "Compare IOptions, IOptionsSnapshot, and IOptionsMonitor. When do you use each in a Web API?",
+      "answer": "IOptions<T> is a singleton wrapper whose Value is computed once and cached for the application lifetime — use for static settings like JWT issuer URL configured at deploy. IOptionsSnapshot<T> is scoped per HTTP request and recomputes Value when the request scope starts — good for controllers when reloadOnChange is enabled and you want per-request freshness without callbacks. IOptionsMonitor<T> is a singleton that tracks configuration changes: CurrentValue updates when providers fire change tokens, and OnChange registers callbacks — required for feature flags in singleton services like BackgroundService or caching layers. Never inject IOptionsSnapshot into a singleton (captive dependency / invalid scope).",
+      "followUps": [
+        "How does IOptionsMonitor behave when appsettings.json is saved with reloadOnChange?",
+        "Can you use IOptionsMonitor in a controller?"
+      ],
+      "sixtySeconds": "IOptions static cached. IOptionsSnapshot scoped per request. IOptionsMonitor singleton with CurrentValue and OnChange for hot reload. Feature flags in singletons need Monitor."
+    },
+    {
+      "question": "How do you ensure invalid configuration fails at startup instead of on the first API request?",
+      "answer": "Register options with validation and ValidateOnStart: services.AddOptions<JwtOptions>().BindConfiguration(\"Jwt\").ValidateDataAnnotations().ValidateOnStart(). DataAnnotations handle [Required], [Range], [Url]. Cross-field rules use IValidateOptions<JwtOptions> registered as singleton. ValidateOnStart forces validation when the host builds — before Kestrel accepts connections — so Kubernetes readiness fails immediately with OptionsValidationException naming the bad property. Without ValidateOnStart, validation may defer until first IOptions resolve, after health checks already passed.",
+      "followUps": [
+        "How do you validate that a signing key is not a dev placeholder in production?",
+        "What is PostConfigure<T> used for?"
+      ],
+      "sixtySeconds": "BindConfiguration plus ValidateDataAnnotations plus IValidateOptions for cross-field rules. ValidateOnStart fails host at build. K8s CrashLoopBackOff with clear message beats first-request 500."
+    },
+    {
+      "question": "Describe how you manage secrets across local development, Docker/Kubernetes, and Azure production.",
+      "answer": "Local: dotnet user-secrets — values stored outside the repo in user profile, loaded only in Development after appsettings.Development.json. Docker/Kubernetes: secrets as environment variables with double-underscore keys (Jwt__SigningKey) via secretKeyRef in deployment manifests — never bake secrets into the image. Azure production: AddAzureKeyVault with DefaultAzureCredential and managed identity — no client secret in config. Vault secret names use -- instead of colon. All environments: keep appsettings.json free of real passwords; use ValidateOnStart to ensure required secrets exist; never log secret values in health checks or GetDebugView in production.",
+      "followUps": [
+        "How do you rotate JWT signing keys stored in Key Vault?",
+        "What is the risk of K8s secrets visible as pod environment variables?"
+      ],
+      "sixtySeconds": "Dev: user secrets. K8s: secretKeyRef as env vars with __. Azure: Key Vault plus managed identity. Never commit secrets. ValidateOnStart. Log presence not values."
+    },
+    {
+      "question": "How would you implement a feature flag that flips without restarting pods?",
+      "answer": "Define FeatureFlags POCO bound to a configuration section. Enable reloadOnChange on the JSON provider (default in CreateBuilder) or use Azure App Configuration with refresh sentinel. Register services.Configure<FeatureFlags>(section). Inject IOptionsMonitor<FeatureFlags> into the singleton FeatureFlagService. In constructor, set _current = monitor.CurrentValue and monitor.OnChange(updated => _current = updated) with volatile field for thread-safe reads. Controllers or middleware call FeatureFlagService.IsEnabled. Log reload events for audit. Avoid IOptions — it will not update. For multi-pod consistency, App Configuration or external flag service ensures all instances receive the change within SLA.",
+      "followUps": [
+        "Is OnChange callback thread-safe? What precautions apply?",
+        "Why not use IOptionsSnapshot in a singleton BackgroundService?"
+      ],
+      "sixtySeconds": "Configure FeatureFlags section. IOptionsMonitor in singleton. OnChange updates volatile cache. reloadOnChange or App Configuration. IOptions never reloads."
+    },
+    {
+      "question": "What is the environment variable naming convention for hierarchical configuration keys?",
+      "answer": "ASP.NET Core's environment variables configuration provider maps double underscore (__) to the colon (:) hierarchy separator. JSON key ConnectionStrings:OrdersDb becomes environment variable ConnectionStrings__OrdersDb. This works on Linux, Windows, and containers where colons in env var names are problematic. ASP.NET Core also recognizes ASPNETCORE_ and DOTNET_ prefixes for host settings. Arrays use index syntax: Cors__AllowedOrigins__0=https://a.com. Single underscore does not map to hierarchy — a common misconfiguration in Kubernetes manifests.",
+      "followUps": [
+        "How does Azure Key Vault secret naming differ from env vars?",
+        "Can you use : in environment variable names on Linux?"
+      ],
+      "sixtySeconds": "Double underscore __ replaces colon in hierarchical keys. ConnectionStrings__OrdersDb. Key Vault uses -- delimiter. Single underscore wrong. Arrays use __0 __1 index."
+    },
+    {
+      "question": "appsettings.Development.json has one connection string; appsettings.Production.json is missing the key; K8s sets ConnectionStrings__OrdersDb. What value is used in production?",
+      "answer": "In production with ASPNETCORE_ENVIRONMENT=Production: appsettings.json loads first, then appsettings.Production.json (optional overlay — missing key does not remove base value), then user secrets are skipped (not Development), then environment variables apply. If K8s sets ConnectionStrings__OrdersDb, that env var overrides whatever came from JSON files. If K8s secret is missing and Production JSON does not override, the base appsettings.json value remains — a common incident when dev connection string leaks to prod. Fix: remove secrets from base JSON, require the env var, and ValidateOnStart on connection options.",
+      "followUps": [
+        "What happens if ASPNETCORE_ENVIRONMENT is unset in the container?",
+        "Does appsettings.Staging.json load when environment is Production?"
+      ],
+      "sixtySeconds": "Base JSON then environment overlay then env vars last wins. Missing Production key inherits base — danger. K8s env var overrides JSON. Unset env defaults to Production."
+    },
+    {
+      "question": "When is hot-reload configuration appropriate versus requiring a full application restart?",
+      "answer": "Hot-reload via IOptionsMonitor suits feature flags, log levels, timeout tuning, and allow-list changes — settings read on each use and backed by reload-capable providers (JSON reloadOnChange, Azure App Configuration, Key Vault with reload interval). Full restart is appropriate for connection string changes (DbContext and HttpClient connection pools cache endpoints), assembly or middleware pipeline changes, and DI registration changes. Environment variables are read once at startup unless you rebuild configuration — they do not hot-reload by default. Document reload-safe settings in runbooks; integration-test OnChange with WebApplicationFactory and temp JSON files.",
+      "followUps": [
+        "How long does K8s ConfigMap propagation take for mounted files?",
+        "Does changing Jwt:Issuer at runtime affect already-issued tokens?"
+      ],
+      "sixtySeconds": "Hot reload: flags, log levels, timeouts via IOptionsMonitor. Restart: connection strings, pools, DI changes. Env vars one-shot at startup. Document reload-safe list."
+    },
+    {
+      "question": "How do you test configuration binding and validation in integration tests?",
+      "answer": "Use WebApplicationFactory with WithWebHostBuilder and ConfigureAppConfiguration to supply in-memory or temp JSON collections. Omit required Jwt:Issuer section and assert host fails to start when ValidateOnStart is registered — catch OptionsValidationException or assert factory creation throws. For positive path, inject IOptions<JwtOptions> from factory.Services and assert bound values. For hot-reload, write temp appsettings with reloadOnChange:true, resolve IOptionsMonitor, mutate file, delay for watcher, assert CurrentValue changed. Avoid reading real user secrets in CI — use test-specific configuration dictionary.",
+      "followUps": [
+        "How do you mock IOptions<T> in unit tests versus integration tests?",
+        "Can you use ConfigureTestServices to replace options?"
+      ],
+      "sixtySeconds": "WebApplicationFactory plus ConfigureAppConfiguration. Assert ValidateOnStart failure on missing section. IOptionsMonitor reload test with temp JSON. No real secrets in CI."
+    },
+    {
+      "question": "A candidate says 'we read config from IConfiguration everywhere.' What do you recommend and why?",
+      "answer": "Replace stringly-typed IConfiguration indexer access with the options pattern: define POCO classes, services.Configure<T>(section), inject IOptions or IOptionsMonitor. Benefits: compile-time structure, centralized validation with ValidateOnStart, testability via Options.Create(mock), and clear section ownership. Reserve direct IConfiguration for dynamic keys unknown at compile time or one-off startup code. Use IValidateOptions for business rules DataAnnotations cannot express. For reloadable singleton state, IOptionsMonitor not raw configuration.GetSection on every request. This matches SOLID — options classes are single-purpose configuration contracts.",
+      "followUps": [
+        "When is direct IConfiguration still the right choice?",
+        "How do named options work for multiple sections of the same type?"
+      ],
+      "sixtySeconds": "Options pattern over string keys. Configure T plus validation. IOptions family by lifetime need. IConfiguration only for dynamic keys. Testable and fail-fast."
+    }
+  ]
+}

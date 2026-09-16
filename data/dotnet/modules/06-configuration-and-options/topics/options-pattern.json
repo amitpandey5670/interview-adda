@@ -1,0 +1,239 @@
+{
+  "id": "dotnet-06-options-pattern",
+  "slug": "options-pattern",
+  "title": "The options pattern (IOptions, IOptionsSnapshot, IOptionsMonitor)",
+  "moduleId": "dotnet-06-configuration-and-options",
+  "order": 3,
+  "hook": "The options pattern turns configuration sections into strongly typed classes injected through dependency injection — IOptions for static settings, IOptionsSnapshot for per-request freshness, and IOptionsMonitor for live reload and feature flags.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The options pattern registers a POCO (plain old CLR object) class bound to a configuration section, then injects it via IOptions<T>, IOptionsSnapshot<T>, or IOptionsMonitor<T>. Register with services.Configure<T>(configuration.GetSection(\"SectionName\")). IOptions<T>.Value is computed once at first access (singleton). IOptionsSnapshot<T> recomputes per request (scoped). IOptionsMonitor<T> tracks changes and exposes CurrentValue plus OnChange callbacks — the choice for feature flags and hot-reloaded settings."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IOptions<T>",
+              "longForm": "IOptions of T",
+              "plainDefinition": "Singleton wrapper. Options are built once and cached for the application lifetime.",
+              "example": "public MyService(IOptions<OrdersApiOptions> options)"
+            },
+            {
+              "term": "IOptionsSnapshot<T>",
+              "longForm": "IOptionsSnapshot of T",
+              "plainDefinition": "Scoped per HTTP request. Re-reads configuration when the request scope is created.",
+              "example": "Use in controllers when config may change between requests."
+            },
+            {
+              "term": "IOptionsMonitor<T>",
+              "longForm": "IOptionsMonitor of T",
+              "plainDefinition": "Singleton that tracks reloads. CurrentValue updates when configuration changes; OnChange registers callbacks.",
+              "example": "Feature flag service reading IOptionsMonitor<FeatureFlags>."
+            },
+            {
+              "term": "IOptionsFactory<T>",
+              "longForm": "IOptionsFactory of T",
+              "plainDefinition": "Internal factory that creates named option instances. Powers all three interfaces.",
+              "example": "Used when registering multiple named options of the same type."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Reading IConfiguration[\"key\"] strings everywhere is error-prone and untestable. Options classes give compile-time structure, validation hooks, and clean DI. Choosing the wrong interface causes subtle bugs: IOptions in a singleton service never sees config reload; IOptionsSnapshot in a singleton BackgroundService throws or captures stale values. Feature flags in production almost always need IOptionsMonitor with OnChange to flip behavior without pod restart."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Pick by lifetime need",
+          "body": "IOptions — static for app lifetime. IOptionsSnapshot — fresh each HTTP request. IOptionsMonitor — singleton that reacts to config changes via OnChange."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Options registration and resolution",
+          "items": [
+            {
+              "title": "Define options class",
+              "body": "POCO with properties matching configuration keys. Use section name attribute or manual section path."
+            },
+            {
+              "title": "Register with Configure",
+              "body": "services.Configure<OrdersApiOptions>(config.GetSection(\"OrdersApi\")) binds JSON to the type."
+            },
+            {
+              "title": "Inject interface",
+              "body": "Constructor takes IOptions<OrdersApiOptions>, IOptionsSnapshot<>, or IOptionsMonitor<>."
+            },
+            {
+              "title": "Access .Value or .CurrentValue",
+              "body": "IOptions/IOptionsSnapshot use .Value; IOptionsMonitor uses .CurrentValue and .OnChange()."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IOptions family lifetimes",
+            "source": "flowchart LR\n  CFG[IConfiguration change] --> MON[IOptionsMonitor\\nCurrentValue updates\\nOnChange fires]\n  CFG --> SNAP[IOptionsSnapshot\\nnew Value per request]\n  CFG -.->|ignored after first| OPT[IOptions\\ncached singleton]\n  MON --> FF[Feature flags]\n  SNAP --> CTRL[Controllers per request]\n  OPT --> SINGLE[Singleton services static config]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Options class and registration",
+            "code": "public sealed class OrdersApiOptions\n{\n    public const string SectionName = \"OrdersApi\";\n    public string BaseUrl { get; set; } = \"\";\n    public int TimeoutSeconds { get; set; } = 30;\n}\n\n// Program.cs\nbuilder.Services.Configure<OrdersApiOptions>(\n    builder.Configuration.GetSection(OrdersApiOptions.SectionName));",
+            "explanation": "SectionName constant avoids magic strings. Configure binds the section at startup. Properties map to JSON keys by name (case-insensitive by default)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IOptions in a singleton service",
+            "code": "public sealed class OrdersApiClient\n{\n    private readonly HttpClient _http;\n    private readonly OrdersApiOptions _options;\n\n    public OrdersApiClient(HttpClient http, IOptions<OrdersApiOptions> options)\n    {\n        _http = http;\n        _options = options.Value; // snapshot at first resolve — won't reload\n        _http.BaseAddress = new Uri(_options.BaseUrl);\n        _http.Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds);\n    }\n}",
+            "explanation": "IOptions<T> is correct when settings are static for the process lifetime. Copying .Value once in constructor is the common pattern for HttpClient configuration."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IOptionsSnapshot in a controller",
+            "code": "[ApiController]\n[Route(\"api/orders\")]\npublic class OrdersController : ControllerBase\n{\n    private readonly IOptionsSnapshot<OrdersApiOptions> _options;\n\n    public OrdersController(IOptionsSnapshot<OrdersApiOptions> options)\n        => _options = options;\n\n    [HttpGet(\"config\")]\n    public IActionResult GetConfig()\n        => Ok(new { _options.Value.BaseUrl, _options.Value.TimeoutSeconds });\n    // Value recomputed when this request's scope starts\n}",
+            "explanation": "IOptionsSnapshot is scoped — each HTTP request gets options recomputed from current IConfiguration. Good when reloadOnChange is true and you need per-request freshness without OnChange callbacks."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IOptionsMonitor for feature flags",
+            "code": "public sealed class FeatureFlags\n{\n    public bool EnableNewCheckout { get; set; }\n    public bool EnableBetaSearch { get; set; }\n}\n\npublic sealed class FeatureFlagService\n{\n    private volatile FeatureFlags _flags;\n\n    public FeatureFlagService(IOptionsMonitor<FeatureFlags> monitor)\n    {\n        _flags = monitor.CurrentValue;\n        monitor.OnChange(updated => _flags = updated);\n    }\n\n    public bool IsEnabled(string feature) => feature switch\n    {\n        \"NewCheckout\" => _flags.EnableNewCheckout,\n        \"BetaSearch\" => _flags.EnableBetaSearch,\n        _ => false\n    };\n}",
+            "explanation": "IOptionsMonitor is singleton-safe for hot reload. OnChange fires when JSON with reloadOnChange updates or Azure App Configuration pushes changes. volatile or lock if multiple threads read _flags."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Typed config injection patterns",
+          "headers": ["Concern", "NestJS / Node", "ASP.NET Core options"],
+          "rows": [
+            ["Typed config", "ConfigService.get<T>('key')", "IOptions<T>.Value strongly typed"],
+            ["Per-request fresh", "Request-scoped provider", "IOptionsSnapshot<T> (scoped)"],
+            ["Hot reload", "Manual file watcher or env reload", "IOptionsMonitor<T>.OnChange with reloadOnChange"],
+            ["Registration", "ConfigModule.register({ load: [...] })", "services.Configure<T>(section)"],
+            ["Validation", "Joi/class-validator on config object", "IValidateOptions<T> or DataAnnotations"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Injecting IOptionsSnapshot into a singleton — captive dependency or invalid scope. Using IOptions everywhere and wondering why hot reload does not work. Calling options.Value on every line instead of caching in constructor for IOptions (minor perf). Forgetting Configure() registration — DI throws at runtime. Using IOptionsMonitor in a controller when IOptionsSnapshot is simpler and sufficient."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: flip a feature flag in appsettings with reloadOnChange:true while traffic flows — IOptionsMonitor.OnChange should log within seconds; IOptions will not change until restart. Use dotnet-counters to watch options-related allocations if OnChange handlers do heavy work. Integration test: WebApplicationFactory with custom IConfiguration, mutate config, assert IOptionsMonitor.CurrentValue updates. For Azure App Configuration, IOptionsMonitor integrates via the provider's change token — prove with a staged flag rollout and Application Insights custom metric on flag state."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "IOptions family tradeoffs",
+          "headers": ["Interface", "DI lifetime", "Reload", "Use when"],
+          "rows": [
+            ["IOptions<T>", "Singleton", "No", "Static settings: JWT issuer, fixed API URLs"],
+            ["IOptionsSnapshot<T>", "Scoped", "Per request", "Controllers needing fresh config each request"],
+            ["IOptionsMonitor<T>", "Singleton", "Yes + OnChange", "Feature flags, singleton services needing live updates"],
+            ["IOptionsMonitor.Get(name)", "Singleton", "Yes", "Named options (multiple sections same type)"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying all three are interchangeable. Not knowing IOptionsSnapshot is scoped and cannot be injected into singletons. Claiming IOptions reloads when appsettings.json changes. Unable to explain when to use IOptionsMonitor for feature flags in a singleton BackgroundService."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Options pattern binds configuration sections to POCOs registered with Configure<T> and injected via IOptions family.",
+    "IOptions is cached singleton; IOptionsSnapshot recomputes per request; IOptionsMonitor supports OnChange for hot reload.",
+    "Production tip: use IOptionsMonitor<FeatureFlags> in singleton services; never IOptionsSnapshot in singletons (captive dependency).",
+    "60s: Configure binds section to T. IOptions static. IOptionsSnapshot scoped per request. IOptionsMonitor singleton with CurrentValue and OnChange for feature flags.",
+    "Follow-up: how does IValidateOptions<T> run at startup versus IOptionsMonitor at runtime?"
+  ],
+  "commonPitfalls": [
+    "Saying 'IOptions reloads on file change' gets you rejected — only IOptionsMonitor and IOptionsSnapshot (per request) see updates.",
+    "IOptionsSnapshot injected into singleton BackgroundService — scope violation or stale captive options.",
+    "Strong answer: 'IOptions for static, Snapshot for per-request freshness, Monitor for singleton hot reload and feature flags with OnChange.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 options; IOptionsMonitor in 2.0",
+  "relatedTopicIds": [
+    "dotnet-06-configuration-binding",
+    "dotnet-06-hot-reload-config",
+    "dotnet-05-service-lifetimes",
+    "dotnet-05-service-registration"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Frozen config object at module load",
+      "note": "Node apps often read config once at require time — equivalent to IOptions. No built-in per-request or hot-reload injection; you wire watchers manually.",
+      "futureTopicSlug": "javascript/node/configuration"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS ConfigService and @nestjs/config",
+      "note": "ConfigService is typically singleton with get() calls. ASP.NET splits lifetime explicitly: IOptions vs Snapshot vs Monitor — interviewers probe this distinction.",
+      "futureTopicSlug": "typescript/nestjs/configuration"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Options pattern (Microsoft Learn)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options"
+    },
+    {
+      "title": "IOptionsMonitor for changes",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options#ioptionsmonitor"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
+}

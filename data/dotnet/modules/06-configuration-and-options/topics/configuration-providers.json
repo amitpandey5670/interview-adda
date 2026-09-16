@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-06-configuration-providers",
+  "slug": "configuration-providers",
+  "title": "Configuration providers (JSON, environment variables, command line)",
+  "moduleId": "dotnet-06-configuration-and-options",
+  "order": 1,
+  "hook": "Configuration providers are the plug-in sources that feed key-value settings into your Web API — JSON files, environment variables, and command-line arguments are the three you will use on every project.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A configuration provider is a class that implements IConfigurationProvider and contributes key-value pairs to the merged IConfiguration tree. WebApplication.CreateBuilder(args) registers a default chain: appsettings.json, appsettings.{Environment}.json, user secrets (Development only), environment variables, and command-line arguments. Later providers override earlier ones for the same key. Keys use colon notation (Section:SubSection:Key) regardless of which provider supplied them."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IConfiguration",
+              "longForm": "IConfiguration",
+              "plainDefinition": "Read-only view of merged settings from all providers. Use GetSection, indexer, or Get<T> to read values.",
+              "example": "var timeout = config.GetValue<int>(\"HttpClient:TimeoutSeconds\");"
+            },
+            {
+              "term": "IConfigurationProvider",
+              "longForm": "IConfigurationProvider",
+              "plainDefinition": "Loads data into the configuration dictionary. JSON, environment variables, and Azure Key Vault each have a provider.",
+              "example": "JsonConfigurationProvider reads appsettings.json on startup."
+            },
+            {
+              "term": "ConfigurationBuilder",
+              "longForm": "ConfigurationBuilder",
+              "plainDefinition": "Fluent API to add providers before the host is built. Host builder calls this internally.",
+              "example": "builder.Configuration.AddJsonFile(\"custom.json\", optional: true, reloadOnChange: true);"
+            },
+            {
+              "term": "ChainedConfigurationSource",
+              "longForm": "Chained configuration source",
+              "plainDefinition": "Wraps another IConfiguration as a provider — useful for tests or importing a subset.",
+              "example": "new ChainedConfigurationSource { Configuration = testConfig }"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every Web API setting — connection strings, JWT issuer URLs, Redis endpoints, feature toggles — flows through providers. Misunderstanding override order causes staging credentials in production or secrets committed to git. Kubernetes and Docker inject environment variables; local dev uses JSON and user secrets. Senior interviews expect you to explain which provider wins when the same key appears in appsettings.json and an environment variable."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Last provider wins",
+          "body": "Default order: appsettings.json → appsettings.{Environment}.json → user secrets (Development) → environment variables → command line. Later sources override earlier ones for the same key path."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Provider chain at startup",
+          "items": [
+            {
+              "title": "Host builder creates ConfigurationManager",
+              "body": "WebApplication.CreateBuilder registers default sources in a fixed order."
+            },
+            {
+              "title": "Each provider loads data",
+              "body": "JsonConfigurationProvider parses files; EnvironmentVariablesConfigurationProvider reads OS env vars with double-underscore mapping."
+            },
+            {
+              "title": "Keys merge into flat dictionary",
+              "body": "Nested JSON becomes Section:Sub:Key. All providers contribute to one IConfigurationRoot."
+            },
+            {
+              "title": "ReloadOnChange providers subscribe",
+              "body": "JSON providers with reloadOnChange: true watch file changes and raise IChangeToken for hot reload."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Default configuration provider chain",
+            "source": "flowchart LR\n  A[appsettings.json] --> M[IConfiguration merge]\n  B[appsettings.Development.json] --> M\n  C[User secrets Dev only] --> M\n  D[Environment variables] --> M\n  E[Command line args] --> M\n  M --> S[Services and options binding]\n  style D fill:#ddf\n  style E fill:#fdd"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Default host configuration (implicit)",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n// Equivalent defaults already registered:\n// AddJsonFile(\"appsettings.json\")\n// AddJsonFile($\"appsettings.{env}.json\", optional: true)\n// AddUserSecrets when Development\n// AddEnvironmentVariables()\n// AddCommandLine(args)\n\nvar redisHost = builder.Configuration[\"Redis:Host\"];\nvar timeout = builder.Configuration.GetValue<int>(\"HttpClient:TimeoutSeconds\", 30);",
+            "explanation": "CreateBuilder wires the standard chain. Indexer returns string or null. GetValue<T> parses with a default fallback when the key is missing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Add a custom JSON provider",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n\nbuilder.Configuration\n    .AddJsonFile(\"config/shared.json\", optional: false, reloadOnChange: true)\n    .AddJsonFile(\"config/local.json\", optional: true, reloadOnChange: true);\n\n// Inspect which providers contributed (debugging)\nif (builder.Configuration is IConfigurationRoot root)\n{\n    foreach (var provider in root.Providers)\n        Console.WriteLine(provider.ToString());\n}",
+            "explanation": "AddJsonFile after CreateBuilder appends providers — they override earlier keys. reloadOnChange enables file watcher hot reload. IConfigurationRoot.Providers lists the chain for troubleshooting."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Environment variable naming convention",
+            "code": "// appsettings.json: { \"ConnectionStrings\": { \"OrdersDb\": \"...\" } }\n// Equivalent environment variable (Linux/macOS/Windows):\n// ConnectionStrings__OrdersDb=Server=prod-sql;...\n\n// ASP.NET Core maps __ (double underscore) to :\nvar cs = builder.Configuration.GetConnectionString(\"OrdersDb\");\n// Reads from env var ConnectionStrings__OrdersDb if present — overrides JSON",
+            "explanation": "Environment variables cannot contain colons on all platforms. Double underscore maps to hierarchical keys. This is how Kubernetes secrets and Docker -e flags override appsettings in production."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Command-line overrides for local debugging",
+            "code": "// dotnet run --ConnectionStrings:OrdersDb=\"Server=localhost\"\nvar builder = WebApplication.CreateBuilder(args);\n// Command-line provider is last — wins over JSON and env vars\n\n// Useful flags:\n// --urls http://localhost:5050\n// --Logging:LogLevel:Microsoft=Warning",
+            "explanation": "Command-line args use colon keys like JSON. Registered last in the default chain so they override everything — handy for one-off local runs without editing files."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Configuration sources in Node vs ASP.NET Core",
+          "headers": ["Concern", "Node.js / Express", "ASP.NET Core"],
+          "rows": [
+            ["JSON files", "require('./config.json') or fs.readFileSync", "JsonConfigurationProvider with optional reloadOnChange"],
+            ["Environment variables", "process.env.DB_HOST", "AddEnvironmentVariables with __ to : mapping"],
+            ["Override order", "Manual merge (lodash.merge, dotenv)", "Built-in provider chain — last wins"],
+            ["CLI overrides", "argv parsing (yargs, commander)", "AddCommandLine(args) built into host"],
+            ["Secrets in dev", ".env via dotenv (not in repo)", "User secrets via dotnet user-secrets"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using single underscore in env vars (ConnectionStrings_OrdersDb) — must be double underscore. Adding AddEnvironmentVariables before JSON manually and expecting JSON to override env vars. Forgetting optional: true on environment-specific JSON so missing Staging file crashes startup. Reading IConfiguration in singleton services at construction time instead of using IOptionsMonitor for reloadable values."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: log the resolved configuration source when a setting looks wrong — IConfigurationRoot.GetDebugView() dumps the full key tree with provider origins in Development. In Kubernetes, describe a pod and verify env vars use double-underscore naming. Application Insights custom events on startup can record non-secret config fingerprints (provider count, environment name). When a setting does not reload, check whether the provider implements reload (JSON with reloadOnChange) versus one-shot providers (environment variables are read once at startup unless you rebuild configuration)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Provider tradeoffs at senior level",
+          "headers": ["Provider", "When to use", "Pitfall"],
+          "rows": [
+            ["JSON files", "Defaults and non-secret structure", "Secrets committed to git"],
+            ["Environment variables", "Container/K8s injection", "Typos in __ naming; no hot reload by default"],
+            ["Command line", "Local overrides, CI test matrix", "Not available in container ENTRYPOINT without passing args"],
+            ["User secrets", "Local dev only", "Never deployed — not in production"],
+            ["Azure Key Vault", "Production secrets", "Startup latency if not using managed identity cache"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying environment variables and JSON merge with 'JSON always wins' — last provider wins, and env vars typically override JSON. Not knowing the double-underscore convention. Claiming all providers support hot reload. Unable to name the default provider order from WebApplication.CreateBuilder."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Configuration providers are pluggable sources that merge into IConfiguration; later providers override earlier keys.",
+    "Default chain: appsettings.json → appsettings.{Environment}.json → user secrets → environment variables → command line.",
+    "Production tip: Kubernetes secrets map to env vars with double underscore (ConnectionStrings__OrdersDb); verify with kubectl describe pod.",
+    "60s: Providers merge key-value pairs. Last wins. Env vars use __ for :. CreateBuilder registers JSON, env, CLI. IConfigurationRoot lists providers for debugging.",
+    "Follow-up: which providers support reloadOnChange and how does that connect to IOptionsMonitor?"
+  ],
+  "commonPitfalls": [
+    "Saying 'JSON overrides environment variables' gets you rejected — env vars and command line come later and win.",
+    "Single underscore in env var names (Section_Key) — must be double underscore (Section__Key).",
+    "Strong answer: 'Last provider wins. Env vars use __ mapping. I use GetDebugView in dev and kubectl env inspection in prod to trace overrides.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 configuration abstractions; unified in .NET Core 2.0+",
+  "relatedTopicIds": [
+    "dotnet-06-appsettings-environments",
+    "dotnet-06-secrets-and-keyvault",
+    "dotnet-01-environments-and-startup",
+    "dotnet-05-service-registration"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "dotenv and process.env layering",
+      "note": "Node apps often load .env then override with process.env manually. ASP.NET Core builds the merge order into the host — no dotenv package needed; env vars are a first-class provider.",
+      "futureTopicSlug": "javascript/node/configuration"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS ConfigModule.forRoot",
+      "note": "NestJS ConfigModule loads .env and JSON with explicit load order. ASP.NET Core's host builder registers the same idea by default — env vars and CLI args override files without extra wiring.",
+      "futureTopicSlug": "typescript/nestjs/configuration"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Configuration providers (Microsoft Learn)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/#configuration-providers"
+    },
+    {
+      "title": "Environment variables configuration provider",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/#environment-variables"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

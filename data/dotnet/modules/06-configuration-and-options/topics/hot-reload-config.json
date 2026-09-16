@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-06-hot-reload-config",
+  "slug": "hot-reload-config",
+  "title": "Hot-reload configuration (IOptionsMonitor in production)",
+  "moduleId": "dotnet-06-configuration-and-options",
+  "order": 6,
+  "hook": "Hot-reload lets your Web API pick up configuration changes without restarting — IOptionsMonitor.OnChange is how singleton services react to feature flag flips and rotated secrets in production.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Hot-reload configuration means the application reads updated settings while running. JSON files with reloadOnChange: true use a file watcher. Azure App Configuration and Key Vault providers poll or receive push notifications. IOptionsMonitor<T> exposes CurrentValue that updates when the underlying IConfiguration change token fires, and OnChange registers callbacks. IOptions and raw environment variables do not reload — only providers that raise change notifications participate."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "reloadOnChange",
+              "longForm": "reloadOnChange",
+              "plainDefinition": "JsonConfigurationProvider option that watches the file system and reloads when the file is saved.",
+              "example": "AddJsonFile(\"appsettings.json\", optional: false, reloadOnChange: true)"
+            },
+            {
+              "term": "IChangeToken",
+              "longForm": "IChangeToken",
+              "plainDefinition": "Abstraction signaling configuration changed. OptionsMonitor subscribes to it.",
+              "example": "configuration.GetReloadToken() registers callbacks."
+            },
+            {
+              "term": "OnChange",
+              "longForm": "OnChange callback",
+              "plainDefinition": "IOptionsMonitor method registering Action<T> invoked when options instance changes.",
+              "example": "monitor.OnChange(flags => _enabled = flags.NewFeature);"
+            },
+            {
+              "term": "Azure App Configuration",
+              "longForm": "Azure App Configuration",
+              "plainDefinition": "Centralized config service with refresh sentinel key pattern for selective reload.",
+              "example": "Refresh all settings when sentinel key changes."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Restarting pods to flip a feature flag causes connection drains and slow rollouts. Hot-reload enables gradual feature exposure, emergency kill switches, and log level changes without redeploy. In Kubernetes, editing a mounted ConfigMap does not always propagate to running pods instantly — understand provider-specific behavior. Senior interviews ask how IOptionsMonitor works in singleton services, thread safety of OnChange handlers, and when reload is inappropriate (schema changes, connection pool URL changes)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Not everything should hot-reload",
+          "body": "Feature flags and log levels — yes. Database connection string changes — usually require restart because connection pools cache the old server. Document which settings are reload-safe."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Reload propagation path",
+          "items": [
+            {
+              "title": "Provider detects change",
+              "body": "File watcher, Key Vault poll, or App Configuration sentinel update."
+            },
+            {
+              "title": "IConfiguration reload token fires",
+              "body": "All registered change callbacks execute."
+            },
+            {
+              "title": "OptionsMonitor recomputes T",
+              "body": "New instance bound from updated configuration."
+            },
+            {
+              "title": "OnChange subscribers update",
+              "body": "Singleton services refresh cached flags or log levels."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Hot-reload signal flow",
+            "source": "sequenceDiagram\n  participant File as appsettings.json\n  participant Prov as JsonConfigurationProvider\n  participant CFG as IConfiguration\n  participant Mon as IOptionsMonitor\n  participant Svc as FeatureFlagService\n  File->>Prov: file saved\n  Prov->>CFG: reload token fires\n  CFG->>Mon: rebind FeatureFlags\n  Mon->>Svc: OnChange callback\n  Svc->>Svc: update volatile flags"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Enable JSON reload and monitor registration",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n// CreateBuilder already uses reloadOnChange: true for appsettings files\n\nbuilder.Services.Configure<FeatureFlags>(\n    builder.Configuration.GetSection(\"FeatureFlags\"));\n\nbuilder.Services.AddSingleton<FeatureFlagService>();\nbuilder.Services.AddSingleton<DynamicLogLevelService>();",
+            "explanation": "Default host enables reloadOnChange on appsettings. Configure registers the section. Singleton services use IOptionsMonitor to subscribe."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Feature flag service with OnChange",
+            "code": "public sealed class FeatureFlagService\n{\n    private volatile FeatureFlags _current;\n    private readonly ILogger<FeatureFlagService> _logger;\n\n    public FeatureFlagService(\n        IOptionsMonitor<FeatureFlags> monitor,\n        ILogger<FeatureFlagService> logger)\n    {\n        _logger = logger;\n        _current = monitor.CurrentValue;\n        monitor.OnChange(updated =>\n        {\n            _logger.LogInformation(\n                \"Feature flags reloaded: NewCheckout={NewCheckout}\",\n                updated.EnableNewCheckout);\n            _current = updated;\n        });\n    }\n\n    public bool IsEnabled(string name) =>\n        name switch\n        {\n            \"NewCheckout\" => _current.EnableNewCheckout,\n            _ => false\n        };\n}",
+            "explanation": "volatile ensures readers see latest reference. OnChange may run on thread-pool — keep handler fast. Log reload events for ops audit trail."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Dynamic log level via IOptionsMonitor",
+            "code": "public sealed class DynamicLogLevelService : IHostedService\n{\n    private readonly IOptionsMonitor<LoggerFilterOptions> _monitor;\n    private readonly ILoggerFactory _loggerFactory;\n\n    public DynamicLogLevelService(\n        IOptionsMonitor<LoggerFilterOptions> monitor,\n        ILoggerFactory loggerFactory)\n    {\n        _monitor = monitor;\n        _loggerFactory = loggerFactory;\n    }\n\n    public Task StartAsync(CancellationToken ct)\n    {\n        _monitor.OnChange(_ =>\n        {\n            // Logging provider may need explicit refresh in custom setups\n            _loggerFactory.CreateLogger<DynamicLogLevelService>()\n                .LogWarning(\"Logging filters reloaded from configuration\");\n        });\n        return Task.CompletedTask;\n    }\n\n    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;\n}",
+            "explanation": "Built-in logging reads IOptionsMonitor<LoggerFilterOptions> in standard hosting. Custom hosted service demonstrates pattern for other reloadable subsystems."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Production diagnostic — prove reload in integration test",
+            "code": "[Fact]\npublic async Task FeatureFlag_reload_updates_monitor()\n{\n    var path = Path.Combine(Path.GetTempPath(), $\"appsettings-{Guid.NewGuid()}.json\");\n    await File.WriteAllTextAsync(path,\n        \"\"\"{\"FeatureFlags\":{\"EnableNewCheckout\":false}}\"\"\");\n\n    await using var factory = new WebApplicationFactory<Program>()\n        .WithWebHostBuilder(b => b.ConfigureAppConfiguration((_, cfg) =>\n            cfg.AddJsonFile(path, reloadOnChange: true)));\n\n    var monitor = factory.Services.GetRequiredService<IOptionsMonitor<FeatureFlags>>();\n    Assert.False(monitor.CurrentValue.EnableNewCheckout);\n\n    await File.WriteAllTextAsync(path,\n        \"\"\"{\"FeatureFlags\":{\"EnableNewCheckout\":true}}\"\"\");\n    await Task.Delay(500); // file watcher debounce\n\n    Assert.True(monitor.CurrentValue.EnableNewCheckout);\n}",
+            "explanation": "WebApplicationFactory test proves reload end-to-end. In production, correlate Application Insights custom event 'FeatureFlagsReloaded' with config push time."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Config hot-reload patterns",
+          "headers": ["Concern", "Node.js", "ASP.NET Core"],
+          "rows": [
+            ["File watch", "nodemon restarts process", "reloadOnChange reloads in-process via IChangeToken"],
+            ["Feature flags", "LaunchDarkly SDK push", "IOptionsMonitor + App Configuration or custom JSON"],
+            ["Singleton update", "Module-level let + emitter", "IOptionsMonitor.OnChange on singleton service"],
+            ["Connection string change", "Usually requires restart", "Same — pool holds old connections"],
+            ["Testability", "Mock env before import", "WebApplicationFactory + temp JSON file"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Expecting IOptions to reload. Heavy work in OnChange blocking the change callback thread. Not using volatile or locks when multiple threads read cached options. Hot-reloading connection strings without recycling DbContext pool. Assuming K8s ConfigMap edits instantly update mounted files — propagation delay varies."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: toggle feature flag in Azure App Configuration sentinel, measure time-to-effect via structured log 'FeatureFlagsReloaded' and compare to pod restart approach. dotnet-trace if OnChange handler blocks — watch thread-pool queue length. For IOptionsMonitor feature flags in API gateways, ensure all pods receive reload within SLA or use external flag service (LaunchDarkly) for cross-process consistency. Document reload-safe settings in runbooks. OpenTelemetry: span attribute on first request after flag flip."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Hot-reload strategy tradeoffs",
+          "headers": ["Approach", "When", "Pitfall"],
+          "rows": [
+            ["JSON reloadOnChange", "Simple flags in file", "K8s ConfigMap mount delay"],
+            ["Azure App Configuration", "Multi-app centralized flags", "Network dependency at startup"],
+            ["IOptionsMonitor.OnChange", "Singleton services", "Thread safety in handler"],
+            ["Rolling pod restart", "Connection string change", "Slower but pool-safe"],
+            ["External flag SDK", "Cross-language consistency", "Extra cost and dependency"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying all configuration hot-reloads including env vars. Not knowing IOptionsMonitor is required for singleton hot-reload. Claiming DbContext connection string can change live without restart. Unable to explain thread safety of OnChange callbacks."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Hot-reload requires providers with change tokens (JSON reloadOnChange, Key Vault, App Configuration) plus IOptionsMonitor.",
+    "IOptions never reloads; IOptionsSnapshot refreshes per request; IOptionsMonitor.OnChange updates singletons.",
+    "Production tip: use IOptionsMonitor for feature flags; restart pods for connection string changes.",
+    "60s: reloadOnChange watches JSON. Change token fires. IOptionsMonitor recomputes and calls OnChange. Singleton services subscribe. Env vars don't reload. DbContext URL needs restart.",
+    "Follow-up: how does Azure App Configuration sentinel key pattern work for selective refresh?"
+  ],
+  "commonPitfalls": [
+    "Saying 'change appsettings and IOptions updates' gets you rejected — IOptions is cached for app lifetime.",
+    "Blocking OnChange with network I/O — delays all configuration reload callbacks.",
+    "Strong answer: 'IOptionsMonitor with OnChange for singleton feature flags. volatile cache. JSON reloadOnChange locally. App Configuration in Azure. Restart for connection pools.'"
+  ],
+  "introducedIn": "reloadOnChange in ASP.NET Core 1.0; IOptionsMonitor.OnChange in 2.0",
+  "relatedTopicIds": [
+    "dotnet-06-options-pattern",
+    "dotnet-06-configuration-providers",
+    "dotnet-06-secrets-and-keyvault",
+    "dotnet-10-output-caching"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "nodemon process restart vs in-process reload",
+      "note": "Node dev workflow often restarts the whole process on file change. ASP.NET Core reloads configuration in-process via change tokens — no process restart for flag flips.",
+      "futureTopicSlug": "javascript/node/configuration"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS ConfigModule watch option",
+      "note": "NestJS can watch .env files with limited support. ASP.NET Core's IOptionsMonitor is the production-grade pattern for singleton services reacting to config pushes.",
+      "futureTopicSlug": "typescript/nestjs/configuration"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Options — IOptionsMonitor for changes",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options#ioptionsmonitor"
+    },
+    {
+      "title": "Azure App Configuration refresh",
+      "url": "https://learn.microsoft.com/en-us/azure/azure-app-configuration/enable-dynamic-configuration-overview"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "redis-cache"
+}

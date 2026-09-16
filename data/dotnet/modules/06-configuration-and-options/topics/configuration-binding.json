@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-06-configuration-binding",
+  "slug": "configuration-binding",
+  "title": "Configuration binding (Bind, Get<T>, validation)",
+  "moduleId": "dotnet-06-configuration-and-options",
+  "order": 4,
+  "hook": "Configuration binding maps JSON and environment variable keys onto C# objects automatically — Bind and Get<T> are the workhorses, and validation catches bad settings before your API accepts traffic.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Configuration binding uses reflection to populate object properties from IConfiguration key paths. configuration.GetSection(\"OrdersApi\").Get<OrdersApiOptions>() creates and fills an instance. Bind(existingInstance) mutates an existing object. services.Configure<T>() uses binding internally. Validation runs via DataAnnotations on the options class, IValidateOptions<T> implementations, or AddOptions<T>().ValidateOnStart() (.NET 6+) to fail fast at startup when settings are invalid."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Get<T>",
+              "longForm": "Get of T",
+              "plainDefinition": "Creates a new instance of T and binds the current configuration section to it.",
+              "example": "var opts = config.GetSection(\"Jwt\").Get<JwtOptions>();"
+            },
+            {
+              "term": "Bind",
+              "longForm": "Bind",
+              "plainDefinition": "Populates an existing instance from configuration. Returns false if section is empty.",
+              "example": "config.GetSection(\"Redis\").Bind(redisOptions);"
+            },
+            {
+              "term": "IValidateOptions<T>",
+              "longForm": "IValidateOptions of T",
+              "plainDefinition": "Interface for custom validation logic registered in DI. Runs when options are created.",
+              "example": "Validate(JwtOptions, name) => options.Issuer is null ? ValidateOptionsResult.Fail(...) : Success"
+            },
+            {
+              "term": "ValidateOnStart",
+              "longForm": "ValidateOnStart",
+              "plainDefinition": "Extension that validates options when the host starts, not on first injection.",
+              "example": "services.AddOptions<JwtOptions>().BindConfiguration(\"Jwt\").ValidateDataAnnotations().ValidateOnStart();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Web API that starts with a missing JWT issuer or negative timeout will fail mysteriously on the first authenticated request instead of at deploy time. Binding validation turns configuration errors into startup failures — Kubernetes readiness probe fails, rollback happens, no customer impact. Senior interviews focus on ValidateOnStart, IValidateOptions cross-field rules, and the difference between binding errors (wrong type) versus validation errors (business rules)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Fail fast at startup",
+          "body": "Use ValidateDataAnnotations().ValidateOnStart() or IValidateOptions<T> so invalid config prevents the host from accepting traffic. Catch misconfigured K8s secrets in CI/CD, not in production 500s."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Binding and validation pipeline",
+          "items": [
+            {
+              "title": "Resolve configuration section",
+              "body": "GetSection(\"Jwt\") returns a subtree. Keys like Jwt:Issuer map to Issuer property."
+            },
+            {
+              "title": "Bind properties",
+              "body": "Binder matches keys case-insensitively. Supports arrays, dictionaries, nested objects, and enums."
+            },
+            {
+              "title": "Run validators",
+              "body": "DataAnnotations [Required], [Range] plus IValidateOptions<T> implementations execute."
+            },
+            {
+              "title": "ValidateOnStart triggers at host build",
+              "body": "Host calls options validation before Kestrel listens — pod fails readiness immediately."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Configuration binding and validation flow",
+            "source": "flowchart TD\n  JSON[appsettings.json section] --> SEC[IConfigurationSection]\n  ENV[Env vars Jwt__Issuer] --> SEC\n  SEC --> BIND[Binder Get or Bind]\n  BIND --> POCO[Options POCO]\n  POCO --> DA[DataAnnotations]\n  POCO --> IV[IValidateOptions T]\n  DA --> RESULT{Valid?}\n  IV --> RESULT\n  RESULT -->|No| FAIL[Startup exception\\nValidateOnStart]\n  RESULT -->|Yes| DI[IOptions injection]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Options class with DataAnnotations",
+            "code": "public sealed class JwtOptions\n{\n    public const string SectionName = \"Jwt\";\n\n    [Required(ErrorMessage = \"Jwt:Issuer is required\")]\n    [Url]\n    public string Issuer { get; set; } = \"\";\n\n    [Required]\n    [MinLength(32, ErrorMessage = \"SigningKey must be at least 32 characters\")]\n    public string SigningKey { get; set; } = \"\";\n\n    [Range(1, 1440)]\n    public int ExpiryMinutes { get; set; } = 60;\n}",
+            "explanation": "DataAnnotations express validation rules declaratively. Property names match JSON keys. Messages appear in OptionsValidationException at startup."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidateOnStart registration (.NET 6+)",
+            "code": "builder.Services\n    .AddOptions<JwtOptions>()\n    .BindConfiguration(JwtOptions.SectionName)\n    .ValidateDataAnnotations()\n    .ValidateOnStart();\n\n// Alternative shorthand:\n// builder.Services.AddOptionsWithValidateOnStart<JwtOptions>(JwtOptions.SectionName);",
+            "explanation": "ValidateOnStart runs validation when the host builds — before app.Run(). Missing Jwt:Issuer in K8s causes immediate crash loop with clear OptionsValidationException message."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IValidateOptions for cross-field rules",
+            "code": "public sealed class JwtOptionsValidator : IValidateOptions<JwtOptions>\n{\n    public ValidateOptionsResult Validate(string? name, JwtOptions options)\n    {\n        if (options.ExpiryMinutes > 60 && string.IsNullOrEmpty(options.RefreshTokenSecret))\n            return ValidateOptionsResult.Fail(\n                \"RefreshTokenSecret required when ExpiryMinutes > 60\");\n\n        if (options.SigningKey.Contains(\"dev-placeholder\", StringComparison.OrdinalIgnoreCase)\n            && !IsDevelopment())\n            return ValidateOptionsResult.Fail(\"Dev signing key cannot be used in production\");\n\n        return ValidateOptionsResult.Success;\n    }\n}\n\nbuilder.Services.AddSingleton<IValidateOptions<JwtOptions>, JwtOptionsValidator>();",
+            "explanation": "IValidateOptions handles rules DataAnnotations cannot express — cross-property dependencies and environment-aware checks. Multiple validators can be registered."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Manual Bind and Get for one-off reads",
+            "code": "// Get<T> — new instance\nvar redis = builder.Configuration.GetSection(\"Redis\").Get<RedisOptions>();\n\n// Bind — mutate existing\nvar httpOpts = new HttpClientOptions();\nif (!builder.Configuration.GetSection(\"HttpClient\").Bind(httpOpts))\n{\n    throw new InvalidOperationException(\"HttpClient section missing\");\n}\n\n// Arrays and nested objects bind automatically:\n// \"Cors\": { \"AllowedOrigins\": [\"https://a.com\", \"https://b.com\"] }",
+            "explanation": "Get<T> is convenient in tests and startup code. Bind returns false for missing sections — useful for explicit error handling. Prefer Configure<T> for DI-injected options."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Config validation in Node vs ASP.NET Core",
+          "headers": ["Concern", "Node.js / TypeScript", "ASP.NET Core"],
+          "rows": [
+            ["Schema validation", "Zod, Joi, class-validator", "DataAnnotations + IValidateOptions<T>"],
+            ["Fail at startup", "Manual validate() in main()", "ValidateOnStart() built-in"],
+            ["Type binding", "JSON.parse + cast (unsafe)", "Get<T>() with binder conventions"],
+            ["Nested keys", "dotenv-expand, nested objects", "Colon and __ mapping automatic"],
+            ["Error messages", "Joi .message()", "OptionsValidationException with property paths"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "ValidateDataAnnotations without ValidateOnStart — validation only runs on first IOptions resolve, possibly after health checks pass. Non-nullable reference types without [Required] — binder sets null silently. Binding to mutable static fields. Complex types without parameterless constructor. Expecting binding to coerce invalid strings (\"abc\" to int throws or defaults depending on version — test it)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: integration test with WebApplicationFactory that omits required config section — assert host fails to start with OptionsValidationException containing property name. In K8s, invalid config causes CrashLoopBackOff before readiness — check pod logs for validation message, not generic 500. OpenTelemetry: add startup span event when options validate. For binding validation in multi-tenant apps, IValidateOptions can read IHostEnvironment and reject tenant-specific misconfigurations. PostConfigure<T> runs after binding for computed defaults."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Validation approach tradeoffs",
+          "headers": ["Approach", "When", "Pitfall"],
+          "rows": [
+            ["DataAnnotations", "Simple required/range/url rules", "No cross-field logic"],
+            ["IValidateOptions<T>", "Complex business rules", "Must register in DI"],
+            ["ValidateOnStart", "All production APIs", "Without it, first request may fail instead"],
+            ["Manual Get<T> + throw", "Scripts, tests", "Bypasses DI options pipeline"],
+            ["FluentValidation adapter", "Teams prefer FluentValidation", "Extra package; integrate via IValidateOptions"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying validation is optional for internal APIs. Not knowing ValidateOnStart exists (.NET 6+). Confusing binding (type mapping) with validation (business rules). Claiming [Required] on string? without enabling nullable context does what you expect — know NRT interaction."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Binding maps IConfiguration keys to POCO properties via Get<T>, Bind, or Configure<T>.",
+    "ValidateOnStart fails the host at startup when DataAnnotations or IValidateOptions<T> reject config.",
+    "Production tip: pair ValidateOnStart with K8s readiness — invalid Jwt:Issuer never serves traffic.",
+    "60s: Get<T> creates and binds. Configure for DI. DataAnnotations for simple rules. IValidateOptions for cross-field. ValidateOnStart fails fast before Kestrel listens.",
+    "Follow-up: what happens if validation runs only on first IOptions access without ValidateOnStart?"
+  ],
+  "commonPitfalls": [
+    "Saying 'binding validates automatically' gets you rejected — binding maps types; validation is separate and must be enabled.",
+    "ValidateDataAnnotations without ValidateOnStart — first request hits bad config, not deploy time.",
+    "Strong answer: 'Bind with Configure, ValidateDataAnnotations plus IValidateOptions for cross-field rules, ValidateOnStart so K8s catches bad secrets before users do.'"
+  ],
+  "introducedIn": "Configuration binder in ASP.NET Core 1.0; ValidateOnStart in .NET 6",
+  "relatedTopicIds": [
+    "dotnet-06-options-pattern",
+    "dotnet-06-secrets-and-keyvault",
+    "dotnet-08-model-validation",
+    "csharp-07-required-and-null-attributes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Joi or Zod schema validation at startup",
+      "note": "Node apps manually validate config objects after loading env. ASP.NET Core integrates validation into the options pipeline with ValidateOnStart — no separate validateConfig() function needed.",
+      "futureTopicSlug": "javascript/node/configuration"
+    },
+    {
+      "language": "typescript",
+      "concept": "class-validator with NestJS ConfigModule validation",
+      "note": "NestJS can validate env with class-validator decorators — similar to DataAnnotations. ASP.NET adds IValidateOptions for imperative rules and ValidateOnStart for host-level fail-fast.",
+      "futureTopicSlug": "typescript/nestjs/validation"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Bind hierarchical configuration",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/#bind-hierarchical-configuration"
+    },
+    {
+      "title": "Options validation",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options#options-validation"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}
