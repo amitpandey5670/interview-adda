@@ -1,0 +1,246 @@
+{
+  "id": "dotnet-05-di-in-minimal-apis",
+  "slug": "di-in-minimal-apis",
+  "title": "DI in minimal APIs and endpoint filters",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 7,
+  "hook": "Minimal APIs resolve services from constructor parameters on route handlers — same dependency injection (DI) container as controllers, plus endpoint filters for cross-cutting logic scoped to specific route groups.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Minimal APIs in ASP.NET Core support dependency injection through route handler parameters. Register services in builder.Services as usual, then declare them as handler parameters — the framework resolves them from the request scope automatically. Binding attributes like [FromServices], [FromKeyedServices], and [FromBody] control resolution. Endpoint filters (IEndpointFilter) add middleware-like behavior scoped to specific routes or route groups — validation, authorization checks, and logging without global middleware."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Minimal API",
+              "longForm": "Minimal API",
+              "plainDefinition": "Route handlers defined with app.MapGet/MapPost and lambda or method group — no controller class.",
+              "example": "app.MapGet(\"/orders/{id}\", async (Guid id, IOrderService svc) => ...)"
+            },
+            {
+              "term": "IEndpointFilter",
+              "longForm": "IEndpointFilter",
+              "plainDefinition": "Filter that runs around a specific endpoint or route group, with access to DI.",
+              "example": "group.AddEndpointFilter<ValidationFilter>();"
+            },
+            {
+              "term": "FromServices",
+              "longForm": "FromServices attribute",
+              "plainDefinition": "Binding attribute that explicitly marks a parameter for DI resolution.",
+              "example": "[FromServices] IOrderService orders — rarely needed, inferred by default"
+            },
+            {
+              "term": "MapGroup",
+              "longForm": "MapGroup",
+              "plainDefinition": "Groups related endpoints under a common prefix with shared filters and metadata.",
+              "example": "var api = app.MapGroup(\"/api/orders\").AddEndpointFilter<AuthFilter>();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Minimal APIs are the default for new ASP.NET Core Web API projects. Understanding DI in handlers is essential — same lifetime rules apply (scoped DbContext per request). Endpoint filters replace some MVC filter scenarios for minimal APIs. Interviewers ask how minimal API DI compares to controllers, how to add validation without middleware, and how keyed services work in route handlers."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "DI resolution is automatic",
+          "body": "Any parameter type registered in DI is resolved automatically. Only route values, [FromBody], [FromQuery], and similar binding sources need attributes. IOrderService in a handler parameter is resolved from the request scope without [FromServices]."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request to handler with DI",
+          "items": [
+            {
+              "title": "Request arrives",
+              "body": "ASP.NET Core creates a request scope."
+            },
+            {
+              "title": "Route matched",
+              "body": "Endpoint metadata and filters are identified."
+            },
+            {
+              "title": "Filters run",
+              "body": "IEndpointFilter.InvokeAsync executes before the handler (if registered)."
+            },
+            {
+              "title": "Handler parameters resolved",
+              "body": "Route values from URL, body from JSON, services from DI scope."
+            },
+            {
+              "title": "Handler executes",
+              "body": "Returns IResult (Results.Ok, Results.NotFound, etc.)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Minimal API DI and filter pipeline",
+            "source": "flowchart TD\n  REQ[HTTP Request] --> SCOPE[Create request scope]\n  SCOPE --> FILTER[IEndpointFilter\\nvalidation / auth]\n  FILTER --> BIND[Parameter binding\\nroute + body + DI services]\n  BIND --> HANDLER[Route handler executes]\n  HANDLER --> RESULT[IResult response]\n  RESULT --> DISPOSE[Dispose scope\\nDbContext released]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Basic DI in minimal API handlers",
+            "code": "builder.Services.AddDbContext<AppDbContext>();\nbuilder.Services.AddScoped<IOrderService, OrderService>();\n\nvar app = builder.Build();\n\napp.MapGet(\"/api/orders/{id:guid}\", async (\n    Guid id,\n    IOrderService orders,\n    CancellationToken ct) =>\n{\n    var order = await orders.GetByIdAsync(id, ct);\n    return order is null ? Results.NotFound() : Results.Ok(order);\n});\n\napp.MapPost(\"/api/orders\", async (\n    CreateOrderRequest request,\n    IOrderService orders,\n    CancellationToken ct) =>\n{\n    var created = await orders.CreateAsync(request, ct);\n    return Results.Created($\"/api/orders/{created.Id}\", created);\n});",
+            "explanation": "IOrderService resolved from request scope automatically. CreateOrderRequest bound from JSON body. CancellationToken injected by framework. Same lifetime rules as controllers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "MapGroup with endpoint filters and DI",
+            "code": "var orders = app.MapGroup(\"/api/orders\")\n    .AddEndpointFilter<ValidationFilter>()\n    .AddEndpointFilter<AuditFilter>();\n\norders.MapGet(\"/{id:guid}\", GetOrder);\norders.MapPost(\"/\", CreateOrder);\n\nstatic async Task<IResult> GetOrder(\n    Guid id, IOrderService svc, CancellationToken ct)\n    => await svc.GetByIdAsync(id, ct) is { } o\n        ? Results.Ok(o) : Results.NotFound();\n\n// Filter with DI\npublic sealed class AuditFilter(ILogger<AuditFilter> logger) : IEndpointFilter\n{\n    public async ValueTask<object?> InvokeAsync(\n        EndpointFilterInvocationContext ctx,\n        EndpointFilterDelegate next)\n    {\n        logger.LogInformation(\"{Method} {Route}\",\n            ctx.HttpContext.Request.Method,\n            ctx.HttpContext.Request.Path);\n        return await next(ctx);\n    }\n}",
+            "explanation": "Filters registered on MapGroup apply to all routes in the group. AuditFilter receives ILogger via DI. Filters run before handler parameter binding."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Keyed services and [FromServices] in minimal APIs",
+            "code": "builder.Services.AddKeyedScoped<IPaymentGateway, StripeGateway>(\"stripe\");\nbuilder.Services.AddKeyedScoped<IPaymentGateway, PayPalGateway>(\"paypal\");\n\napp.MapPost(\"/api/pay/{provider}\", async (\n    string provider,\n    PayRequest body,\n    [FromKeyedServices(\"stripe\")] IPaymentGateway stripe,\n    [FromKeyedServices(\"paypal\")] IPaymentGateway paypal,\n    CancellationToken ct) =>\n{\n    var gw = provider switch\n    {\n        \"stripe\" => stripe,\n        \"paypal\" => paypal,\n        _ => throw new BadHttpRequestException(\"Unknown provider\")\n    };\n    return Results.Ok(await gw.ChargeAsync(body.Amount, ct));\n});\n\n// Explicit [FromServices] when type is ambiguous\napp.MapGet(\"/api/config\", ([FromServices] IOptions<AppOptions> opts)\n    => Results.Ok(opts.Value));",
+            "explanation": "FromKeyedServices works on minimal API handler parameters. FromServices is explicit when the framework cannot infer binding source — rare for registered services."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidateOnBuild and WebApplicationFactory integration test",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Host.UseDefaultServiceProvider(o =>\n{\n    o.ValidateOnBuild = true;\n    o.ValidateScopes = true;\n});\nbuilder.Services.AddScoped<IOrderService, OrderService>();\n\n// Integration test proves DI works in minimal API\npublic class OrdersApiTests : IClassFixture<WebApplicationFactory<Program>>\n{\n    private readonly HttpClient _client;\n    public OrdersApiTests(WebApplicationFactory<Program> factory)\n    {\n        _client = factory.WithWebHostBuilder(b => b.ConfigureServices(s =>\n        {\n            s.AddScoped<IOrderService, FakeOrderService>(); // override for test\n        })).CreateClient();\n    }\n\n    [Fact]\n    public async Task GetOrder_returns_ok()\n    {\n        var res = await _client.GetAsync(\"/api/orders/\" + Guid.NewGuid());\n        res.EnsureSuccessStatusCode();\n    }\n}",
+            "explanation": "ValidateOnBuild catches missing registrations at startup. WebApplicationFactory replaces services for testing — same pattern as controller integration tests. FakeOrderService injected into minimal API handler."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Minimal API DI vs NestJS vs Express",
+          "headers": ["Aspect", "Minimal APIs", "NestJS", "Express"],
+          "rows": [
+            ["Handler DI", "Parameter injection from container", "Constructor/method injection via decorators", "Manual — req.app.get('service') or closure"],
+            ["Route groups", "MapGroup + shared filters", "Controller class with @Controller prefix", "express.Router() with shared middleware"],
+            ["Per-route filters", "IEndpointFilter on group or route", "Guards, interceptors, pipes per route", "Route-specific middleware"],
+            ["Keyed services", "[FromKeyedServices] on parameters", "@Inject('TOKEN') on parameters", "Manual registry lookup"],
+            ["Testing override", "WebApplicationFactory ConfigureServices", "TestingModule overrideProvider", "Mock and pass to handler manually"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Capturing scoped service in a static delegate or closure registered at startup. Forgetting CancellationToken parameter — handlers should accept it for graceful shutdown. Using app.Services (root provider) inside handlers instead of injected scoped services. Endpoint filter registered as singleton with scoped constructor dependency — same captive trap as middleware."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: WebApplicationFactory integration tests for every minimal API route with service overrides. ValidateOnBuild in CI ensures all handler dependencies are registered. OpenTelemetry: each endpoint filter and handler appears as a span — verify scoped DbContext span duration matches request. Endpoint filters vs middleware tradeoff: filters are endpoint-scoped (no global pipeline cost), middleware runs for every request on the branch. For auth on a route group, prefer RequireAuthorization() metadata over a custom filter when possible."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "When to use", "Limitation"],
+          "rows": [
+            ["Handler parameter DI", "Default for all services", "Many parameters = long signature"],
+            ["IEndpointFilter", "Per-route/group cross-cutting", "Not global — won't run for unmatched routes"],
+            ["Middleware", "Transport concerns, all requests", "Runs even when not needed"],
+            ["MapGroup + RequireAuthorization", "Auth on route prefix", "Policy-based only"],
+            ["Static handler method", "Testable, no closure capture", "Cannot capture local variables from Program.cs"],
+            ["Keyed [FromKeyedServices]", "Multi-provider handlers", "String key management"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying minimal APIs cannot use DI. Closure capturing scoped DbContext at MapGet registration time. Not knowing IEndpointFilter exists as the minimal API equivalent of action filters. Unable to explain how WebApplicationFactory overrides services for minimal API tests."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Minimal API handlers inject services via parameters — same request scope as controllers, no [FromServices] needed for registered types.",
+    "IEndpointFilter for per-route/group cross-cutting; MapGroup shares filters and metadata across related endpoints.",
+    "Production tip: ValidateOnBuild in CI; WebApplicationFactory with service overrides for integration tests; static handler methods avoid closure capture.",
+    "60s: Register in builder.Services. Handler parameters auto-resolve from request scope. MapGroup for route groups with shared IEndpointFilter. Keyed services via FromKeyedServices. Same lifetime rules as controllers. WebApplicationFactory for test overrides.",
+    "Follow-up: when would you use endpoint filter vs middleware vs MVC action filter?"
+  ],
+  "commonPitfalls": [
+    "Closure capturing scoped service at MapGet registration gets you rejected — captive dependency at startup.",
+    "Saying minimal APIs have no DI support — they use the same container as controllers.",
+    "Strong answer: 'Handler params from request scope. MapGroup + IEndpointFilter for per-group logic. ValidateOnBuild. WebApplicationFactory overrides. NestJS guards/interceptors are the analog to endpoint filters.'"
+  ],
+  "introducedIn": "Minimal APIs in .NET 6; IEndpointFilter in .NET 7; keyed services in handlers .NET 8",
+  "relatedTopicIds": [
+    "dotnet-05-di-fundamentals",
+    "dotnet-05-keyed-di",
+    "dotnet-03-controllers-vs-minimal-apis",
+    "dotnet-04-scoped-services-in-middleware",
+    "dotnet-08-endpoint-filters"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS route handlers with injected services",
+      "note": "NestJS @Get() methods inject services via constructor — controller is DI-activated like minimal API handlers. NestJS guards map to IEndpointFilter; NestJS interceptors map to endpoint filters that wrap the response.",
+      "futureTopicSlug": "typescript/nestjs/controllers"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express route handler with manual service lookup",
+      "note": "Express: app.get('/orders', (req, res) => { const svc = req.app.get('orderService'); }) — manual service locator per request. No parameter injection, no scope validation, no ValidateOnBuild equivalent.",
+      "futureTopicSlug": "javascript/express/route-handlers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Parameter binding for minimal APIs",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/parameter-binding"
+    },
+    {
+      "title": "Filters in minimal API apps",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/min-api-filters"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

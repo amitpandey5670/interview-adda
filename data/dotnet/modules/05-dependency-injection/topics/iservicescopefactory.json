@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-05-iservicescopefactory",
+  "slug": "iservicescopefactory",
+  "title": "IServiceScopeFactory (scoped work from singletons)",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 5,
+  "hook": "Singletons like BackgroundService and IHostedService cannot inject scoped services directly. IServiceScopeFactory creates a short-lived scope so DbContext and other scoped services work safely outside HTTP requests.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IServiceScopeFactory is a singleton service registered by the framework that creates IServiceScope instances. Each scope has its own IServiceProvider where scoped services are resolved fresh and disposed when the scope ends. Background services, channel consumers, timer callbacks, and queue processors inject IServiceScopeFactory (not AppDbContext directly) and call CreateScope() for each unit of work — a message, a timer tick, or a batch job."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IServiceScopeFactory",
+              "longForm": "IServiceScopeFactory",
+              "plainDefinition": "Singleton factory that creates disposable scopes for resolving scoped services outside request context.",
+              "example": "using var scope = scopeFactory.CreateScope();"
+            },
+            {
+              "term": "IServiceScope",
+              "longForm": "IServiceScope",
+              "plainDefinition": "A disposable scope with its own ServiceProvider. Dispose releases all scoped services.",
+              "example": "await using var scope = scopeFactory.CreateAsyncScope();"
+            },
+            {
+              "term": "BackgroundService",
+              "longForm": "BackgroundService",
+              "plainDefinition": "A long-running IHostedService base class for background work in ASP.NET Core.",
+              "example": "public class Worker(IServiceScopeFactory scopes) : BackgroundService"
+            },
+            {
+              "term": "CreateAsyncScope",
+              "longForm": "CreateAsyncScope extension",
+              "plainDefinition": ".NET extension that returns IAsyncDisposable scope for async disposal patterns.",
+              "example": "await using var scope = scopeFactory.CreateAsyncScope();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every production Web API eventually needs background work: processing an outbox table, consuming a message queue, running scheduled cleanup, or sending batched emails. All of these need DbContext — which is scoped. Injecting DbContext into BackgroundService is the captive dependency trap. IServiceScopeFactory is the canonical fix and a top FAANG interview question paired with the outbox pattern."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "One scope per unit of work",
+          "body": "Create a new scope for each message, timer tick, or batch — not one scope for the entire BackgroundService lifetime. A long-lived scope holds DbContext open indefinitely."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Scoped work in a background service",
+          "items": [
+            {
+              "title": "BackgroundService starts",
+              "body": "Singleton worker injects IServiceScopeFactory (safe — factory itself is singleton)."
+            },
+            {
+              "title": "Work item arrives",
+              "body": "Message from queue or timer fires."
+            },
+            {
+              "title": "Create scope",
+              "body": "using var scope = scopeFactory.CreateScope() — new scope per work item."
+            },
+            {
+              "title": "Resolve and work",
+              "body": "Get AppDbContext and services from scope.ServiceProvider, do work, dispose scope."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IServiceScopeFactory in background processing",
+            "source": "sequenceDiagram\n  participant BG as BackgroundService\\nsingleton\n  participant SF as IServiceScopeFactory\\nsingleton\n  participant SC as IServiceScope\n  participant DB as AppDbContext\\nscoped\n  BG->>SF: CreateScope()\n  SF->>SC: new scope\n  SC->>DB: resolve scoped\n  BG->>DB: process message\n  BG->>SC: Dispose()\n  SC->>DB: dispose context"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "BackgroundService with per-message scope",
+            "code": "public sealed class OrderProcessor(\n    IServiceScopeFactory scopeFactory,\n    ILogger<OrderProcessor> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        await foreach (var message in ReadQueueAsync(stoppingToken))\n        {\n            // ONE scope per message — not one for the whole service\n            await using var scope = scopeFactory.CreateAsyncScope();\n            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n            var notifier = scope.ServiceProvider.GetRequiredService<IOrderNotifier>();\n\n            var order = await db.Orders.FindAsync([message.OrderId], stoppingToken);\n            if (order is null) continue;\n\n            order.Status = OrderStatus.Processed;\n            await db.SaveChangesAsync(stoppingToken);\n            await notifier.SendConfirmationAsync(order, stoppingToken);\n            // scope disposed — DbContext released\n        }\n    }\n}",
+            "explanation": "IServiceScopeFactory is singleton-safe. Each message gets a fresh scope with its own DbContext. await using ensures async disposal."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Outbox pattern with scoped processing",
+            "code": "public sealed class OutboxDispatcher(IServiceScopeFactory scopes) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        while (!ct.IsCancellationRequested)\n        {\n            await using var scope = scopes.CreateAsyncScope();\n            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n            var publisher = scope.ServiceProvider.GetRequiredService<IEventPublisher>();\n\n            var batch = await db.OutboxMessages\n                .Where(m => m.ProcessedAt == null)\n                .OrderBy(m => m.CreatedAt)\n                .Take(20)\n                .ToListAsync(ct);\n\n            foreach (var msg in batch)\n            {\n                await publisher.PublishAsync(msg.Payload, ct);\n                msg.ProcessedAt = DateTimeOffset.UtcNow;\n            }\n            await db.SaveChangesAsync(ct);\n            await Task.Delay(TimeSpan.FromSeconds(5), ct);\n        }\n    }\n}",
+            "explanation": "Outbox dispatcher polls scoped DbContext per batch. Same request's data and outbox message share a transaction in the originating request scope; the dispatcher creates its own scope per poll cycle."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Timer callback and fire-and-forget scope",
+            "code": "public sealed class CacheRefreshService(\n    IServiceScopeFactory scopes,\n    ILogger<CacheRefreshService> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(5));\n        while (await timer.WaitForNextTickAsync(ct))\n        {\n            try\n            {\n                await using var scope = scopes.CreateAsyncScope();\n                var refresher = scope.ServiceProvider\n                    .GetRequiredService<ICacheRefresher>();\n                await refresher.RefreshAsync(ct);\n            }\n            catch (Exception ex)\n            {\n                logger.LogError(ex, \"Cache refresh failed\");\n            }\n        }\n    }\n}",
+            "explanation": "Each timer tick creates and disposes its own scope. Exception in one tick does not leak DbContext to the next tick."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode — long-lived scope in background service",
+            "code": "// ANTI-PATTERN — scope lives for entire BackgroundService lifetime\npublic sealed class BadWorker(IServiceScopeFactory scopes) : BackgroundService\n{\n    private readonly IServiceScope _scope = scopes.CreateScope(); // NEVER\n\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        var db = _scope.ServiceProvider.GetRequiredService<AppDbContext>();\n        while (!ct.IsCancellationRequested)\n        {\n            // Same DbContext forever — change tracker grows, memory leaks\n            var items = await db.QueueItems.ToListAsync(ct);\n            // ...\n        }\n    }\n    // _scope never disposed until app shutdown\n}\n\n// Diagnosis: dotnet-counters active-db-contexts = 1 always\n// Fix: CreateScope() inside the loop, per iteration",
+            "explanation": "Creating one scope in the constructor or field is as bad as injecting DbContext directly. The diagnostics counter active-db-contexts stuck at 1 confirms the bug."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Scoped work outside requests",
+          "headers": ["Pattern", "ASP.NET Core", "NestJS", "Express"],
+          "rows": [
+            ["Background worker", "BackgroundService + IServiceScopeFactory", "Cron job with app.get(ModuleRef)", "setInterval + manual pool.connect()"],
+            ["Per-work-item scope", "CreateScope() per message", "app.resolve(REQUEST-scoped provider)", "pool.connect() per job, pool.release() after"],
+            ["Singleton worker", "BackgroundService is singleton", "@Injectable() DEFAULT scope cron", "Module-level worker function"],
+            ["Disposal", "scope.Dispose() / await using", "onModuleDestroy", "client.release() in finally"],
+            ["Outbox pattern", "Scoped dispatcher polls outbox table", "Bull/BullMQ with per-job context", "pg-boss with per-job connection"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "One scope for the entire BackgroundService lifetime. Forgetting to dispose the scope (use using/await using). Creating scope but resolving from root IServiceProvider. Running parallel work items sharing one scope without synchronization. Fire-and-forget Task.Run without its own scope."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters Microsoft.EntityFrameworkCore active-db-contexts during background processing — should spike per batch then return to baseline. OpenTelemetry traces showing DbContext span duration matching scope lifetime, not BackgroundService lifetime. Health check: background worker processes N messages, counter stays bounded. Integration test with WebApplicationFactory: enqueue message, assert DB updated, assert no ObjectDisposedException after 100 iterations. Pair with outbox pattern for reliable event publishing — same interview arc."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Safe", "Notes"],
+          "rows": [
+            ["IServiceScopeFactory per work item", "Yes", "Canonical pattern for BackgroundService"],
+            ["Inject DbContext in BackgroundService", "No", "Captive dependency"],
+            ["One scope for service lifetime", "No", "DbContext never disposed, tracker grows"],
+            ["Channel<T> + scoped consumer per message", "Yes", "Good for high-throughput pipelines"],
+            ["Hangfire/Quartz with scoped job filter", "Yes", "Third-party schedulers handle scope for you"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Injecting DbContext into BackgroundService without mentioning IServiceScopeFactory. One scope for the entire worker lifetime. Not knowing CreateAsyncScope exists. Unable to connect this to the outbox pattern or explain why queue consumers need per-message scopes."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IServiceScopeFactory is singleton-safe — inject it into BackgroundService, not DbContext.",
+    "CreateScope() per work item (message, timer tick, batch) — never one scope for the service lifetime.",
+    "Production tip: monitor active-db-contexts during background processing; pair with outbox pattern for reliable events.",
+    "60s: BackgroundService is singleton. DbContext is scoped. Inject IServiceScopeFactory, call CreateScope per work item, resolve DbContext inside scope, dispose. Same fix for queue consumers and timer callbacks.",
+    "Follow-up: how do you handle parallel message processing — one scope per message or shared scope with locking?"
+  ],
+  "commonPitfalls": [
+    "DbContext in BackgroundService ctor gets you rejected — textbook captive dependency; IServiceScopeFactory is the expected answer.",
+    "One scope in ctor/field for entire worker — same bug, different shape.",
+    "Strong answer: 'Singleton worker, scoped work via IServiceScopeFactory.CreateScope per unit of work. await using for async disposal. Outbox dispatcher polls with per-batch scope. NestJS uses ModuleRef.resolve for same pattern.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 (IServiceScopeFactory); CreateAsyncScope in .NET Core 3.0",
+  "relatedTopicIds": [
+    "dotnet-05-captive-dependency-trap",
+    "dotnet-05-service-lifetimes",
+    "dotnet-01-aspnetcore-hosting-model",
+    "dotnet-04-scoped-services-in-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS ModuleRef.resolve for request scope in cron",
+      "note": "NestJS cron jobs inject ModuleRef and call resolve(REQUEST-scoped provider) per execution — identical to IServiceScopeFactory.CreateScope(). Without this, cron captures a single Prisma client forever.",
+      "futureTopicSlug": "typescript/nestjs/background-jobs"
+    },
+    {
+      "language": "javascript",
+      "concept": "pg pool.connect per job in Node worker",
+      "note": "Node background workers call pool.connect() per message and client.release() in finally — manual scope equivalent. Forgetting release() mirrors never disposing IServiceScope.",
+      "futureTopicSlug": "javascript/node/background-workers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Use scoped services within a BackgroundService",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services#consuming-a-scoped-service-in-a-background-service"
+    },
+    {
+      "title": "Dependency injection scopes",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection#service-scopes"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

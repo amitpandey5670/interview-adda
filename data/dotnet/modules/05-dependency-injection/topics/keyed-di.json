@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-05-keyed-di",
+  "slug": "keyed-di",
+  "title": "Keyed dependency injection (.NET 8+ named implementations)",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 4,
+  "hook": ".NET 8 introduced keyed dependency injection (DI) — register multiple implementations of the same interface under different keys and resolve the one you need without factory boilerplate.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Keyed dependency injection lets you register several implementations of one interface, each identified by a key (string or object). Use AddKeyedSingleton, AddKeyedScoped, or AddKeyedTransient to register, then resolve with [FromKeyedServices(\"key\")] on constructor or method parameters, or GetRequiredKeyedService<T>(key) on IServiceProvider. This replaces the common pattern of registering a Dictionary<string, IPaymentGateway> factory or using named delegates."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Keyed service",
+              "longForm": "Keyed service registration",
+              "plainDefinition": "A service registration identified by both its type and a key object.",
+              "example": "AddKeyedScoped<IPaymentGateway, StripeGateway>(\"stripe\")"
+            },
+            {
+              "term": "FromKeyedServices",
+              "longForm": "FromKeyedServices attribute",
+              "plainDefinition": "Attribute that tells the container which keyed implementation to inject.",
+              "example": "[FromKeyedServices(\"stripe\")] IPaymentGateway stripe"
+            },
+            {
+              "term": "ServiceKey",
+              "longForm": "Service key",
+              "plainDefinition": "The key object used to distinguish implementations — typically a string.",
+              "example": "serviceKey: \"stripe\" or serviceKey: PaymentProvider.Stripe"
+            },
+            {
+              "term": "GetRequiredKeyedService",
+              "longForm": "GetRequiredKeyedService method",
+              "plainDefinition": "Manual resolution method on IServiceProvider for keyed services.",
+              "example": "sp.GetRequiredKeyedService<IPaymentGateway>(\"stripe\")"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Multi-provider scenarios are everywhere: payment gateways (Stripe, PayPal), notification channels (email, SMS, push), storage backends (S3, Azure Blob), and feature-flagged implementations. Before .NET 8, you built custom factories or injected IEnumerable<IPaymentGateway> and filtered by name. Keyed DI is first-class, testable, and respects lifetimes per keyed registration."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When keyed DI beats IEnumerable<T>",
+          "body": "Use keyed DI when the consumer knows which implementation it needs at compile time. Use IEnumerable<T> when you need to iterate all implementations (e.g., send notification to all channels)."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Keyed registration and resolution",
+          "items": [
+            {
+              "title": "Register with key",
+              "body": "AddKeyedScoped<IPaymentGateway, StripeGateway>(\"stripe\") and repeat for each provider."
+            },
+            {
+              "title": "Inject with attribute",
+              "body": "[FromKeyedServices(\"stripe\")] IPaymentGateway gateway on constructor or handler parameter."
+            },
+            {
+              "title": "Container resolves by key",
+              "body": "The matching keyed registration is resolved with its declared lifetime."
+            },
+            {
+              "title": "Manual resolution optional",
+              "body": "For dynamic key selection, use GetRequiredKeyedService<T>(key) at runtime."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Keyed DI resolution",
+            "source": "flowchart LR\n  REG[\"AddKeyedScoped IPaymentGateway stripe\"]\n  REG2[\"AddKeyedScoped IPaymentGateway paypal\"]\n  CTRL[CheckoutController]\n  REG --> CTRL\n  REG2 --> CTRL\n  CTRL -->|FromKeyedServices stripe| STRIPE[StripeGateway]\n  CTRL -->|FromKeyedServices paypal| PAYPAL[PayPalGateway]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register multiple implementations with keys",
+            "code": "builder.Services.AddKeyedScoped<IPaymentGateway, StripeGateway>(\"stripe\");\nbuilder.Services.AddKeyedScoped<IPaymentGateway, PayPalGateway>(\"paypal\");\nbuilder.Services.AddKeyedSingleton<ICacheStore, RedisCacheStore>(\"redis\");\nbuilder.Services.AddKeyedSingleton<ICacheStore, MemoryCacheStore>(\"memory\");\n\n// Enum keys work too\nbuilder.Services.AddKeyedScoped<INotifier, EmailNotifier>(NotificationChannel.Email);\nbuilder.Services.AddKeyedScoped<INotifier, SmsNotifier>(NotificationChannel.Sms);",
+            "explanation": "Each key maps to one implementation with its own lifetime. Keys can be strings or any object (enums are common for type safety)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Inject keyed services with [FromKeyedServices]",
+            "code": "public sealed class CheckoutService(\n    [FromKeyedServices(\"stripe\")] IPaymentGateway stripe,\n    [FromKeyedServices(\"paypal\")] IPaymentGateway paypal,\n    IOrderRepository orders)\n{\n    public async Task<PaymentResult> PayAsync(\n        Guid orderId, string provider, CancellationToken ct)\n    {\n        var gateway = provider switch\n        {\n            \"stripe\" => stripe,\n            \"paypal\" => paypal,\n            _ => throw new ArgumentException($\"Unknown provider {provider}\")\n        };\n        var order = await orders.GetByIdAsync(orderId, ct);\n        return await gateway.ChargeAsync(order.Total, ct);\n    }\n}",
+            "explanation": "Both gateways are injected at construction — no service locator. The switch selects which pre-resolved instance to use. Each keyed service respects its registered lifetime."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Keyed DI in minimal APIs",
+            "code": "app.MapPost(\"/pay/{provider}\", async (\n    string provider,\n    PaymentRequest request,\n    [FromKeyedServices(\"stripe\")] IPaymentGateway stripe,\n    [FromKeyedServices(\"paypal\")] IPaymentGateway paypal) =>\n{\n    var gateway = provider switch\n    {\n        \"stripe\" => stripe,\n        \"paypal\" => paypal,\n        _ => throw new BadHttpRequestException(\"Unknown provider\")\n    };\n    return Results.Ok(await gateway.ChargeAsync(request.Amount));\n});",
+            "explanation": "Minimal API handlers support [FromKeyedServices] on parameters — same attribute as controllers. The container resolves only the keyed services the handler declares."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Dynamic key resolution and keyed service enumeration",
+            "code": "public sealed class PaymentRouter(IServiceProvider sp)\n{\n    public IPaymentGateway Resolve(string provider) =>\n        sp.GetRequiredKeyedService<IPaymentGateway>(provider);\n}\n\n// List all keyed registrations (diagnostics / admin endpoint)\npublic sealed class ProviderRegistry([FromKeyedServices] IServiceProvider sp)\n{\n    // GetKeyedServices<T>() returns all keyed instances\n    public IEnumerable<string> ListProviders(IServiceProvider provider)\n    {\n        // Use service descriptor inspection or maintain a registry\n        return [\"stripe\", \"paypal\"];\n    }\n}\n\n// ValidateOnBuild validates keyed registrations too\nbuilder.Host.UseDefaultServiceProvider(o => o.ValidateOnBuild = true);",
+            "explanation": "GetRequiredKeyedService throws if the key is missing — fail fast. For dynamic routing, inject IServiceProvider and resolve by runtime key. ValidateOnBuild ensures keyed graphs are valid at startup."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Keyed DI vs NestJS custom providers vs Express",
+          "headers": ["Aspect", ".NET 8 Keyed DI", "NestJS", "Express"],
+          "rows": [
+            ["Multiple implementations", "AddKeyedScoped + FromKeyedServices", "Custom provider with provide/inject tokens", "Map of implementations or switch on string"],
+            ["Injection", "[FromKeyedServices(\"key\")] attribute", "@Inject('STRIPE_GATEWAY')", "Manual lookup from registry object"],
+            ["Lifetime per key", "Per registration (singleton/scoped/transient)", "Per provider scope setting", "Manual — usually all singletons"],
+            ["Dynamic resolution", "GetRequiredKeyedService(key)", "ModuleRef.get(token)", "providers[key] or factory function"],
+            ["Validation", "ValidateOnBuild checks keyed graph", "Module bootstrap validation", "None"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using string keys without constants — typos cause runtime exceptions. Mixing keyed and unkeyed registration for the same interface without understanding which GetService returns. Forgetting [FromKeyedServices] attribute — container injects the unkeyed registration or fails. Using keyed DI when IEnumerable<T> iteration is what you actually need."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: integration test each keyed registration resolves independently — mock Stripe, assert PayPal path uses different instance. ValidateOnBuild with keyed singleton consuming keyed scoped catches captive dependencies within keyed graphs. For admin tooling, expose registered keys via IServiceCollection descriptor inspection at startup. Keyed DI reduces factory boilerplate but does not replace the strategy pattern when selection logic is complex — combine keyed registration with a router service for dynamic provider selection."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "When to use", "Downside"],
+          "rows": [
+            ["Keyed DI", "Known providers, compile-time injection points", "String key typos; many ctor params if all injected"],
+            ["IEnumerable<T> injection", "Run all implementations (fan-out)", "Cannot pick one without filtering"],
+            ["Factory delegate", "Complex selection logic", "More boilerplate, harder to test"],
+            ["Separate interfaces", "Truly different contracts", "Interface explosion"],
+            ["Strategy + keyed resolve", "Dynamic runtime selection", "Two patterns combined — document clearly"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing keyed DI exists in .NET 8+. Confusing it with named HttpClient (AddHttpClient(\"name\")). Saying you always use Dictionary<string, T> factory without knowing the built-in alternative. Unable to explain when IEnumerable<T> is better than keyed injection."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Keyed DI (.NET 8+): register multiple implementations with AddKeyedScoped/Singleton/Transient and a key.",
+    "[FromKeyedServices(\"key\")] on ctor or minimal API params; GetRequiredKeyedService for dynamic resolution.",
+    "Production tip: use enum or static class for key constants; integration test each keyed path; ValidateOnBuild validates keyed graphs.",
+    "60s: .NET 8 keyed DI registers multiple implementations under a key. Inject with FromKeyedServices attribute. Dynamic resolution via GetRequiredKeyedService. Use IEnumerable when you need all implementations, keyed when you need one specific.",
+    "Follow-up: how does keyed DI interact with captive dependency validation?"
+  ],
+  "commonPitfalls": [
+    "String literal keys without constants gets you rejected — typos fail at runtime, not compile time.",
+    "Injecting all keyed services into one ctor when only one is needed — use dynamic resolution instead.",
+    "Strong answer: 'Keyed DI in .NET 8 replaces factory dictionaries. FromKeyedServices for known keys. GetRequiredKeyedService for dynamic. NestJS uses custom injection tokens for the same pattern.'"
+  ],
+  "introducedIn": ".NET 8 (November 2023)",
+  "relatedTopicIds": [
+    "dotnet-05-di-fundamentals",
+    "dotnet-05-registration-patterns",
+    "dotnet-05-di-in-minimal-apis",
+    "dotnet-05-service-lifetimes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS custom provider tokens",
+      "note": "NestJS uses provide: 'STRIPE_GATEWAY', useClass: StripeGateway with @Inject('STRIPE_GATEWAY') — functionally identical to keyed DI. NestJS tokens are strings or symbols; .NET keys are any object.",
+      "futureTopicSlug": "typescript/nestjs/custom-providers"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express provider registry map",
+      "note": "Express pattern: const gateways = { stripe: new StripeGateway(), paypal: new PayPalGateway() }; gateways[provider].charge() — manual keyed lookup with no lifetime management or validation.",
+      "futureTopicSlug": "javascript/express/plugin-architecture"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Keyed services in dependency injection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection#keyed-services"
+    },
+    {
+      "title": "What's new in .NET 8 — DI improvements",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/whats-new/dotnet-8#dependency-injection"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
+}

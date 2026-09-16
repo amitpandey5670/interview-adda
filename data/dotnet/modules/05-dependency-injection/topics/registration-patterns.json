@@ -1,0 +1,241 @@
+{
+  "id": "dotnet-05-registration-patterns",
+  "slug": "registration-patterns",
+  "title": "Registration patterns (TryAdd, decorators, factory delegates)",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 6,
+  "hook": "Beyond AddScoped and AddSingleton, production apps use TryAdd to avoid duplicate registrations, factory delegates for conditional construction, and decorator libraries like Scrutor for cross-cutting concerns like caching and logging.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Registration patterns extend the basic Add* methods for real-world composition. TryAdd* methods register only if no existing registration exists — essential for library extensions that should not override app registrations. Factory delegates (AddSingleton(sp => ...)) resolve dependencies at creation time. Decorator pattern wraps an existing registration with a cross-cutting layer — the built-in container does not support decorators natively, but Scrutor adds Decorate<T>(). Open generic registration (AddScoped(typeof(IRepository<>), typeof(Repository<>))) maps interface/type pairs generically."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TryAdd",
+              "longForm": "TryAdd registration",
+              "plainDefinition": "Registers a service only if no registration for that type already exists.",
+              "example": "services.TryAddScoped<IEmailSender, SmtpEmailSender>();"
+            },
+            {
+              "term": "Factory delegate",
+              "longForm": "Factory delegate registration",
+              "plainDefinition": "Registration using a lambda that receives IServiceProvider and returns the instance.",
+              "example": "AddSingleton(sp => new ConfiguredClient(sp.GetRequiredService<IOptions<ApiOptions>>().Value))"
+            },
+            {
+              "term": "Decorator",
+              "longForm": "Decorator pattern",
+              "plainDefinition": "A wrapper that implements the same interface, delegating to the inner implementation.",
+              "example": "CachingOrderService wraps OrderService, both implement IOrderService"
+            },
+            {
+              "term": "Open generic",
+              "longForm": "Open generic registration",
+              "plainDefinition": "Registration of generic types without specifying type arguments.",
+              "example": "AddScoped(typeof(IRepository<>), typeof(EfRepository<>))"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Library authors use TryAdd so their AddMyLibrary() extension does not stomp on the app's custom IEmailSender. Factory delegates configure services that need IOptions or multiple dependencies at construction time. Decorators add caching, logging, and resilience without modifying the core service. Open generics eliminate repetitive AddScoped<IOrderRepository, OrderRepository>() for every entity. These patterns appear in every mature codebase and in senior interviews about extensibility."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Scrutor for decorators",
+          "body": "The built-in container has no Decorate method. Scrutor (MIT license) adds services.Decorate<IOrderService, CachingOrderService>() — widely used in production and worth knowing for interviews."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Decorator registration with Scrutor",
+          "items": [
+            {
+              "title": "Register core implementation",
+              "body": "services.AddScoped<IOrderService, OrderService>()"
+            },
+            {
+              "title": "Add Scrutor package",
+              "body": "dotnet add package Scrutor"
+            },
+            {
+              "title": "Decorate",
+              "body": "services.Decorate<IOrderService, CachingOrderService>()"
+            },
+            {
+              "title": "Resolve",
+              "body": "Container returns CachingOrderService wrapping OrderService — consumer still injects IOrderService"
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Decorator resolution chain",
+            "source": "flowchart LR\n  CTRL[OrdersController] -->|IOrderService| CACHE[CachingOrderService\\ndecorator]\n  CACHE -->|inner| CORE[OrderService\\ncore impl]\n  CORE --> DB[AppDbContext]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "TryAdd — library extensions that respect app overrides",
+            "code": "// Library extension method\npublic static IServiceCollection AddMyLibrary(this IServiceCollection services)\n{\n    services.TryAddSingleton<IClock, SystemClock>();\n    services.TryAddScoped<IEmailSender, DefaultEmailSender>();\n    services.AddScoped<IMyFeature, MyFeatureService>(); // always adds\n    return services;\n}\n\n// App overrides the default email sender\nbuilder.Services.AddMyLibrary();\nbuilder.Services.AddScoped<IEmailSender, SendGridEmailSender>(); // wins\n\n// TryAddScoped<IEmailSender, ...> in library would NOT override SendGrid",
+            "explanation": "TryAdd registers only if the service type is not already registered. Libraries use TryAdd; apps use Add to override defaults."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Factory delegate registration",
+            "code": "builder.Services.Configure<PaymentOptions>(\n    builder.Configuration.GetSection(\"Payment\"));\n\nbuilder.Services.AddSingleton<IPaymentClient>(sp =>\n{\n    var opts = sp.GetRequiredService<IOptions<PaymentOptions>>().Value;\n    return new PaymentClient(opts.ApiKey, opts.BaseUrl);\n});\n\n// Transient factory with scoped dependency — resolved per call\nbuilder.Services.AddTransient<Func<AppDbContext>>(sp =>\n    () => sp.GetRequiredService<AppDbContext>());",
+            "explanation": "Factory delegate receives IServiceProvider to resolve dependencies at creation time. Useful when constructor needs config values or conditional setup."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Scrutor decorator for caching",
+            "code": "builder.Services.AddScoped<IOrderService, OrderService>();\nbuilder.Services.Decorate<IOrderService, CachingOrderService>();\n\npublic sealed class CachingOrderService(\n    IOrderService inner, // Scrutor injects the previous registration\n    IMemoryCache cache) : IOrderService\n{\n    public async Task<OrderDto?> GetByIdAsync(Guid id, CancellationToken ct)\n    {\n        return await cache.GetOrCreateAsync($\"order:{id}\", async entry =>\n        {\n            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);\n            return await inner.GetByIdAsync(id, ct);\n        });\n    }\n}",
+            "explanation": "Decorator wraps the inner IOrderService. Controller injects IOrderService and gets the caching wrapper transparently. Order of Decorate calls matters — last registered decorator is outermost."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Open generic registration and ValidateOnBuild",
+            "code": "builder.Services.AddScoped(typeof(IRepository<>), typeof(EfRepository<>));\n\n// Resolves IRepository<Order> → EfRepository<Order> automatically\npublic sealed class OrderService(IRepository<Order> orders) : IOrderService { }\n\npublic class EfRepository<T>(AppDbContext db) : IRepository<T>\n    where T : class\n{\n    public Task<T?> GetByIdAsync(Guid id, CancellationToken ct)\n        => db.Set<T>().FindAsync([id], ct).AsTask()!;\n}\n\nbuilder.Host.UseDefaultServiceProvider(o => o.ValidateOnBuild = true);\n// Validates open generic closed types at build time",
+            "explanation": "Open generic registration eliminates per-entity boilerplate. ValidateOnBuild ensures closed generic types like IRepository<Order> resolve correctly at startup."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Registration patterns across ecosystems",
+          "headers": ["Pattern", ".NET", "NestJS", "Express"],
+          "rows": [
+            ["TryAdd / conditional", "TryAddScoped (built-in)", "No direct equivalent — check module imports", "if (!app.get('email')) app.set(...)"],
+            ["Decorator", "Scrutor Decorate<T>()", "Custom provider wrapping useClass", "Middleware wrapping handler"],
+            ["Factory", "AddSingleton(sp => ...)", "useFactory provider", "() => createClient(config)"],
+            ["Open generic", "AddScoped(typeof(IRepo<>), ...)", "Not supported — per-entity providers", "Generic factory function"],
+            ["Override library default", "App Add after library TryAdd", "Module import order + custom provider", "Manual override in app setup"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using Add instead of TryAdd in library code — overrides app customizations. Multiple Decorate calls in wrong order — outermost decorator runs first. Factory delegate capturing scoped service in singleton registration. Registering both concrete and interface without understanding which GetService returns."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: integration test that app override of IEmailSender wins over library TryAdd default. Decorator test: mock inner service, assert caching decorator calls inner only on cache miss. ValidateOnBuild with open generics catches missing closed type registrations at CI. Scrutor is the de facto standard for decorators — knowing it exists and how Decorate ordering works separates senior candidates. For alternatives without Scrutor, manual decorator registration: AddScoped<CachingOrderService>() with factory resolving inner — more boilerplate."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "When to use", "Risk"],
+          "rows": [
+            ["TryAdd", "Library defaults", "App must use Add (not TryAdd) to override"],
+            ["Factory delegate", "IOptions-based construction", "Captive scoped in singleton factory"],
+            ["Scrutor decorator", "Cross-cutting without changing core", "Decorator order confusion; extra package"],
+            ["Open generic", "Repository pattern per entity", "ValidateOnBuild must validate closed types"],
+            ["Manual wrapper class", "No external dependency", "More code; must wire inner manually"],
+            ["IEnumerable<T> multi-registration", "Strategy collection", "Not a decorator — all instances injected"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing TryAdd exists for library extensions. Claiming built-in container supports decorators natively. Factory delegate in AddSingleton that resolves scoped DbContext — captive dependency via factory. Unable to explain decorator vs proxy vs middleware."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "TryAdd* for library defaults that apps can override; Add* when the app intentionally replaces a registration.",
+    "Factory delegates (sp => ...) for IOptions-based construction; watch for captive scoped in singleton factories.",
+    "Production tip: Scrutor for decorators; ValidateOnBuild with open generics; integration test override behavior.",
+    "60s: TryAdd registers only if absent — library pattern. Factory delegate for conditional construction. Scrutor Decorate wraps existing registration. Open generic maps IRepository<> to EfRepository<>. Built-in container has no native decorator.",
+    "Follow-up: how does Scrutor resolve the inner service in a decorator constructor?"
+  ],
+  "commonPitfalls": [
+    "Add instead of TryAdd in library code gets you rejected — stomps app customizations.",
+    "Singleton factory delegate resolving scoped DbContext — captive dependency through the factory.",
+    "Strong answer: 'TryAdd for libraries, Add for apps. Scrutor Decorate for cross-cutting. Factory for IOptions setup. Open generic for repository pattern. NestJS useFactory is the analog.'"
+  ],
+  "introducedIn": "TryAdd in Microsoft.Extensions.DependencyInjection.Abstractions; Scrutor as community package",
+  "relatedTopicIds": [
+    "dotnet-05-di-fundamentals",
+    "dotnet-05-keyed-di",
+    "dotnet-06-configuration-and-options",
+    "dotnet-06-options-pattern"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS useFactory and custom providers",
+      "note": "NestJS useFactory: (config: ConfigService) => new PaymentClient(config.get('key')) mirrors AddSingleton(sp => new PaymentClient(sp.GetRequiredService<IOptions<T>>())). NestJS has no built-in decorator — wrap with a custom provider.",
+      "futureTopicSlug": "typescript/nestjs/custom-providers"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express middleware as manual decorator",
+      "note": "Express wraps handlers with middleware functions — manual decorator pattern. const cachedHandler = withCache(realHandler) mirrors CachingOrderService wrapping OrderService, but without container support or lifetime management.",
+      "futureTopicSlug": "javascript/express/middleware-patterns"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Dependency injection guidelines — multiple implementations",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines#multiple-implementations"
+    },
+    {
+      "title": "Scrutor — decoration extensions",
+      "url": "https://github.com/khellang/Scrutor"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "redis-cache"
+}

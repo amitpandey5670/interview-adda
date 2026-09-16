@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-05-dependency-injection",
+  "title": "Dependency injection interview drills",
+  "items": [
+    {
+      "question": "Explain the three service lifetimes in ASP.NET Core and the rule governing which can depend on which.",
+      "answer": "Singleton: one instance for the application lifetime — caches, IHttpClientFactory, configuration readers. Scoped: one instance per scope, which in web apps means one per HTTP request — DbContext, per-request tenant context. Transient: new instance every time the service is resolved from the container. The golden rule: a service cannot depend on a shorter-lived service. Singleton can only inject singleton. Scoped can inject singleton or scoped. Transient can inject any lifetime, but each resolution creates new instances of its transient dependencies too. Violating this creates the captive dependency trap.",
+      "followUps": [
+        "Why is DbContext always scoped?",
+        "What happens if you inject transient into singleton?"
+      ],
+      "sixtySeconds": "Singleton app-wide. Scoped per request. Transient per resolve. Rule: longer cannot depend on shorter. DbContext scoped. Singleton injecting scoped = captive dependency."
+    },
+    {
+      "question": "What is the captive dependency trap and how do you detect and fix it?",
+      "answer": "A captive dependency occurs when a longer-lived service (singleton) captures a shorter-lived service (scoped or transient) in its constructor. The scoped instance lives as long as the singleton — not one request. Common victims: DbContext in BackgroundService, TenantContext in singleton cache, scoped service in middleware constructor. Symptoms under concurrency: cross-tenant data leaks, ObjectDisposedException, EF 'second operation on this context' errors. Detection: ValidateOnBuild + ValidateScopes in CI (fails at startup), dotnet-counters active-db-contexts stuck at 1 under load, parallel integration tests. Fix: IServiceScopeFactory.CreateScope() per work item, InvokeAsync method injection for middleware, or restructure to handler-level injection.",
+      "followUps": [
+        "Does injecting transient into singleton have the same problem?",
+        "How does IMiddleware differ from convention-based middleware for scoped deps?"
+      ],
+      "sixtySeconds": "Singleton captures scoped — scoped lives forever. Cross-tenant leaks, ObjectDisposedException. ValidateOnBuild catches at startup. Fix: IServiceScopeFactory per work item. Middleware: InvokeAsync injection."
+    },
+    {
+      "question": "How does IServiceScopeFactory enable scoped work in BackgroundService?",
+      "answer": "BackgroundService and IHostedService are singletons — they live for the application lifetime. Injecting AppDbContext directly is a captive dependency. Instead, inject IServiceScopeFactory (itself a singleton, safe to inject). For each work item — a queue message, timer tick, or outbox batch — call CreateScope() or CreateAsyncScope(), resolve scoped services from scope.ServiceProvider, do the work, then dispose the scope. This is the canonical pattern for outbox dispatchers, queue consumers, and scheduled jobs. Critical rule: one scope per work item, not one scope for the entire BackgroundService lifetime.",
+      "followUps": [
+        "How does this relate to the outbox pattern?",
+        "What if you process messages in parallel — one scope per message?"
+      ],
+      "sixtySeconds": "BackgroundService is singleton. Inject IServiceScopeFactory, not DbContext. CreateScope per message or batch. Resolve scoped services inside scope. Dispose after work. Outbox dispatcher uses same pattern."
+    },
+    {
+      "question": "Explain keyed dependency injection in .NET 8+ and when to use it over IEnumerable<T>.",
+      "answer": "Keyed DI registers multiple implementations of the same interface under different keys: AddKeyedScoped<IPaymentGateway, StripeGateway>(\"stripe\"). Resolve with [FromKeyedServices(\"stripe\")] on constructor or handler parameters, or GetRequiredKeyedService<T>(key) for dynamic runtime selection. Use keyed DI when the consumer knows which specific implementation it needs. Use IEnumerable<T> injection when you need to iterate all implementations — e.g., send notification to all channels. Keys should be constants or enums, not string literals scattered in code. ValidateOnBuild validates keyed registration graphs.",
+      "followUps": [
+        "How does keyed DI work in minimal API handlers?",
+        "How does this compare to NestJS custom injection tokens?"
+      ],
+      "sixtySeconds": ".NET 8 keyed DI: AddKeyedScoped with key. FromKeyedServices on params. GetRequiredKeyedService for dynamic. Use when you need one specific impl. IEnumerable when you need all impls."
+    },
+    {
+      "question": "What is ValidateOnBuild and ValidateScopes, and when should you enable them?",
+      "answer": "ValidateOnBuild validates the entire dependency graph when builder.Build() is called — catches missing registrations, captive dependencies, and invalid lifetime chains at startup instead of first request. ValidateScopes throws when a singleton tries to resolve a scoped service from the root provider without an active scope. Both are enabled by default in Development. Enable both in CI and staging — always. Some teams disable ValidateScopes in production for marginal performance, but ValidateOnBuild should remain on. A startup failure in CI is infinitely cheaper than ObjectDisposedException at 3 AM under concurrent load.",
+      "followUps": [
+        "What exceptions does ValidateOnBuild throw for captive dependencies?",
+        "Does ValidateOnBuild catch runtime field assignment of scoped services?"
+      ],
+      "sixtySeconds": "ValidateOnBuild checks full graph at Build. ValidateScopes catches singleton resolving scoped from root. Enable both in CI. Startup failure beats production concurrency bug."
+    },
+    {
+      "question": "Compare ASP.NET Core DI with NestJS and Express manual wiring.",
+      "answer": "ASP.NET Core has a built-in container with explicit singleton/scoped/transient lifetimes, constructor-only injection, and ValidateOnBuild graph validation. NestJS has a similar IoC container with @Injectable(), module providers, and Scope.DEFAULT/REQUEST/TRANSIENT — REQUEST maps to scoped, and NestJS validates scope chains at bootstrap (singleton cannot inject REQUEST-scoped). Express has no built-in container — services are wired manually via require(), app.locals, closures, or third-party libs like awilix. Express has no lifetime enforcement, no graph validation, and no per-request scope — developers use AsyncLocalStorage or attach to req object manually. ASP.NET Core and NestJS both catch captive dependencies at startup; Express reveals them under load.",
+      "followUps": [
+        "When would you replace the built-in container with Autofac?",
+        "How does awilix compare to ASP.NET Core DI?"
+      ],
+      "sixtySeconds": "ASP.NET built-in container, explicit lifetimes, ValidateOnBuild. NestJS similar with Scope.REQUEST = scoped. Express manual wiring, no enforcement, AsyncLocalStorage for per-request state."
+    },
+    {
+      "question": "How does dependency injection work in minimal APIs compared to controllers?",
+      "answer": "Identical container and lifetime semantics. Register services in builder.Services. Minimal API route handlers declare services as parameters — the framework resolves them from the request scope automatically without [FromServices] for registered types. Controllers use constructor injection on the controller class. Both get one scoped DbContext per request. Minimal APIs add IEndpointFilter for per-route or per-group cross-cutting (validation, audit) via MapGroup().AddEndpointFilter<T>(). Keyed services work with [FromKeyedServices] on handler parameters. Testing: WebApplicationFactory with ConfigureServices override replaces registrations for both controllers and minimal API handlers.",
+      "followUps": [
+        "When use IEndpointFilter vs middleware?",
+        "What is the closure capture trap in minimal APIs?"
+      ],
+      "sixtySeconds": "Same container, same lifetimes. Handler params auto-resolve from request scope. MapGroup + IEndpointFilter for per-route logic. Keyed via FromKeyedServices. WebApplicationFactory for test overrides."
+    },
+    {
+      "question": "Explain TryAdd, factory delegates, and the decorator pattern in DI registration.",
+      "answer": "TryAddScoped/AddSingleton registers only if no existing registration for that type — library extensions use TryAdd so apps can override defaults with Add. Factory delegates: AddSingleton(sp => new Client(sp.GetRequiredService<IOptions<T>>().Value)) for construction needing resolved dependencies or config. Watch for captive scoped in singleton factory. Decorator pattern wraps an existing registration — built-in container has no Decorate method; Scrutor adds services.Decorate<IOrderService, CachingOrderService>() where CachingOrderService wraps the inner IOrderService. Open generic: AddScoped(typeof(IRepository<>), typeof(EfRepository<>)) maps all closed types. Decorator order matters — last Decorate is outermost.",
+      "followUps": [
+        "How does Scrutor inject the inner service in a decorator constructor?",
+        "When is IEnumerable<T> injection better than keyed DI?"
+      ],
+      "sixtySeconds": "TryAdd for library defaults apps override. Factory delegate for IOptions setup. Scrutor Decorate for cross-cutting wrapper. Open generic for repository pattern. Built-in has no native decorator."
+    },
+    {
+      "question": "You see active-db-contexts stuck at 1 under 50 concurrent requests. Diagnose.",
+      "answer": "This is definitive proof of a captive DbContext. Under normal operation, active-db-contexts should approximate concurrent in-flight requests — each request creates a scoped DbContext disposed at request end. Stuck at 1 means one DbContext instance is shared across all requests. Root causes: singleton service (BackgroundService, cache warmer, middleware) captured scoped DbContext in constructor; one IServiceScope created for entire worker lifetime; module-level or static field holding DbContext. Fix: find the singleton holder via code review (grep singleton classes for DbContext/TenantContext in ctor), replace with IServiceScopeFactory.CreateScope() per work item or InvokeAsync injection. Enable ValidateOnBuild in CI to prevent recurrence.",
+      "followUps": [
+        "What dotnet-counters command monitors this?",
+        "How do you write an integration test that proves tenant isolation?"
+      ],
+      "sixtySeconds": "active-db-contexts = 1 under concurrency = captive DbContext. Should match concurrent requests. Grep singleton ctors for DbContext. Fix IServiceScopeFactory or InvokeAsync injection. ValidateOnBuild in CI."
+    },
+    {
+      "question": "A library exposes AddMyFeature() that registers IEmailSender. The app has a custom SendGridEmailSender. How do you ensure the app wins?",
+      "answer": "The library should use TryAddScoped<IEmailSender, DefaultEmailSender>() — registers only if IEmailSender is not already registered. The app calls builder.Services.AddScoped<IEmailSender, SendGridEmailSender>() either before or after AddMyFeature() — Add always registers (last wins if called twice with Add). If the library uses Add instead of TryAdd, it overwrites the app's registration depending on call order. Best practice: libraries use TryAdd for all default services; apps use Add to explicitly set their implementation. Document the override pattern in library README. Integration test: register custom sender, call AddMyFeature, assert resolved type is SendGridEmailSender.",
+      "followUps": [
+        "What if both library and app use TryAdd?",
+        "How does this relate to Scrutor decorator ordering?"
+      ],
+      "sixtySeconds": "Library uses TryAdd — registers only if absent. App uses Add to override. Call order with TryAdd does not matter. Add stomps TryAdd. Test with GetRequiredService type assertion."
+    }
+  ]
+}

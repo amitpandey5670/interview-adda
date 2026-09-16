@@ -1,0 +1,242 @@
+{
+  "id": "dotnet-05-di-fundamentals",
+  "slug": "di-fundamentals",
+  "title": "DI fundamentals (IServiceCollection, constructor injection)",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 1,
+  "hook": "ASP.NET Core ships a built-in dependency injection (DI) container. You register services in IServiceCollection at startup and receive them through constructor parameters — the container builds the object graph for you.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Dependency injection (DI) is a design pattern where a class receives its collaborators from outside instead of creating them with new. ASP.NET Core provides a built-in inversion of control (IoC) container backed by Microsoft.Extensions.DependencyInjection. You register abstractions and implementations in IServiceCollection during startup (builder.Services), then the runtime resolves them when constructing controllers, minimal API handlers, middleware, and your own services. Constructor injection is the preferred style — the container picks the constructor with the most parameters it can satisfy."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "DI",
+              "shortForm": "DI",
+              "longForm": "Dependency injection",
+              "plainDefinition": "Supplying dependencies to a class from outside rather than the class creating them.",
+              "example": "public OrdersController(IOrderService orders) — container injects IOrderService"
+            },
+            {
+              "term": "IServiceCollection",
+              "longForm": "IServiceCollection",
+              "plainDefinition": "The registration API used at startup to map service types to implementations and lifetimes.",
+              "example": "builder.Services.AddScoped<IOrderService, OrderService>();"
+            },
+            {
+              "term": "IServiceProvider",
+              "longForm": "IServiceProvider",
+              "plainDefinition": "The built service container used to resolve registered services at runtime.",
+              "example": "var svc = scope.ServiceProvider.GetRequiredService<IOrderService>();"
+            },
+            {
+              "term": "Constructor injection",
+              "longForm": "Constructor injection",
+              "plainDefinition": "Dependencies are supplied through the class constructor — the only injection style ASP.NET Core uses for framework activation.",
+              "example": "public sealed class OrderService(IEmailSender email) : IOrderService"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Without DI, every controller would new up its own DbContext, HTTP clients, and loggers — untestable, tightly coupled, and impossible to swap implementations. The built-in container lets you register IOrderRepository once and inject it everywhere. Integration tests replace real services with fakes via WebApplicationFactory. Interviewers expect you to explain registration, resolution, and lifetimes — not just say 'use DI'."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Register abstractions, not concretions",
+          "body": "Prefer builder.Services.AddScoped<IOrderService, OrderService>() over AddScoped<OrderService>(). Controllers and handlers depend on IOrderService — tests can substitute a fake without touching production code."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From registration to resolution",
+          "items": [
+            {
+              "title": "Register in Program.cs",
+              "body": "Call Add* extension methods on builder.Services — map interface to implementation with a lifetime."
+            },
+            {
+              "title": "Build the provider",
+              "body": "builder.Build() compiles the service descriptor table into an IServiceProvider (optionally validating the graph)."
+            },
+            {
+              "title": "Request arrives",
+              "body": "ASP.NET Core creates a scope (for web requests) and activates the endpoint target."
+            },
+            {
+              "title": "Constructor resolution",
+              "body": "The container walks the dependency tree, constructing each type from the inside out."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "DI registration and resolution flow",
+            "source": "flowchart LR\n  REG[IServiceCollection\\nAddScoped IOrderService] --> BUILD[Build IServiceProvider]\n  BUILD --> REQ[HTTP Request\\ncreates scope]\n  REQ --> CTRL[OrdersController ctor]\n  CTRL --> SVC[OrderService ctor]\n  SVC --> DB[AppDbContext ctor]\n  DB --> DONE[Handler executes]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register services and inject into a controller",
+            "code": "var builder = WebApplication.CreateBuilder(args);\n\nbuilder.Services.AddDbContext<AppDbContext>();\nbuilder.Services.AddScoped<IOrderService, OrderService>();\nbuilder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();\n\nvar app = builder.Build();\napp.MapControllers();\napp.Run();\n\n// Controller — container resolves constructor parameters\n[ApiController]\n[Route(\"api/orders\")]\npublic sealed class OrdersController(IOrderService orders) : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    public async Task<ActionResult<OrderDto>> Get(Guid id)\n        => Ok(await orders.GetByIdAsync(id));\n}",
+            "explanation": "AddDbContext registers a scoped DbContext. AddScoped gives one OrderService per request. The controller primary constructor receives IOrderService automatically — no [FromServices] needed on controllers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Service with its own dependencies",
+            "code": "public interface IOrderService\n{\n    Task<OrderDto?> GetByIdAsync(Guid id, CancellationToken ct = default);\n}\n\npublic sealed class OrderService(AppDbContext db, ILogger<OrderService> logger)\n    : IOrderService\n{\n    public async Task<OrderDto?> GetByIdAsync(Guid id, CancellationToken ct)\n    {\n        logger.LogInformation(\"Fetching order {OrderId}\", id);\n        return await db.Orders\n            .Where(o => o.Id == id)\n            .Select(o => new OrderDto(o.Id, o.Total))\n            .FirstOrDefaultAsync(ct);\n    }\n}",
+            "explanation": "OrderService depends on AppDbContext and ILogger<T>. The container resolves both when constructing OrderService, then injects OrderService into the controller. ILogger<T> is registered by the framework."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Manual resolution with GetRequiredService",
+            "code": "// Prefer constructor injection — use manual resolution sparingly\npublic sealed class StartupMigrationRunner(IServiceProvider root)\n{\n    public async Task RunAsync()\n    {\n        using var scope = root.CreateScope();\n        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n        await db.Database.MigrateAsync();\n    }\n}\n\n// GetRequiredService throws if unregistered; GetService returns null",
+            "explanation": "CreateScope() is required for scoped services outside a request. GetRequiredService fails fast with a clear exception — better than null checks in production code."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidateOnBuild — fail at startup, not at first request",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Host.UseDefaultServiceProvider(options =>\n{\n    options.ValidateOnBuild = true;   // validate entire graph at Build()\n    options.ValidateScopes = true;    // catch singleton consuming scoped\n});\n\nbuilder.Services.AddScoped<ICache, RedisCache>();\nbuilder.Services.AddSingleton<CacheWarmer>(); // if ctor takes ICache → startup exception\n\nvar app = builder.Build(); // InvalidOperationException before listening",
+            "explanation": "ValidateOnBuild compiles and validates the full dependency graph at startup. Enable in CI so misconfigured lifetimes never reach production. This is a diagnostics snippet — the failure happens before Kestrel binds a port."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "ASP.NET Core DI vs NestJS vs Express",
+          "headers": ["Aspect", "ASP.NET Core", "NestJS", "Express (manual)"],
+          "rows": [
+            ["Container", "Built-in Microsoft.Extensions.DependencyInjection", "Built-in IoC with decorators", "None — manual require() or third-party libs"],
+            ["Registration", "builder.Services.AddScoped<T>()", "@Injectable() + module providers[]", "app.set('db', pool) or awilix container"],
+            ["Injection style", "Constructor only (framework activation)", "Constructor via @Inject()", "Pass deps manually or closure"],
+            ["Lifetimes", "Singleton, Scoped, Transient (explicit)", "DEFAULT, REQUEST, TRANSIENT scopes", "Developer discipline — no enforcement"],
+            ["Validation", "ValidateOnBuild / ValidateScopes", "Module compile-time checks", "Runtime errors or silent bugs"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling BuildServiceProvider() inside ConfigureServices — creates a second container and orphan scopes. Registering concrete types only so tests cannot substitute fakes. Using service locator pattern (injecting IServiceProvider everywhere) instead of constructor injection. Forgetting to register an interface — GetRequiredService throws at first request."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: enable ValidateOnBuild in CI pipelines — startup fails if the graph is invalid. Use dotnet-trace to capture service resolution during integration tests. Application Insights dependency tracking shows if your service layer is accidentally creating new HttpClient per call (missing IHttpClientFactory registration). Code review: grep for new OrderService() or new HttpClient() in application code — both indicate DI bypass. The built-in container is not as feature-rich as Autofac or Scrutor decorators, but it covers 95% of Web API needs and keeps startup fast."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["Built-in container", "Fast, zero extra packages, first-class ASP.NET support", "No built-in decorators, limited conditional registration"],
+            ["Autofac / Lamar", "Decorators, modules, advanced lifetime", "Extra dependency, slower startup, testing complexity"],
+            ["Manual new()", "Simple for scripts", "Untestable, hidden dependencies, lifetime bugs"],
+            ["Service locator (IServiceProvider everywhere)", "Flexible late binding", "Hides dependencies, untestable constructors"],
+            ["ValidateOnBuild in CI", "Catches graph errors pre-deploy", "Slightly slower startup in dev if overused"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'DI is just for testing' without explaining decoupling and lifetime management. Not knowing the difference between IServiceCollection (registration) and IServiceProvider (resolution). Claiming property injection works on controllers — ASP.NET Core only supports constructor injection for framework-activated types. Unable to explain why BuildServiceProvider() inside registration is an anti-pattern."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IServiceCollection registers; IServiceProvider resolves — constructor injection is the only framework-supported activation style.",
+    "Register interfaces (IOrderService) not concretions — enables testing and swapping implementations without changing consumers.",
+    "Production tip: ValidateOnBuild true in CI; grep for new HttpClient() and new DbContext() in app code — both bypass DI.",
+    "60s: Register in builder.Services with AddSingleton/Scoped/Transient. Build creates IServiceProvider. Container walks ctor chain to resolve controllers and services. Prefer abstractions. ValidateOnBuild catches misconfigured lifetimes at startup.",
+    "Follow-up: when would you replace the built-in container with Autofac or Scrutor?"
+  ],
+  "commonPitfalls": [
+    "Saying 'just inject IServiceProvider everywhere' gets you rejected — that is service locator, not DI; dependencies should be explicit in constructors.",
+    "BuildServiceProvider() during registration creates a second container — orphan scopes and disposed DbContext bugs.",
+    "Strong answer: 'Register abstractions in IServiceCollection. Constructor injection only. ValidateOnBuild in CI. NestJS has similar IoC; Express requires manual wiring or awilix.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 (built-in DI); ValidateOnBuild in generic host 2.1",
+  "relatedTopicIds": [
+    "dotnet-05-service-lifetimes",
+    "dotnet-05-captive-dependency-trap",
+    "dotnet-05-registration-patterns",
+    "dotnet-04-scoped-services-in-middleware",
+    "dotnet-03-parameter-binding-sources"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS @Injectable() and module providers",
+      "note": "NestJS registers providers in module metadata and injects via constructor — closest analog to ASP.NET Core DI. Scope.DEFAULT maps to singleton, Scope.REQUEST maps to scoped, Scope.TRANSIENT maps to transient.",
+      "futureTopicSlug": "typescript/nestjs/dependency-injection"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express manual dependency wiring",
+      "note": "Express has no built-in container. Common pattern: create services at startup, attach to app.locals, or pass via closure to route handlers. Equivalent to service locator — no lifetime enforcement, no graph validation.",
+      "futureTopicSlug": "javascript/express/architecture"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Dependency injection in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection"
+    },
+    {
+      "title": "Use dependency injection in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

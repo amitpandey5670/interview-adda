@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-05-captive-dependency-trap",
+  "slug": "captive-dependency-trap",
+  "title": "The captive dependency trap (scoped inside singleton)",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 3,
+  "hook": "When a singleton holds a reference to a scoped service, the scoped instance lives as long as the singleton — not one request. This captive dependency anti-pattern causes stale data, thread-safety violations, and memory leaks.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The captive dependency trap occurs when a longer-lived service (singleton) captures a shorter-lived service (scoped or transient) in its constructor. The container resolves the scoped service once at singleton creation time and stores the reference forever. In ASP.NET Core, common victims are DbContext, per-request tenant contexts, and IMemoryCache entries tied to a request. The scoped service never gets disposed at request end because the singleton prevents the scope from releasing it."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Captive dependency",
+              "longForm": "Captive dependency anti-pattern",
+              "plainDefinition": "A longer-lived object holds a reference to a shorter-lived dependency, extending its lifetime incorrectly.",
+              "example": "Singleton CacheWarmer injecting scoped AppDbContext in constructor"
+            },
+            {
+              "term": "ValidateScopes",
+              "longForm": "ValidateScopes",
+              "plainDefinition": "Service provider option that throws when a singleton tries to resolve a scoped service from the root provider.",
+              "example": "options.ValidateScopes = true; // default in Development"
+            },
+            {
+              "term": "ValidateOnBuild",
+              "longForm": "ValidateOnBuild",
+              "plainDefinition": "Validates the entire dependency graph when Build() is called, catching captive dependencies at startup.",
+              "example": "options.ValidateOnBuild = true; // enable in CI"
+            },
+            {
+              "term": "Root provider",
+              "longForm": "Root service provider",
+              "plainDefinition": "The application-level IServiceProvider without an active scope — only safe for singleton resolution.",
+              "example": "Resolving scoped service from root without CreateScope() is invalid"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "This is the most common DI interview trap and a top production bug on Reddit r/dotnet. Symptoms appear only under concurrency: random wrong tenant data, ObjectDisposedException, growing memory from undisposed DbContext instances, and corrupted EF change trackers. Locally with one request it works fine — which is why ValidateOnBuild in CI is critical."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Real production symptom",
+          "body": "Under load, API returns data from another user's request. Root cause: singleton service captured scoped TenantContext at startup. One tenant ID forever."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "How a scoped service gets captured",
+          "items": [
+            {
+              "title": "Singleton created at startup",
+              "body": "Container constructs the singleton, resolving all constructor dependencies."
+            },
+            {
+              "title": "Scoped resolved from root",
+              "body": "Without an active scope, the container may still resolve scoped (if ValidateScopes is off) — one instance created."
+            },
+            {
+              "title": "Reference stored forever",
+              "body": "The singleton holds the scoped instance in a private field for the app lifetime."
+            },
+            {
+              "title": "Concurrent requests share it",
+              "body": "All requests use the same DbContext/tenant — thread-safety violations and data leaks."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Captive dependency lifecycle",
+            "source": "sequenceDiagram\n  participant App as Application Startup\n  participant S as Singleton Service\n  participant DB as Scoped DbContext\n  participant R1 as Request 1\n  participant R2 as Request 2\n  App->>S: new SingletonService(db)\n  App->>DB: resolve once (captive)\n  S->>DB: stores reference\n  R1->>S: uses shared DB\n  R2->>S: uses SAME DB\n  Note over DB: Never disposed per request"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "WRONG — singleton capturing scoped DbContext",
+            "code": "// ANTI-PATTERN\npublic sealed class OrderCacheWarmer(AppDbContext db) : IHostedService\n{\n    public async Task StartAsync(CancellationToken ct)\n    {\n        // db is ONE context for the entire application lifetime\n        var orders = await db.Orders.ToListAsync(ct);\n        // Warm cache with orders...\n    }\n\n    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;\n}\n\nbuilder.Services.AddDbContext<AppDbContext>(); // scoped\nbuilder.Services.AddHostedService<OrderCacheWarmer>(); // singleton host",
+            "explanation": "IHostedService is singleton. Injecting AppDbContext captures one context forever. Concurrent StartAsync and later requests share it — not thread-safe."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "CORRECT — IServiceScopeFactory for scoped work in singleton",
+            "code": "public sealed class OrderCacheWarmer(IServiceScopeFactory scopeFactory) : IHostedService\n{\n    public async Task StartAsync(CancellationToken ct)\n    {\n        using var scope = scopeFactory.CreateScope();\n        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n        var orders = await db.Orders.AsNoTracking().ToListAsync(ct);\n        // scope disposed — DbContext released\n    }\n\n    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;\n}",
+            "explanation": "CreateScope() creates a short-lived scope. DbContext is resolved within that scope and disposed when the using block ends. This is the fix for any singleton needing scoped services."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidateOnBuild catches captive dependencies at startup",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Host.UseDefaultServiceProvider(options =>\n{\n    options.ValidateOnBuild = true;\n    options.ValidateScopes = true;\n});\n\nbuilder.Services.AddDbContext<AppDbContext>();\nbuilder.Services.AddSingleton<OrderCacheWarmer>(); // ctor takes AppDbContext\n\nvar app = builder.Build();\n// System.InvalidOperationException:\n// Cannot consume scoped service 'AppDbContext'\n// from singleton 'OrderCacheWarmer'",
+            "explanation": "With validation enabled, the app fails at Build() — not at 3 AM under concurrent load. Always enable ValidateOnBuild in CI pipelines."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode — concurrent requests on captive DbContext",
+            "code": "// Production symptom under load:\n// System.InvalidOperationException:\n//   A second operation was started on this context instance\n//   before a previous operation completed.\n//\n// Or: ObjectDisposedException when EF detects corruption\n//\n// Diagnosis checklist:\n// 1. dotnet-counters: Microsoft.EntityFrameworkCore / active-db-contexts\n//    → should ≈ concurrent requests, NOT constant 1\n// 2. Code review: grep singleton classes for DbContext/TenantContext in ctor\n// 3. Enable ValidateOnBuild in CI — reproduces at deploy time\n// 4. Integration test: Parallel.ForEachAsync 50 requests, assert no cross-tenant data",
+            "explanation": "This diagnostics snippet documents the exact exception messages and counter to watch. ActiveDbContexts stuck at 1 under concurrent load proves captive dependency."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Captive dependency across ecosystems",
+          "headers": ["Scenario", "ASP.NET Core", "NestJS", "Express"],
+          "rows": [
+            ["Singleton captures request state", "Scoped in singleton ctor", "REQUEST scope in DEFAULT provider", "Module-level let tenantId set in middleware"],
+            ["Detection", "ValidateOnBuild / ValidateScopes", "Bootstrap scope validation error", "No built-in — load test reveals leaks"],
+            ["Fix", "IServiceScopeFactory.CreateScope()", "Inject ModuleRef or use REQUEST in handler", "Per-request closure or AsyncLocalStorage"],
+            ["Common victim", "DbContext, TenantContext", "REQUEST-scoped Prisma/TypeORM client", "Shared pg.Pool client with session state"],
+            ["Symptom", "Cross-tenant data, ObjectDisposedException", "Wrong user data in responses", "Race conditions on shared object"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Disabling ValidateScopes in production to ship faster. Storing scoped service in a singleton's field during a method call for 'later use'. Injecting scoped into middleware constructor (middleware is singleton). Using BuildServiceProvider() in a singleton and never disposing the scope."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters monitor Microsoft.EntityFrameworkCore — active-db-contexts stuck at 1 under 50 concurrent requests is definitive proof. Application Insights exceptions containing 'second operation on this context'. Parallel integration test with WebApplicationFactory asserting tenant isolation. Code review automation: Roslyn analyzer or grep for scoped types in singleton constructors. ValidateOnBuild in every CI pipeline — zero cost at runtime, catches 90% of captive bugs pre-deploy."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Detection method", "When it catches", "Limitation"],
+          "rows": [
+            ["ValidateOnBuild", "At startup / CI", "Only direct ctor injection — not runtime field assignment"],
+            ["ValidateScopes", "At resolution time", "Can be disabled in production"],
+            ["Load test + counters", "Under concurrency", "Requires test infrastructure"],
+            ["Code review grep", "Pre-merge", "Manual, misses indirect capture"],
+            ["IServiceScopeFactory fix", "Prevents the bug", "Slight ceremony for singleton-scoped access"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing what captive dependency means. Saying 'it works on my machine' without explaining concurrency. Unable to name ValidateOnBuild or IServiceScopeFactory as fixes. Claiming transient in singleton ctor is safe — transient is also captured and never recreated."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Captive dependency: singleton holds scoped/transient reference — scoped lives forever, not per request.",
+    "ValidateOnBuild + ValidateScopes in CI catch this at startup; never disable ValidateScopes to ship.",
+    "Production tip: dotnet-counters active-db-contexts ≈ concurrent requests; stuck at 1 = captive DbContext.",
+    "60s: Singleton ctor resolving scoped DbContext captures one instance for app lifetime. Concurrent requests share it — not thread-safe, cross-tenant leaks. Fix: IServiceScopeFactory.CreateScope(). ValidateOnBuild fails at startup.",
+    "Follow-up: does injecting transient into singleton have the same problem?"
+  ],
+  "commonPitfalls": [
+    "Saying transient in singleton ctor is fine gets you rejected — transient is also captured once, never recreated per call.",
+    "Disabling ValidateScopes in production — the #1 reason captive bugs reach prod.",
+    "Strong answer: 'Longer lifetime cannot hold shorter. Singleton + scoped DbContext = captive. Fix with IServiceScopeFactory. ValidateOnBuild in CI. NestJS has same rule with REQUEST in DEFAULT scope.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 DI; ValidateScopes in 2.0; ValidateOnBuild in generic host",
+  "relatedTopicIds": [
+    "dotnet-05-service-lifetimes",
+    "dotnet-05-iservicescopefactory",
+    "dotnet-04-scoped-services-in-middleware",
+    "dotnet-05-di-fundamentals"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS REQUEST scope in singleton",
+      "note": "NestJS throws at bootstrap if a singleton provider injects a REQUEST-scoped provider — identical validation to ValidateScopes. The fix is ModuleRef.resolve() or restructuring to handler-level injection.",
+      "futureTopicSlug": "typescript/nestjs/scopes"
+    },
+    {
+      "language": "javascript",
+      "concept": "Module-level shared database client with session state",
+      "note": "const db = await connect() at module top level with per-request SET tenant_id on the shared connection mirrors captive scoped injection. Correct: connection per request or AsyncLocalStorage for tenant context.",
+      "futureTopicSlug": "javascript/node/request-isolation"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Dependency injection guidelines — captive dependencies",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection-guidelines#captive-dependency"
+    },
+    {
+      "title": "Dependency injection in ASP.NET Core — service lifetimes",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection#service-lifetimes"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "high-concurrency"
+}

@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-05-service-lifetimes",
+  "slug": "service-lifetimes",
+  "title": "Service lifetimes (singleton, scoped, transient)",
+  "moduleId": "dotnet-05-dependency-injection",
+  "order": 2,
+  "hook": "Every registered service has a lifetime — singleton (one for the app), scoped (one per request), or transient (new every resolution). Picking the wrong lifetime causes data leaks, thread-safety bugs, and the captive dependency trap.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Service lifetime controls how long the dependency injection (DI) container keeps an instance alive. ASP.NET Core supports three lifetimes: Singleton (one instance for the application lifetime), Scoped (one instance per scope — typically one HTTP request), and Transient (a new instance every time the service is resolved). AddSingleton, AddScoped, and AddTransient are the registration methods. Entity Framework Core DbContext is scoped by default — one context per request, disposed when the request ends."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Singleton",
+              "longForm": "Singleton service lifetime",
+              "plainDefinition": "One instance shared across the entire application. Thread-safe required if mutable state is shared.",
+              "example": "builder.Services.AddSingleton<ICacheService, MemoryCacheService>();"
+            },
+            {
+              "term": "Scoped",
+              "longForm": "Scoped service lifetime",
+              "plainDefinition": "One instance per scope. In web apps, a scope is created per HTTP request.",
+              "example": "builder.Services.AddScoped<IOrderRepository, OrderRepository>();"
+            },
+            {
+              "term": "Transient",
+              "longForm": "Transient service lifetime",
+              "plainDefinition": "A new instance created every time the service is requested from the container.",
+              "example": "builder.Services.AddTransient<IEmailBuilder, EmailBuilder>();"
+            },
+            {
+              "term": "Request scope",
+              "longForm": "Request scope",
+              "plainDefinition": "The IServiceScope created at the start of each HTTP request and disposed at the end.",
+              "example": "HttpContext.RequestServices resolves from the per-request scope."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lifetime choice is the #1 source of production DI bugs. Scoped DbContext in a singleton service means one database context forever — stale data, memory leaks, and ObjectDisposedException under concurrency. Transient services injected into singletons are also captured. Interviewers ask you to justify every lifetime choice: why is ICacheService singleton? Why is IOrderRepository scoped? Why is IValidator transient?"
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "The golden rule",
+          "body": "A service cannot depend on a shorter-lived service. Singleton → can only depend on singleton. Scoped → can depend on singleton or scoped. Transient → can depend on any lifetime, but each resolution creates new instances of its transient dependencies too."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Scoped lifetime per HTTP request",
+          "items": [
+            {
+              "title": "Request starts",
+              "body": "Kestrel creates an IServiceScope from the root provider."
+            },
+            {
+              "title": "Services resolved",
+              "body": "Scoped services are created once per scope; singletons come from the root; transients are new each resolution."
+            },
+            {
+              "title": "Handler executes",
+              "body": "Controller, minimal API handler, and middleware method-injected services share the same scoped instances."
+            },
+            {
+              "title": "Request ends",
+              "body": "Scope.Dispose() runs — scoped services like DbContext are disposed."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Lifetime boundaries in a Web API",
+            "source": "flowchart TB\n  subgraph app[\"Application lifetime\"]\n    SING[Singleton\\nICacheService\\nIHttpClientFactory]\n  end\n  subgraph req1[\"Request 1 scope\"]\n    SC1[Scoped DbContext]\n    SC2[Scoped OrderService]\n    TR1[Transient Validator]\n  end\n  subgraph req2[\"Request 2 scope\"]\n    SC3[Scoped DbContext\\nnew instance]\n    SC4[Scoped OrderService\\nnew instance]\n  end\n  SING --> SC2\n  SING --> SC4"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Registering all three lifetimes",
+            "code": "builder.Services.AddSingleton<ICacheService, RedisCacheService>();\nbuilder.Services.AddScoped<IOrderRepository, OrderRepository>();\nbuilder.Services.AddTransient<IEmailTemplateBuilder, EmailTemplateBuilder>();\nbuilder.Services.AddDbContext<AppDbContext>(); // scoped by default\n\n// ILogger<T>, IConfiguration, IHostEnvironment are framework singletons\n// HttpContext is scoped (via accessor)",
+            "explanation": "Cache is expensive to create and thread-safe — singleton. Repository shares DbContext per request — scoped. Template builder is stateless and cheap — transient. DbContext is always scoped."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Same scoped instance within one request",
+            "code": "builder.Services.AddScoped<ITenantContext, TenantContext>();\n\npublic sealed class OrderService(ITenantContext tenant, IOrderRepository repo) : IOrderService\n{\n    public async Task<IReadOnlyList<Order>> ListAsync()\n        => await repo.GetForTenantAsync(tenant.TenantId);\n}\n\npublic sealed class OrderRepository(ITenantContext tenant, AppDbContext db) : IOrderRepository\n{\n    public Task<IReadOnlyList<Order>> GetForTenantAsync(string tenantId)\n        => db.Orders.Where(o => o.TenantId == tenantId).ToListAsync();\n}\n\n// OrderService and OrderRepository share the SAME ITenantContext instance per request",
+            "explanation": "Multiple classes resolving ITenantContext in the same request get the identical instance. This is how per-request tenant isolation works without static state."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Transient vs scoped — when it matters",
+            "code": "// Transient: new instance every injection point\nbuilder.Services.AddTransient<OperationIdGenerator>();\n\npublic sealed class AuditMiddleware(RequestDelegate next)\n{\n    public async Task InvokeAsync(\n        HttpContext ctx,\n        OperationIdGenerator gen1,\n        OperationIdGenerator gen2)\n    {\n        // gen1.Id != gen2.Id — two separate transient instances\n        ctx.Response.Headers[\"X-Op-Id\"] = gen1.Id.ToString();\n        await next(ctx);\n    }\n}\n\n// Scoped: same instance if resolved twice in one request\nbuilder.Services.AddScoped<CorrelationContext>();",
+            "explanation": "Transient is new per resolution — useful for stateless helpers. Scoped is new per scope — use when multiple components must share state within a request."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — scope disposal tracks active DbContext count",
+            "code": "// dotnet-counters monitor --counters Microsoft.EntityFrameworkCore\n// ActiveDbContexts should track concurrent requests, not grow unbounded\n\n// Integration test proving scope disposal:\n[Fact]\npublic async Task DbContext_disposed_after_request()\n{\n    var factory = new WebApplicationFactory<Program>();\n    WeakReference? weak = null;\n\n    await factory.WithWebHostBuilder(b => b.ConfigureServices(s =>\n    {\n        s.AddScoped<AppDbContext>();\n    })).CreateClient().GetAsync(\"/api/orders\");\n\n    // After request, scoped DbContext should be eligible for GC\n    // Growing ActiveDbContexts counter = captive dependency or missing disposal\n}",
+            "explanation": "Monitor EF Core ActiveDbContexts with dotnet-counters. A steadily growing count under steady load indicates scoped services are not being disposed — usually a captive dependency."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Lifetimes in .NET vs NestJS vs Express",
+          "headers": ["Lifetime", ".NET", "NestJS", "Express"],
+          "rows": [
+            ["App-wide singleton", "AddSingleton", "Scope.DEFAULT (singleton provider)", "module.exports = new Service()"],
+            ["Per-request", "AddScoped (request scope)", "Scope.REQUEST", "req.service = create() in middleware"],
+            ["Per-injection", "AddTransient", "Scope.TRANSIENT", "new Service() each call"],
+            ["Enforcement", "ValidateScopes catches violations", "NestJS throws on invalid scope chain", "No enforcement — developer discipline"],
+            ["Disposal", "IDisposable on scope end", "onModuleDestroy hooks", "Manual pool.release()"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Registering DbContext as singleton — never. Making a stateful service singleton without thread safety. Using transient for heavy services resolved many times per request (alloc pressure). Assuming IHttpClient is safe to new() — use IHttpClientFactory (singleton factory, managed handlers)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters Microsoft.EntityFrameworkCore — ActiveDbContexts should equal concurrent in-flight requests. Steady growth means captive scoped services. Load test with k6 or NBomber — watch for ObjectDisposedException spikes indicating shared DbContext. OpenTelemetry spans showing overlapping DB operations on the same connection from different trace IDs = lifetime bug. ValidateScopes=true in CI catches singleton-consuming-scoped at startup."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Lifetime", "Best for", "Risk if misused"],
+          "rows": [
+            ["Singleton", "Caches, config readers, IHttpClientFactory, stateless thread-safe services", "Capturing scoped deps; mutable shared state without locks"],
+            ["Scoped", "DbContext, per-request tenant/user context, unit-of-work", "Resolving outside request scope without CreateScope()"],
+            ["Transient", "Lightweight stateless helpers, per-operation ID generators", "Heavy allocations if resolved many times per request"],
+            ["ValidateScopes", "CI and Development", "Disabled in some production configs — hides bugs"],
+            ["IHttpClientFactory", "Typed HttpClient clients", "new HttpClient() causes socket exhaustion"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain the rule 'longer lifetime cannot depend on shorter lifetime'. Saying DbContext can be singleton 'for performance'. Not knowing scoped = per-request in ASP.NET Core. Unable to distinguish transient (new per resolution) from scoped (new per scope)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Three lifetimes: singleton (app), scoped (per request/scope), transient (per resolution). Shorter cannot be consumed by longer.",
+    "DbContext is always scoped — one per request, disposed at request end. Never singleton.",
+    "Production tip: dotnet-counters ActiveDbContexts; ValidateScopes in CI; load test for ObjectDisposedException.",
+    "60s: Singleton one instance app-wide. Scoped one per request scope — DbContext, tenant context. Transient new every resolve. Rule: singleton cannot inject scoped. ValidateScopes catches violations at startup.",
+    "Follow-up: why is IHttpClientFactory singleton but HttpClient instances are not?"
+  ],
+  "commonPitfalls": [
+    "DbContext as singleton gets you rejected immediately — EF contexts are not thread-safe and must not outlive a unit of work.",
+    "Disabling ValidateScopes in production to silence startup warnings — ships captive dependency bugs.",
+    "Strong answer: 'Scoped for per-request state like DbContext. Singleton for thread-safe shared services. Transient for cheap stateless helpers. Longer cannot depend on shorter. Monitor ActiveDbContexts in production.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; ValidateScopes in 2.0",
+  "relatedTopicIds": [
+    "dotnet-05-di-fundamentals",
+    "dotnet-05-captive-dependency-trap",
+    "dotnet-05-iservicescopefactory",
+    "dotnet-04-scoped-services-in-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS provider scopes",
+      "note": "NestJS Scope.REQUEST creates a new provider instance per HTTP request — identical semantics to AddScoped. Injecting REQUEST-scoped into DEFAULT (singleton) throws at bootstrap, mirroring ValidateScopes.",
+      "futureTopicSlug": "typescript/nestjs/scopes"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express per-request middleware state",
+      "note": "Express attaches per-request state via req object or AsyncLocalStorage — manual scoped lifetime. Module-level let db = connect() is the Node equivalent of singleton capturing a scoped resource.",
+      "futureTopicSlug": "javascript/node/async-local-storage"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Service lifetimes in dependency injection",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/dependency-injection/service-lifetimes"
+    },
+    {
+      "title": "DbContext lifetime in EF Core",
+      "url": "https://learn.microsoft.com/en-us/ef/core/dbcontext-configuration/"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}
