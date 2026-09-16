@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "title": "Background, deployment, and architecture interview drills",
+  "items": [
+    {
+      "question": "How do you use Entity Framework Core DbContext inside a BackgroundService without violating DI lifetimes?",
+      "answer": "BackgroundService is registered as a singleton via AddHostedService. DbContext is scoped — injecting it directly is the captive dependency trap: one context lives forever, change tracker grows, connections leak. Inject IServiceScopeFactory (singleton-safe) and call CreateAsyncScope() per work item — each SQS message, outbox poll batch, or timer tick gets its own scope. Resolve AppDbContext from scope.ServiceProvider, process, dispose scope with await using. Monitor dotnet-counters active-db-contexts — should spike per batch then return to baseline.",
+      "followUps": [
+        "What happens if you create one scope in the BackgroundService constructor?",
+        "How does NestJS solve the same problem with Prisma?"
+      ],
+      "sixtySeconds": "Singleton worker, scoped work. IServiceScopeFactory not DbContext. CreateAsyncScope per message or batch. await using disposes context. Same pattern for outbox dispatcher and SQS consumer."
+    },
+    {
+      "question": "Explain the dual-write problem and how the outbox pattern solves it.",
+      "answer": "Placing an order requires saving to PostgreSQL and publishing an event to SQS — two separate systems with no shared atomic transaction. If SaveChangesAsync succeeds but SendMessage fails (or the process crashes between them), the event is lost forever while the order exists. The outbox pattern writes an OutboxMessage row in the same EF transaction as the Order row. A BackgroundService dispatcher polls unpublished rows, publishes to SQS, then sets ProcessedAt. If the dispatcher crashes after publish but before marking processed, the message may duplicate — downstream consumers must be idempotent. Never mark ProcessedAt before broker confirms delivery.",
+      "followUps": [
+        "How would you monitor outbox lag in production?",
+        "When would you choose CDC with Debezium over polling outbox?"
+      ],
+      "sixtySeconds": "Cannot atomically commit DB and SQS. Write order plus outbox in one SaveChanges. Dispatcher publishes later. No SQS in request path. Duplicates possible, lost events not. Idempotent consumers required."
+    },
+    {
+      "question": "Design an SQS consumer in ASP.NET Core — what are the critical configuration and error-handling decisions?",
+      "answer": "HTTP endpoint returns 202 Accepted and SendMessage to SQS — or use outbox for guaranteed enqueue. BackgroundService polls with ReceiveMessage: MaxNumberOfMessages 10, WaitTimeSeconds 20 for long polling, VisibilityTimeout greater than max processing time. Per message: CreateAsyncScope, resolve handler, process idempotently (upsert by order id or dedup key), DeleteMessage only on success. On exception, do not delete — message reappears after visibility timeout. Configure DLQ with maxReceiveCount 5 for poison messages. Alert on CloudWatch ApproximateAgeOfOldestMessage. Never assume exactly-once delivery.",
+      "followUps": [
+        "What happens if visibility timeout is shorter than processing time?",
+        "Channel<T> versus SQS — when to use each?"
+      ],
+      "sixtySeconds": "Long poll SQS. Scope per message. Idempotent handler. Delete on success only. Visibility timeout exceeds processing. DLQ for poison. Alert oldest message age. At-least-once not exactly-once."
+    },
+    {
+      "question": "How do you integration test an API that uses the outbox pattern with WebApplicationFactory?",
+      "answer": "Subclass WebApplicationFactory<Program>, set environment Testing, override connection string to test database (SQLite or Testcontainers PostgreSQL). ConfigureTestServices: register FakeEventPublisher as IEventPublisher singleton, optionally RemoveAll IHostedService to prevent dispatcher racing. CreateClient POST /orders, assert 201. Resolve AppDbContext from factory.Services.CreateAsyncScope, assert Order and OutboxMessage rows exist with ProcessedAt null. Manually invoke dispatcher logic or enable hosted service with fake publisher and assert FakeEventPublisher received event and ProcessedAt set. Use IClassFixture to amortize factory startup.",
+      "followUps": [
+        "Why remove IHostedService in some integration tests?",
+        "How do Testcontainers improve over SQLite for integration tests?"
+      ],
+      "sixtySeconds": "WebApplicationFactory boots real pipeline. Fake IEventPublisher. POST order assert outbox row. Remove background services for determinism. Testcontainers Postgres in CI. factory.Services scope for DB assertions."
+    },
+    {
+      "question": "Explain liveness versus readiness probes for an ASP.NET Core API in Kubernetes.",
+      "answer": "Liveness probe checks if the container process is alive — MapHealthChecks /health/live with only a lightweight self check. Failure causes pod restart. Readiness probe checks if the pod can accept traffic — /health/ready includes AddDbContextCheck and optional SQS check tagged ready. Failure removes pod from service endpoints without restart. Critical mistake: putting database check on liveness causes restart storm when database is down — all pods restart instead of waiting. Set terminationGracePeriodSeconds and HostOptions.ShutdownTimeout for BackgroundService to finish in-flight outbox batch during rolling deploy.",
+      "followUps": [
+        "What is a startup probe and when do you need it?",
+        "How does graceful shutdown interact with SQS visibility timeout during deploy?"
+      ],
+      "sixtySeconds": "Liveness lightweight self check restart on fail. Readiness includes DB remove from LB on fail. Never DB on liveness. Extend shutdown timeout for worker drain. Multi-stage Dockerfile aspnet runtime non-root."
+    },
+    {
+      "question": "State the Clean Architecture dependency rule and how it applies to a Web API with EF Core and SQS.",
+      "answer": "Dependencies point inward only. Domain has zero framework references — pure entities with business methods. Application defines use cases (MediatR handlers) and port interfaces like IOrderRepository and IEventPublisher. Infrastructure implements ports with EfOrderRepository and SqsEventPublisher referencing EF Core and AWS SDK. Presentation (controllers or minimal APIs) dispatches commands to Application. Infrastructure references Application, Application references Domain — never reverse. Enforce with NetArchTest in CI: Application assembly must not reference Microsoft.EntityFrameworkCore. Enables unit testing PlaceOrderHandler with FakeOrderRepository without database.",
+      "followUps": [
+        "When is IRepository<T> over-abstraction?",
+        "Clean Architecture versus vertical slice — tradeoffs?"
+      ],
+      "sixtySeconds": "Deps inward only. Domain pure. Application ports and handlers. Infrastructure EF SQS impl. Thin API. Infra references App references Domain. Test handlers with fake ports."
+    },
+    {
+      "question": "gRPC versus REST — when do you choose each for internal versus public APIs?",
+      "answer": "REST with JSON over HTTPS for public APIs, third-party integrators, mobile clients, and browser consumers — human-readable, OpenAPI documentation, universal proxy support, cacheable GET. gRPC with protobuf over HTTP/2 for internal east-west service communication — smaller payloads, faster serialization, strong contracts from .proto files, built-in streaming. Browsers cannot call gRPC natively — need grpc-web proxy (Envoy) adding complexity. Hybrid: BFF exposes REST to clients, calls gRPC backends. Share Application layer handlers behind both REST controller and gRPC service adapter. Never duplicate business logic in both layers.",
+      "followUps": [
+        "How do you version protobuf contracts without breaking clients?",
+        "Why not use gRPC for your public mobile API?"
+      ],
+      "sixtySeconds": "REST public JSON OpenAPI universal. gRPC internal HTTP2 protobuf fast. No native browser gRPC. BFF hybrid. Shared Application handlers. grpc-health-probe in K8s for gRPC services."
+    },
+    {
+      "question": "What happens during a rolling Kubernetes deploy when a BackgroundService is processing SQS messages?",
+      "answer": "SIGTERM sent to pod, stoppingToken cancelled in BackgroundService. Worker should exit loop gracefully within terminationGracePeriodSeconds (configure 30-45s) and HostOptions.ShutdownTimeout. In-flight SQS messages not deleted remain invisible until visibility timeout expires — another consumer retries (at-least-once). Outbox dispatcher mid-batch: if published but ProcessedAt not saved, duplicate SQS message on retry — idempotent consumers handle it. Readiness probe fails immediately on shutdown — pod removed from LB. PreStop hook optional delay for drain. Design: short batches, idempotent handlers, visibility timeout aligned with max processing time.",
+      "followUps": [
+        "Should you use SQS FIFO for order processing?",
+        "How does the outbox dispatcher behave differently from direct SQS consumer on deploy?"
+      ],
+      "sixtySeconds": "SIGTERM cancels stoppingToken. Grace period finishes batch. Undeleted SQS messages retry after visibility timeout. Outbox may duplicate publish. Idempotent handlers. Readiness fails pod removed from LB."
+    },
+    {
+      "question": "Compare in-process Channel<T> versus Amazon SQS for background work in an ASP.NET Core API.",
+      "answer": "Channel<T> is in-memory, zero infrastructure, excellent for single-instance dev and low-volume co-hosted processing. BoundedChannelFullMode.Wait provides backpressure when consumers lag. Data lost on process crash — not durable. SQS is durable at-least-once delivery, scales across multiple pods, survives restarts, supports DLQ. Tradeoff: AWS dependency, latency, cost, idempotency required. Use Channel for fire-and-forget within one pod where loss acceptable. Use SQS or outbox for events that must survive crashes and scale horizontally. Outbox plus SQS is the production pattern when database commit and message must be consistent.",
+      "followUps": [
+        "How does a bounded channel prevent OOM under traffic spike?",
+        "Can you use both Channel and SQS in the same service?"
+      ],
+      "sixtySeconds": "Channel in-process fast not durable single pod. SQS durable multi-pod at-least-once. Bounded channel backpressure. Outbox when DB plus message must be atomic. Co-host Channel for dev low volume."
+    },
+    {
+      "question": "A junior developer puts SQS SendMessage directly after SaveChangesAsync in the order endpoint. What is wrong and how do you fix it?",
+      "answer": "This is the dual-write anti-pattern. Between SaveChangesAsync commit and SendMessage success, the process can crash, network can fail, or SQS can throttle — order exists in database but event never published. Downstream inventory service never decrements stock. Fix: remove SendMessage from request path. Add OutboxMessage entity written in same DbContext before single SaveChangesAsync. Register OutboxDispatcher BackgroundService with IServiceScopeFactory per poll batch. Dispatcher publishes then sets ProcessedAt. Add integration test asserting outbox row exists. Monitor outbox_lag metric. Educate team: at-least-once downstream with idempotent handlers is acceptable; lost events are not.",
+      "followUps": [
+        "Could you use a database trigger instead of application outbox?",
+        "What if they argue 'SQS SendMessage rarely fails so it is fine'?"
+      ],
+      "sixtySeconds": "Crash gap between commit and SQS send loses event. Fix transactional outbox same SaveChanges. Dispatcher publishes async. Test outbox row. Monitor lag. Rare failure still happens at scale — design for it."
+    }
+  ]
+}

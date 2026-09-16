@@ -1,0 +1,245 @@
+{
+  "id": "dotnet-12-grpc-vs-rest",
+  "slug": "grpc-vs-rest",
+  "title": "gRPC versus REST (when to choose each for APIs)",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 7,
+  "hook": "Representational State Transfer (REST) with JSON over Hypertext Transfer Protocol (HTTP) is the default for public Web APIs. gRPC uses Protocol Buffers (protobuf) over HTTP/2 for fast, strongly typed communication — ideal for internal service-to-service calls but awkward for browser clients.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "REST APIs expose resources as URLs with JSON bodies — human-readable, cacheable, works everywhere including browsers and GitHub Pages static clients. gRPC defines services and messages in a .proto file, generates C# client and server stubs, and sends compact binary protobuf over HTTP/2 with built-in streaming (server, client, bidirectional). ASP.NET Core supports both: MapControllers for REST, MapGrpcService for gRPC. Choose based on caller type, performance needs, and whether you need browser support."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "gRPC",
+              "longForm": "gRPC (Google Remote Procedure Call)",
+              "plainDefinition": "High-performance RPC framework using protobuf serialization and HTTP/2 transport.",
+              "example": "service OrderService { rpc GetOrder(GetOrderRequest) returns (OrderReply); }"
+            },
+            {
+              "term": "Protobuf",
+              "longForm": "Protocol Buffers (protobuf)",
+              "plainDefinition": "Binary serialization format defined in .proto schema files — smaller and faster than JSON.",
+              "example": "message OrderReply { string id = 1; string status = 2; }"
+            },
+            {
+              "term": "HTTP/2",
+              "longForm": "HTTP/2",
+              "plainDefinition": "Multiplexed protocol enabling multiple streams over one connection — required by gRPC.",
+              "example": "gRPC requires HTTP/2; REST typically uses HTTP/1.1 or HTTP/2"
+            },
+            {
+              "term": "grpc-web",
+              "longForm": "gRPC-Web",
+              "plainDefinition": "Proxy layer allowing browser clients to call gRPC via HTTP/1.1 — adds complexity.",
+              "example": "Envoy proxy translates grpc-web to gRPC"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Microservices behind a gateway often use gRPC internally for low latency and strong contracts, while the public API remains REST/JSON for mobile apps and third parties. Wrong choice costs money: JSON REST for high-volume internal fan-out adds CPU and bandwidth; gRPC for a public API blocked by corporate proxies causes integration pain. This is a standard senior system design question on Reddit r/dotnet and LeetCode."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Hybrid pattern",
+          "body": "Public: REST + OpenAPI. Internal east-west: gRPC between services. BFF aggregates gRPC backends, exposes REST to clients. Same domain logic, two presentation protocols."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Adding gRPC to ASP.NET Core",
+          "items": [
+            {
+              "title": "Define .proto file",
+              "body": "Order.proto with service methods and message types."
+            },
+            {
+              "title": "Generate C# stubs",
+              "body": "Grpc.Tools package compiles proto to server base class and client."
+            },
+            {
+              "title": "Implement service",
+              "body": "OrderService : OrderServiceBase overrides RPC methods."
+            },
+            {
+              "title": "Register and map",
+              "body": "builder.Services.AddGrpc(); app.MapGrpcService<OrderService>();"
+            },
+            {
+              "title": "Client calls",
+              "body": "GrpcChannel.ForAddress with HTTP/2 — internal network or localhost dev."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "gRPC internal vs REST public",
+            "source": "flowchart LR\n  Mobile[Mobile / Browser] -->|REST JSON HTTPS| GW[API Gateway / BFF]\n  GW -->|gRPC protobuf HTTP2| OrderSvc[Order Service]\n  GW -->|gRPC| InventorySvc[Inventory Service]\n  OrderSvc -->|gRPC| PaymentSvc[Payment Service]\n  ThirdParty[Third-party integrators] -->|REST OpenAPI| GW"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "protobuf",
+            "label": "Proto definition",
+            "code": "syntax = \"proto3\";\n\noption csharp_namespace = \"OrderApi.Grpc\";\n\npackage orders;\n\nservice OrderService {\n  rpc GetOrder (GetOrderRequest) returns (OrderReply);\n  rpc ListOrders (ListOrdersRequest) returns (stream OrderReply);\n}\n\nmessage GetOrderRequest {\n  string order_id = 1;\n}\n\nmessage OrderReply {\n  string id = 1;\n  string status = 2;\n  int64 total_cents = 3;\n}",
+            "explanation": "Proto defines contract — breaking changes require careful versioning. stream enables server streaming for large result sets without pagination overhead."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "gRPC service implementation",
+            "code": "public sealed class OrderGrpcService(IOrderQueries queries) : OrderService.OrderServiceBase\n{\n    public override async Task<OrderReply> GetOrder(\n        GetOrderRequest request, ServerCallContext context)\n    {\n        var order = await queries.GetByIdAsync(request.OrderId, context.CancellationToken);\n        if (order is null)\n            throw new RpcException(new Status(StatusCode.NotFound, \"Order not found\"));\n\n        return new OrderReply\n        {\n            Id = order.Id.ToString(),\n            Status = order.Status,\n            TotalCents = order.TotalCents\n        };\n    }\n}\n\n// Program.cs\nbuilder.Services.AddGrpc();\nvar app = builder.Build();\napp.MapGrpcService<OrderGrpcService>();\napp.MapControllers(); // REST still available",
+            "explanation": "gRPC service throws RpcException for errors — maps to gRPC status codes not HTTP status. Same DI container as REST controllers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "gRPC client from another service",
+            "code": "var channel = GrpcChannel.ForAddress(\"https://order-service:8081\", new GrpcChannelOptions\n{\n    HttpHandler = new SocketsHttpHandler\n    {\n        EnableMultipleHttp2Connections = true\n    }\n});\n\nvar client = new OrderService.OrderServiceClient(channel);\n\ntry\n{\n    var reply = await client.GetOrderAsync(\n        new GetOrderRequest { OrderId = orderId.ToString() },\n        cancellationToken: ct);\n    return reply.Status;\n}\ncatch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)\n{\n    return null;\n}",
+            "explanation": "Internal service-to-service over HTTP/2. Handle RpcException status codes. EnableMultipleHttp2Connections for high concurrency."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "REST vs gRPC — same domain, two endpoints",
+            "code": "// REST — public, browser-friendly\napp.MapGet(\"/orders/{id:guid}\", async (Guid id, IMediator mediator, CancellationToken ct) =>\n{\n    var order = await mediator.Send(new GetOrderQuery(id), ct);\n    return order is null ? Results.NotFound() : Results.Ok(order);\n});\n\n// gRPC — internal, strongly typed, binary\n// OrderGrpcService.GetOrder uses same GetOrderQuery via IMediator\n// Shared Application layer — different Presentation adapters\n\n// Diagnostics: compare payload size\n// REST JSON ~200 bytes, protobuf ~80 bytes for same OrderReply\n// p95 latency: gRPC typically 2-5x faster for internal fan-out",
+            "explanation": "Clean Architecture shines here — Application handler shared, REST and gRPC are thin adapters. Measure payload and latency in staging before choosing public gRPC."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "gRPC vs REST across stacks",
+          "headers": ["Concern", "ASP.NET Core", "Node / TypeScript"],
+          "rows": [
+            ["Public API", "REST + OpenAPI (Swashbuckle)", "Express REST + Swagger"],
+            ["Internal RPC", "Grpc.AspNetCore + protobuf", "@grpc/grpc-js + @grpc/proto-loader"],
+            ["Browser support", "REST native; gRPC needs grpc-web proxy", "REST native; grpc-web with Envoy"],
+            ["Contract", ".proto file codegen", ".proto or protobuf-ts"],
+            ["Streaming", "Server/client/bidi streaming built-in", "@grpc/grpc-js streaming APIs"],
+            ["Tooling", "Postman REST; grpcurl for gRPC", "Same — curl/Postman vs grpcurl"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "gRPC for public browser-facing API without grpc-web proxy. Exposing gRPC without TLS in production. Breaking proto field numbers on deploy — use field reservation. Using gRPC through HTTP/1.1-only load balancers. Duplicating business logic in REST controller and gRPC service instead of shared Application layer."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights dependency tracking shows gRPC call duration vs REST for same operation. Load test internal fan-out: 1000 calls/sec REST JSON vs gRPC — compare CPU and p99. Network: protobuf ~60% smaller payloads. Operational: grpc-health-probe for K8s gRPC health checks (different from HTTP /health). Versioning: add new rpc methods, never reuse field numbers, use package versioning. When interviewer asks 'why not GraphQL' — GraphQL is client-driven query aggregation; gRPC is service contract RPC."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "When to choose each",
+          "headers": ["Scenario", "Choose", "Why"],
+          "rows": [
+            ["Public third-party API", "REST + OpenAPI", "Universal support, human debugging"],
+            ["Mobile app backend", "REST or BFF", "JSON native, caching, CDN friendly"],
+            ["Internal microservice mesh", "gRPC", "Performance, strong contracts, streaming"],
+            ["Browser real-time streaming", "REST SSE/WebSocket or grpc-web", "gRPC native blocked in browsers"],
+            ["High-throughput event pipeline", "gRPC streaming or Kafka", "Binary efficiency, backpressure"],
+            ["GitHub Pages static client", "REST only", "No gRPC from static hosting"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying gRPC replaces REST everywhere. Not knowing browsers cannot call gRPC natively. Unable to explain protobuf contract versioning. Claiming REST is always slower without acknowledging HTTP/2 REST exists. No mention of BFF pattern for hybrid architectures."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "REST/JSON for public and browser APIs; gRPC/protobuf for internal service-to-service performance.",
+    "gRPC requires HTTP/2 — blocked by some proxies; browsers need grpc-web proxy layer.",
+    "Production tip: shared Application handlers behind REST and gRPC adapters; grpc-health-probe in K8s.",
+    "60s: Public REST OpenAPI. Internal gRPC for low latency binary RPC. Proto defines contract. Cannot call gRPC from browser natively. BFF exposes REST, calls gRPC backends. Version proto carefully.",
+    "Follow-up: how do you handle gRPC load balancing and health checks in Kubernetes?"
+  ],
+  "commonPitfalls": [
+    "gRPC for public browser API gets you rejected — no native browser support without grpc-web.",
+    "Duplicating business logic in REST and gRPC instead of shared Application layer.",
+    "Strong answer: 'REST public third-party and mobile JSON. gRPC internal east-west HTTP/2 protobuf. BFF pattern. Shared MediatR handlers. grpcurl for debug. Measure p99 and payload size. grpc-web only if browser must call gRPC directly.'"
+  ],
+  "introducedIn": "Grpc.AspNetCore since ASP.NET Core 3.0",
+  "relatedTopicIds": [
+    "dotnet-12-clean-architecture-apis",
+    "dotnet-02-rest-principles",
+    "dotnet-02-openapi-swagger",
+    "dotnet-12-docker-deployment"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "@grpc/grpc-js internal services",
+      "note": "NestJS @nestjs/microservices supports gRPC transport with proto files — same internal vs external split. Public REST controller, internal gRPC microservice communication.",
+      "futureTopicSlug": "typescript/nestjs/grpc-microservices"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express REST vs grpc-js",
+      "note": "Node microservices use @grpc/grpc-js for internal RPC and Express for public REST — identical hybrid pattern. grpc-web requires Envoy or similar proxy for browser clients.",
+      "futureTopicSlug": "javascript/grpc/internal-services"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "gRPC services with ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/grpc/"
+    },
+    {
+      "title": "Comparison of gRPC and REST",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/grpc/comparison"
+    }
+  ],
+  "animationHint": "compare"
+}

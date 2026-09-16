@@ -1,0 +1,241 @@
+{
+  "id": "dotnet-12-outbox-pattern",
+  "slug": "outbox-pattern",
+  "title": "Outbox pattern (reliable dual-write with EF Core)",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 3,
+  "hook": "Saving an order to the database and publishing an event to a message queue are two separate systems. If the API crashes after the database commit but before SQS SendMessage succeeds, you lose the event forever. The outbox pattern writes the event to an outbox table in the same database transaction, then a background worker publishes it reliably.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The outbox pattern solves the dual-write problem: you cannot atomically commit to PostgreSQL and Amazon Simple Queue Service (SQS) in one transaction. Instead, insert the domain change and an outbox row in a single database transaction. A BackgroundService polls unpublished outbox rows, publishes to SQS or Kafka, then marks them processed. If the worker crashes mid-publish, the row remains unprocessed and retries — at-least-once delivery to the broker with idempotent consumers downstream."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Dual-write problem",
+              "longForm": "Dual-write problem",
+              "plainDefinition": "Two separate systems (database + message broker) cannot share one atomic transaction — partial failure loses consistency.",
+              "example": "DB commit succeeds, SQS send fails → event lost"
+            },
+            {
+              "term": "Outbox table",
+              "longForm": "Outbox table",
+              "plainDefinition": "Database table storing pending events as JSON, written in the same transaction as domain data.",
+              "example": "OutboxMessages(Id, Type, Payload, CreatedAt, ProcessedAt)"
+            },
+            {
+              "term": "Outbox dispatcher",
+              "longForm": "Outbox dispatcher",
+              "plainDefinition": "Background worker that polls outbox rows and publishes to the message broker.",
+              "example": "OutboxDispatcher : BackgroundService"
+            },
+            {
+              "term": "Transactional outbox",
+              "longForm": "Transactional outbox pattern",
+              "plainDefinition": "Industry pattern for reliable event publishing without distributed transactions (2PC).",
+              "example": "Used by microservices, e-commerce order flows"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "FAANG and product company interviews ask how you guarantee no lost events when an order is placed. Direct SQS send after SaveChangesAsync is the wrong answer — the gap between commit and send is a failure window. Outbox is the standard fix. Alternatives include change data capture (CDC) from database logs (Debezium) which avoids polling but adds infrastructure complexity."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Outbox vs CDC",
+          "body": "Outbox: explicit, testable, works with any database. CDC: reads WAL/binlog, no application code change, but needs Kafka Connect or similar. Many teams start with outbox and migrate to CDC at scale."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Transactional outbox flow",
+          "items": [
+            {
+              "title": "API receives request",
+              "body": "Scoped DbContext starts transaction (or implicit single SaveChanges)."
+            },
+            {
+              "title": "Write domain + outbox",
+              "body": "Insert Order row and OutboxMessage row in same unit of work."
+            },
+            {
+              "title": "Commit once",
+              "body": "Single SaveChangesAsync — both rows committed or neither."
+            },
+            {
+              "title": "Dispatcher publishes",
+              "body": "BackgroundService polls ProcessedAt IS NULL, sends to SQS, sets ProcessedAt."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Outbox pattern sequence",
+            "source": "sequenceDiagram\n  participant API as Order API\\nscoped DbContext\n  participant DB as PostgreSQL\n  participant OB as OutboxDispatcher\\nBackgroundService\n  participant SQS as SQS\n  API->>DB: INSERT Order + OutboxMessage\\n(same transaction)\n  API-->>Client: 201 Created\n  OB->>DB: SELECT unpublished outbox rows\n  OB->>SQS: SendMessage\n  OB->>DB: UPDATE ProcessedAt"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Outbox entity and same-transaction write",
+            "code": "public sealed class OutboxMessage\n{\n    public Guid Id { get; set; }\n    public string Type { get; set; } = \"\";\n    public string Payload { get; set; } = \"\";\n    public DateTimeOffset CreatedAt { get; set; }\n    public DateTimeOffset? ProcessedAt { get; set; }\n}\n\npublic async Task<Order> PlaceOrderAsync(PlaceOrderCommand cmd, CancellationToken ct)\n{\n    var order = new Order { Id = Guid.NewGuid(), CustomerId = cmd.CustomerId };\n    _db.Orders.Add(order);\n\n    _db.OutboxMessages.Add(new OutboxMessage\n    {\n        Id = Guid.NewGuid(),\n        Type = nameof(OrderPlacedEvent),\n        Payload = JsonSerializer.Serialize(new OrderPlacedEvent(order.Id, order.CustomerId)),\n        CreatedAt = DateTimeOffset.UtcNow\n    });\n\n    await _db.SaveChangesAsync(ct); // single transaction — order + outbox atomic\n    return order;\n}",
+            "explanation": "Domain entity and outbox row share one DbContext and one SaveChangesAsync. No SQS call in the request path — eliminates dual-write race."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Outbox dispatcher BackgroundService",
+            "code": "public sealed class OutboxDispatcher(\n    IServiceScopeFactory scopes,\n    ILogger<OutboxDispatcher> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        while (!ct.IsCancellationRequested)\n        {\n            await using var scope = scopes.CreateAsyncScope();\n            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n            var publisher = scope.ServiceProvider.GetRequiredService<IEventPublisher>();\n\n            var batch = await db.OutboxMessages\n                .Where(m => m.ProcessedAt == null)\n                .OrderBy(m => m.CreatedAt)\n                .Take(50)\n                .ToListAsync(ct);\n\n            foreach (var msg in batch)\n            {\n                try\n                {\n                    await publisher.PublishAsync(msg.Type, msg.Payload, ct);\n                    msg.ProcessedAt = DateTimeOffset.UtcNow;\n                }\n                catch (Exception ex)\n                {\n                    logger.LogError(ex, \"Outbox publish failed {Id}\", msg.Id);\n                    break; // retry batch on next poll\n                }\n            }\n            if (batch.Count > 0)\n                await db.SaveChangesAsync(ct);\n\n            await Task.Delay(TimeSpan.FromSeconds(2), ct);\n        }\n    }\n}",
+            "explanation": "Scoped DbContext per poll cycle. Publish then mark ProcessedAt in same scope SaveChanges. Break on failure so unprocessed rows retry. IServiceScopeFactory is mandatory."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IEventPublisher to SQS",
+            "code": "public sealed class SqsEventPublisher(IAmazonSQS sqs, IOptions<SqsOptions> opts) : IEventPublisher\n{\n    public async Task PublishAsync(string type, string payload, CancellationToken ct)\n    {\n        await sqs.SendMessageAsync(new SendMessageRequest\n        {\n            QueueUrl = opts.Value.EventsQueueUrl,\n            MessageBody = payload,\n            MessageAttributes = new Dictionary<string, MessageAttributeValue>\n            {\n                [\"EventType\"] = new() { DataType = \"String\", StringValue = type }\n            }\n        }, ct);\n    }\n}",
+            "explanation": "Publisher abstraction keeps dispatcher testable — swap SqsEventPublisher for InMemoryEventPublisher in integration tests."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode — publish before marking processed",
+            "code": "// RISKY: mark ProcessedAt BEFORE SQS confirms delivery\nmsg.ProcessedAt = DateTimeOffset.UtcNow;\nawait db.SaveChangesAsync(ct);\nawait publisher.PublishAsync(...); // crash here → event lost forever\n\n// SAFER: publish first, then mark processed in same SaveChanges\nawait publisher.PublishAsync(msg.Type, msg.Payload, ct);\nmsg.ProcessedAt = DateTimeOffset.UtcNow;\nawait db.SaveChangesAsync(ct);\n// If crash after publish but before SaveChanges → duplicate SQS message\n// Downstream must be idempotent — acceptable tradeoff\n\n// Monitor: outbox lag = COUNT WHERE ProcessedAt IS NULL AND CreatedAt < NOW() - interval '1 min'",
+            "explanation": "Never mark processed before broker confirms. Duplicate publish is acceptable with idempotent consumers; lost publish is not. Alert on outbox table backlog age."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Reliable messaging patterns",
+          "headers": ["Pattern", "ASP.NET Core + EF", "Node / Prisma"],
+          "rows": [
+            ["Transactional outbox", "OutboxMessage table + EF SaveChanges", "Outbox table + Prisma $transaction"],
+            ["Dispatcher", "BackgroundService polls outbox", "Separate worker process or Bull cron"],
+            ["CDC alternative", "Debezium on PostgreSQL WAL", "Same — Debezium connector"],
+            ["Idempotent consumer", "Upsert by event id", "Prisma upsert, Redis dedup key"],
+            ["Testing", "WebApplicationFactory + in-memory publisher", "Test DB + mock SQS client"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Sending to SQS inside the HTTP request after SaveChanges — dual-write window remains. Marking outbox processed before broker ack — event loss on crash. No index on (ProcessedAt, CreatedAt) — slow polls at scale. Forgetting idempotent downstream consumers — duplicate publishes happen. Using outbox for high-frequency events without batching — database write amplification."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: metric outbox_lag_seconds = max(now - CreatedAt) WHERE ProcessedAt IS NULL — alert above 60s. Integration test: PlaceOrder via WebApplicationFactory, assert outbox row exists before dispatcher runs, swap IEventPublisher with fake, trigger dispatcher, assert ProcessedAt set and fake received event. Load test: 1000 orders/sec, outbox lag stays bounded. EF index: CREATE INDEX ON OutboxMessages (ProcessedAt, CreatedAt) WHERE ProcessedAt IS NULL partial index on PostgreSQL."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Reliability tradeoffs",
+          "headers": ["Approach", "Lost events?", "Duplicates?", "Complexity"],
+          "rows": [
+            ["Direct SQS after SaveChanges", "Yes — crash gap", "Rare", "Low"],
+            ["Transactional outbox", "No", "Yes — retry safe", "Medium"],
+            ["2PC / XA transactions", "No", "No", "High — avoid"],
+            ["CDC (Debezium)", "No", "Depends", "High infra"],
+            ["Saga + compensation", "No with choreography", "Possible", "High domain logic"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'call SQS after SaveChangesAsync' without acknowledging the failure window. Not knowing downstream must handle duplicates. Unable to draw the outbox table in the same transaction as the order. Confusing outbox with inbox pattern or event sourcing."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Outbox solves dual-write: domain change and event row commit atomically in one database transaction.",
+    "Background dispatcher publishes unpublished rows — duplicates possible, lost events not; consumers must be idempotent.",
+    "Production tip: index outbox on ProcessedAt/CreatedAt; alert on outbox lag; publish before marking processed.",
+    "60s: Insert order + outbox row in one SaveChanges. No SQS in request path. BackgroundService polls, publishes, sets ProcessedAt. Duplicates ok with idempotent handlers. Alternative: CDC with Debezium.",
+    "Follow-up: how do you handle outbox dispatcher falling behind at 10k events per second?"
+  ],
+  "commonPitfalls": [
+    "SQS after SaveChanges without outbox gets you rejected — classic dual-write failure window.",
+    "Marking ProcessedAt before broker delivery — worse than no outbox; events silently lost.",
+    "Strong answer: 'Same transaction for domain + outbox. Dispatcher with IServiceScopeFactory per batch. Publish then mark processed. Idempotent consumers with event id dedup. Monitor lag. CDC at scale if polling becomes bottleneck.'"
+  ],
+  "introducedIn": "Pattern predates .NET; EF Core implementation common since ASP.NET Core 2.x",
+  "relatedTopicIds": [
+    "dotnet-12-ihostedservice-background",
+    "dotnet-12-channels-and-queues",
+    "dotnet-05-iservicescopefactory",
+    "dotnet-09-ef-core-basics",
+    "dotnet-09-optimistic-concurrency"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Prisma transaction with outbox table",
+      "note": "prisma.$transaction([createOrder, createOutboxMessage]) mirrors EF SaveChanges with both entities — same atomic guarantee. Separate Bull worker polls outbox like BackgroundService dispatcher.",
+      "futureTopicSlug": "typescript/prisma/transactional-outbox"
+    },
+    {
+      "language": "javascript",
+      "concept": "NestJS CQRS + outbox module",
+      "note": "@nestjs/cqrs event handlers often use outbox table instead of immediate EventBus emit — prevents lost domain events when handler throws after DB commit.",
+      "futureTopicSlug": "typescript/nestjs/outbox-pattern"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Transactional outbox pattern (microservices.io)",
+      "url": "https://microservices.io/patterns/data/transactional-outbox.html"
+    },
+    {
+      "title": "EF Core transactions",
+      "url": "https://learn.microsoft.com/en-us/ef/core/saving/transactions"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

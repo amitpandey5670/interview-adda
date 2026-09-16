@@ -1,0 +1,240 @@
+{
+  "id": "dotnet-12-channels-and-queues",
+  "slug": "channels-and-queues",
+  "title": "Channels, SQS, and in-process message passing",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 2,
+  "hook": "When your API receives a webhook or order, you often want to process it asynchronously without blocking the HTTP response. In-process System.Threading.Channels decouple producers from consumers inside one app; Amazon Simple Queue Service (SQS) does the same across services and survives restarts.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "System.Threading.Channels provides bounded or unbounded async queues: producers call WriteAsync, consumers use await foreach or ReadAsync. Multiple reader tasks compete safely for items. Amazon SQS is a managed message queue: producers SendMessage, consumers ReceiveMessage with visibility timeout, and DeleteMessage after successful processing. In ASP.NET Core, a common pattern is an HTTP endpoint that enqueues work (channel or SQS) and a BackgroundService that dequeues and processes with IServiceScopeFactory per message."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Channel",
+              "longForm": "System.Threading.Channels.Channel<T>",
+              "plainDefinition": "In-process async producer-consumer queue with optional bounded capacity for backpressure.",
+              "example": "Channel.CreateBounded<WorkItem>(capacity: 100);"
+            },
+            {
+              "term": "SQS",
+              "longForm": "Amazon Simple Queue Service (SQS)",
+              "plainDefinition": "Managed cloud queue with at-least-once delivery, visibility timeout, and dead-letter queues.",
+              "example": "await sqs.SendMessageAsync(new SendMessageRequest { QueueUrl = url, MessageBody = json });"
+            },
+            {
+              "term": "Visibility timeout",
+              "longForm": "SQS visibility timeout",
+              "plainDefinition": "Period after ReceiveMessage when the message is hidden from other consumers; extend or delete on success.",
+              "example": "Default 30s — must exceed max processing time or message reappears"
+            },
+            {
+              "term": "Dead-letter queue",
+              "longForm": "Dead-letter queue (DLQ)",
+              "plainDefinition": "Queue for messages that failed processing after max receive count — prevents infinite retry loops.",
+              "example": "redrive policy: maxReceiveCount = 5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Returning 202 Accepted and processing in the background improves API latency and absorbs traffic spikes. Channels are zero-infrastructure for single-instance dev and low-volume prod. SQS adds durability, horizontal scaling across pods, and decoupling when the API and worker deploy separately. Choosing wrong tool — unbounded channel in production with no memory cap — causes out-of-memory crashes under load."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "At-least-once delivery",
+          "body": "SQS delivers messages at least once. Your handler must be idempotent — use deduplication keys, database unique constraints, or conditional updates. Never assume exactly-once without the outbox pattern or idempotent consumer design."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "SQS consumer in BackgroundService",
+          "items": [
+            {
+              "title": "HTTP endpoint enqueues",
+              "body": "POST /orders returns 202; serializes event to SQS SendMessage."
+            },
+            {
+              "title": "BackgroundService polls",
+              "body": "ReceiveMessage with long polling (WaitTimeSeconds=20) reduces empty responses."
+            },
+            {
+              "title": "Process with scoped DI",
+              "body": "CreateScope per message; resolve DbContext and handlers; process idempotently."
+            },
+            {
+              "title": "Delete or extend",
+              "body": "DeleteMessage on success. On failure, let visibility timeout expire for retry or move to DLQ."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Channel vs SQS architecture",
+            "source": "flowchart LR\n  API[Web API endpoint] -->|WriteAsync| CH[Channel in-process]\n  CH --> W1[BackgroundService consumer]\n  API -->|SendMessage| SQS[SQS queue]\n  SQS --> W2[Worker pod N]\n  W2 --> DB[(Database)]\n  SQS --> DLQ[Dead-letter queue]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Bounded channel with BackgroundService consumer",
+            "code": "public sealed class WorkChannel\n{\n    private readonly Channel<ProcessOrderCommand> _channel =\n        Channel.CreateBounded<ProcessOrderCommand>(new BoundedChannelOptions(500)\n        {\n            FullMode = BoundedChannelFullMode.Wait // backpressure\n        });\n\n    public ChannelWriter<ProcessOrderCommand> Writer => _channel.Writer;\n    public ChannelReader<ProcessOrderCommand> Reader => _channel.Reader;\n}\n\nbuilder.Services.AddSingleton<WorkChannel>();\nbuilder.Services.AddHostedService<ChannelConsumer>();\n\npublic sealed class ChannelConsumer(\n    WorkChannel work,\n    IServiceScopeFactory scopes) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        await foreach (var cmd in work.Reader.ReadAllAsync(ct))\n        {\n            await using var scope = scopes.CreateAsyncScope();\n            var handler = scope.ServiceProvider.GetRequiredService<IOrderProcessor>();\n            await handler.ProcessAsync(cmd, ct);\n        }\n    }\n}",
+            "explanation": "Bounded channel with Wait mode applies backpressure — producers slow down when consumers lag. Singleton channel registered in DI. Consumer creates scope per message."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SQS producer from minimal API",
+            "code": "app.MapPost(\"/orders\", async (CreateOrderRequest req, IAmazonSQS sqs, IOptions<SqsOptions> opts, CancellationToken ct) =>\n{\n    var orderId = Guid.NewGuid();\n    var body = JsonSerializer.Serialize(new OrderCreatedEvent(orderId, req.CustomerId));\n\n    await sqs.SendMessageAsync(new SendMessageRequest\n    {\n        QueueUrl = opts.Value.OrderQueueUrl,\n        MessageBody = body,\n        MessageGroupId = req.CustomerId.ToString(), // FIFO only\n        MessageDeduplicationId = orderId.ToString()\n    }, ct);\n\n    return Results.Accepted($\"/orders/{orderId}\", new { orderId });\n});",
+            "explanation": "Return 202 Accepted immediately. SQS carries the work. FIFO queues need MessageGroupId and MessageDeduplicationId for ordering and dedup."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "SQS consumer with idempotent processing",
+            "code": "public sealed class SqsOrderConsumer(\n    IAmazonSQS sqs,\n    IOptions<SqsOptions> opts,\n    IServiceScopeFactory scopes,\n    ILogger<SqsOrderConsumer> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        while (!ct.IsCancellationRequested)\n        {\n            var response = await sqs.ReceiveMessageAsync(new ReceiveMessageRequest\n            {\n                QueueUrl = opts.Value.OrderQueueUrl,\n                MaxNumberOfMessages = 10,\n                WaitTimeSeconds = 20,\n                VisibilityTimeout = 60\n            }, ct);\n\n            foreach (var msg in response.Messages)\n            {\n                try\n                {\n                    await using var scope = scopes.CreateAsyncScope();\n                    var processor = scope.ServiceProvider.GetRequiredService<IOrderProcessor>();\n                    var evt = JsonSerializer.Deserialize<OrderCreatedEvent>(msg.Body)!;\n                    await processor.ProcessIdempotentAsync(evt, ct); // upsert by orderId\n                    await sqs.DeleteMessageAsync(opts.Value.OrderQueueUrl, msg.ReceiptHandle, ct);\n                }\n                catch (Exception ex)\n                {\n                    logger.LogError(ex, \"Failed message {MessageId}\", msg.MessageId);\n                    // do not delete — visibility timeout expires, retry or DLQ\n                }\n            }\n        }\n    }\n}",
+            "explanation": "Long polling reduces cost and latency. Visibility timeout must exceed processing time. Delete only on success. Failed messages retry automatically."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostics — channel depth and SQS metrics",
+            "code": "// Custom metric for bounded channel depth\n_channel.Reader.Count // approximate items waiting\n\n// CloudWatch / Application Insights for SQS:\n// ApproximateNumberOfMessagesVisible — backlog\n// ApproximateAgeOfOldestMessage — processing lag\n// NumberOfMessagesDeleted vs Received — success rate\n\n// Alert: AgeOfOldestMessage > 5 minutes → scale consumers or fix poison message",
+            "explanation": "Monitor queue depth in production. Channel.Reader.Count for in-process backpressure. SQS CloudWatch metrics for cross-service queues. Age of oldest message is the key SLO indicator."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Async messaging patterns",
+          "headers": ["Concern", "ASP.NET Core", "Node / TypeScript"],
+          "rows": [
+            ["In-process queue", "Channel<T> + BackgroundService", "EventEmitter or p-queue in memory"],
+            ["Durable cloud queue", "AWS SDK SQS", "@aws-sdk/client-sqs or Bull with Redis"],
+            ["Backpressure", "BoundedChannelFullMode.Wait", "Bull concurrency limit, Redis maxmemory"],
+            ["Idempotency", "DB unique constraint + upsert", "Same — Prisma upsert, Redis SET NX dedup key"],
+            ["DLQ", "SQS redrive policy", "Bull failed job queue, SQS DLQ from Lambda"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Unbounded channel in production — memory grows unbounded under spike. Deleting SQS message before processing completes. Visibility timeout shorter than max processing time — duplicate processing. No idempotency on at-least-once delivery. Sharing one DbContext scope across parallel SQS message handlers."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: CloudWatch ApproximateAgeOfOldestMessage and DLQ depth alarms. OpenTelemetry trace from HTTP enqueue span to consumer ProcessMessage span with same correlation id in message attributes. dotnet-counters threadpool-queue-length if channel consumer is CPU-bound. Load test: spike POST /orders, verify p95 HTTP stays low while queue depth grows then drains. Poison message: after maxReceiveCount lands in DLQ — alert and manual replay tool."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Channel vs SQS vs outbox",
+          "headers": ["Pattern", "Durability", "When"],
+          "rows": [
+            ["Channel<T>", "In-memory only", "Single instance, dev, low volume co-hosted"],
+            ["SQS direct send", "Durable at-least-once", "Decoupled services, multi-pod consumers"],
+            ["Transactional outbox", "Durable with DB", "Must not lose message if API crashes after commit"],
+            ["SNS fan-out", "Pub/sub broadcast", "Multiple subscribers per event"],
+            ["Kafka", "Log retention, ordering partitions", "High throughput event streaming"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming SQS is exactly-once without idempotent handlers. Unbounded in-memory queue for production traffic. Not knowing visibility timeout causes duplicate delivery. Unable to explain when outbox beats direct SQS send after database commit."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Channel<T> decouples producers and consumers in-process; SQS provides durable at-least-once delivery across services.",
+    "SQS requires idempotent consumers — visibility timeout and retries cause duplicates; use DLQ for poison messages.",
+    "Production tip: bounded channels with backpressure; SQS long polling; alert on ApproximateAgeOfOldestMessage.",
+    "60s: Endpoint returns 202, enqueues to channel or SQS. BackgroundService polls with scoped DI per message. Delete SQS message only on success. Bounded channel for backpressure. Outbox when DB and message must be atomic.",
+    "Follow-up: how does the outbox pattern solve the dual-write problem between database and SQS?"
+  ],
+  "commonPitfalls": [
+    "Saying SQS is exactly-once gets you rejected — it is at-least-once; idempotency is mandatory.",
+    "Unbounded Channel in production — memory exhaustion under traffic spike.",
+    "Strong answer: 'Bounded channel for co-hosted dev/small prod. SQS for multi-pod with long poll, visibility timeout > processing time, DLQ after 5 retries. IServiceScopeFactory per message. Outbox when event must survive API crash with DB commit.'"
+  ],
+  "introducedIn": "System.Threading.Channels in .NET Core 3.0; AWS SDK for .NET",
+  "relatedTopicIds": [
+    "dotnet-12-ihostedservice-background",
+    "dotnet-12-outbox-pattern",
+    "dotnet-05-iservicescopefactory",
+    "csharp-15-concurrent-collections-channels"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "BullMQ with Redis",
+      "note": "NestJS Bull queues mirror SQS consumer pattern — job processor with concurrency limit, failed job DLQ, and retry backoff. Same idempotency requirements as SQS at-least-once delivery.",
+      "futureTopicSlug": "typescript/nestjs/bull-queues"
+    },
+    {
+      "language": "javascript",
+      "concept": "AWS SDK v3 SQS in Lambda or Express",
+      "note": "Node SQS consumers use @aws-sdk/client-sqs ReceiveMessage loop — identical visibility timeout and delete-on-success semantics. Express returns 202 then SendMessage — same fire-and-forget HTTP pattern.",
+      "futureTopicSlug": "javascript/aws/sqs-consumers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "System.Threading.Channels",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.threading.channels"
+    },
+    {
+      "title": "Amazon SQS visibility timeout",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

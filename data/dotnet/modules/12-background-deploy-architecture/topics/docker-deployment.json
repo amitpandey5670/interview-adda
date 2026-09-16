@@ -1,0 +1,243 @@
+{
+  "id": "dotnet-12-docker-deployment",
+  "slug": "docker-deployment",
+  "title": "Docker deployment (multi-stage builds, health probes)",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 5,
+  "hook": "Running dotnet run on a developer laptop is not production. Docker packages your ASP.NET Core Web API into a portable image with a known runtime, and Kubernetes or any container platform uses health probes to know when your app is ready to receive traffic and when to restart a failing pod.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A multi-stage Dockerfile builds your app in a SDK image (with compilers) and copies only the published output into a slim ASP.NET runtime image — keeping production images small and secure. Health checks expose /health (liveness: is the process alive?) and /health/ready (readiness: can it serve traffic — database connected?). Kubernetes livenessProbe restarts unhealthy pods; readinessProbe removes pods from load balancer until ready."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Multi-stage build",
+              "longForm": "Docker multi-stage build",
+              "plainDefinition": "Separate build and runtime stages — SDK image compiles, runtime image runs.",
+              "example": "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build ... FROM mcr.microsoft.com/dotnet/aspnet:8.0"
+            },
+            {
+              "term": "Liveness probe",
+              "longForm": "Kubernetes liveness probe",
+              "plainDefinition": "Checks if container is alive — failure triggers restart.",
+              "example": "GET /health/live → 200"
+            },
+            {
+              "term": "Readiness probe",
+              "longForm": "Kubernetes readiness probe",
+              "plainDefinition": "Checks if container can accept traffic — failure removes from service endpoints.",
+              "example": "GET /health/ready → 200 only when DB reachable"
+            },
+            {
+              "term": "ASPNETCORE_URLS",
+              "longForm": "ASPNETCORE_URLS environment variable",
+              "plainDefinition": "Binds Kestrel to container port — typically http://+:8080 for non-root.",
+              "example": "ENV ASPNETCORE_URLS=http://+:8080"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Production APIs deploy to Kubernetes, Azure Container Apps, AWS ECS, or GitHub Actions → container registry → GitHub Pages is for static Angular output, not the API itself. Correct Dockerfile and health probes prevent deploys that pass CI but fail in prod — app starts but cannot reach database, or BackgroundService deadlock blocks readiness. Senior interviews ask how you know a pod is healthy beyond 'it started'."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Do not use SDK image in production",
+          "body": "Running mcr.microsoft.com/dotnet/sdk in production bloats image size (~700MB vs ~200MB), includes compilers attackers could abuse, and violates least-privilege container security."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Container deploy flow",
+          "items": [
+            {
+              "title": "Multi-stage Dockerfile",
+              "body": "restore → build → publish in SDK stage; copy publish output to aspnet runtime stage."
+            },
+            {
+              "title": "Configure Kestrel",
+              "body": "ASPNETCORE_URLS=http://+:8080, run as non-root user in runtime image."
+            },
+            {
+              "title": "Register health checks",
+              "body": "AddHealthChecks with EF DbContext check, custom SQS check optional."
+            },
+            {
+              "title": "Map endpoints",
+              "body": "/health/live (always 200 if process up), /health/ready (DB + dependencies)."
+            },
+            {
+              "title": "Kubernetes probes",
+              "body": "readinessProbe on /health/ready, livenessProbe on /health/live with appropriate timeouts."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Multi-stage Docker build",
+            "source": "flowchart LR\n  SRC[Source code] --> SDK[dotnet/sdk stage\\nrestore build publish]\n  SDK --> OUT[publish output]\n  OUT --> RT[dotnet/aspnet stage\\ncopy + ENTRYPOINT]\n  RT --> IMG[Production image\\n~200MB]\n  IMG --> K8s[Kubernetes pod\\nliveness + readiness]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "dockerfile",
+            "label": "Multi-stage Dockerfile for Web API",
+            "code": "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build\nWORKDIR /src\nCOPY [\"OrderApi/OrderApi.csproj\", \"OrderApi/\"]\nRUN dotnet restore \"OrderApi/OrderApi.csproj\"\nCOPY . .\nWORKDIR /src/OrderApi\nRUN dotnet publish -c Release -o /app/publish /p:UseAppHost=false\n\nFROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final\nWORKDIR /app\nEXPOSE 8080\nENV ASPNETCORE_URLS=http://+:8080\nENV ASPNETCORE_ENVIRONMENT=Production\n\n# Run as non-root (aspnet image includes app user)\nUSER $APP_UID\n\nCOPY --from=build /app/publish .\nENTRYPOINT [\"dotnet\", \"OrderApi.dll\"]",
+            "explanation": "SDK stage compiles; final stage only has runtime + published DLLs. UseAppHost=false avoids platform-specific apphost. USER $APP_UID runs non-root. Port 8080 is convention for containerized ASP.NET Core."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Health checks — liveness vs readiness",
+            "code": "builder.Services.AddHealthChecks()\n    .AddCheck(\"self\", () => HealthCheckResult.Healthy())\n    .AddDbContextCheck<AppDbContext>(\"database\", tags: [\"ready\"])\n    .AddCheck<SqsHealthCheck>(\"sqs\", tags: [\"ready\"]);\n\nvar app = builder.Build();\n\napp.MapHealthChecks(\"/health/live\", new HealthCheckOptions\n{\n    Predicate = check => check.Name == \"self\" // process alive only\n});\n\napp.MapHealthChecks(\"/health/ready\", new HealthCheckOptions\n{\n    Predicate = check => check.Tags.Contains(\"ready\"),\n    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse\n});",
+            "explanation": "Liveness is lightweight — pod restart if process dead. Readiness includes DB and external deps — pod removed from load balancer until ready. Tag-based filtering separates concerns."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Kubernetes deployment probes",
+            "code": "spec:\n  containers:\n  - name: order-api\n    image: ghcr.io/org/order-api:1.2.3\n    ports:\n    - containerPort: 8080\n    livenessProbe:\n      httpGet:\n        path: /health/live\n        port: 8080\n      initialDelaySeconds: 10\n      periodSeconds: 15\n      failureThreshold: 3\n    readinessProbe:\n      httpGet:\n        path: /health/ready\n        port: 8080\n      initialDelaySeconds: 5\n      periodSeconds: 10\n      failureThreshold: 3\n    resources:\n      requests:\n        memory: \"256Mi\"\n        cpu: \"100m\"\n      limits:\n        memory: \"512Mi\"\n        cpu: \"500m\"",
+            "explanation": "Readiness fails when DB migration pending or connection pool exhausted — pod not routed traffic. Liveness fails on deadlock — pod restarted. Set resources to avoid OOMKill during traffic spikes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Graceful shutdown for BackgroundService",
+            "code": "// Program.cs — extend shutdown timeout for in-flight work\nbuilder.Host.ConfigureHostOptions(opts =>\n{\n    opts.ShutdownTimeout = TimeSpan.FromSeconds(30);\n});\n\n// BackgroundService must honor stoppingToken\n// K8s preStop hook + terminationGracePeriodSeconds: 45\n// Ensures outbox dispatcher finishes current batch before SIGKILL",
+            "explanation": "Default 5s shutdown may kill BackgroundService mid-batch. Increase ShutdownTimeout and K8s terminationGracePeriodSeconds. PreStop hook gives drain time before pod removal."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Container deployment across stacks",
+          "headers": ["Concern", "ASP.NET Core", "Node / Express"],
+          "rows": [
+            ["Base image", "mcr.microsoft.com/dotnet/aspnet:8.0", "node:20-alpine"],
+            ["Multi-stage", "sdk build → aspnet runtime", "node build → node alpine runtime"],
+            ["Health endpoint", "MapHealthChecks /health/ready", "app.get('/health', ...) manual"],
+            ["Non-root user", "USER $APP_UID in aspnet image", "USER node in official node image"],
+            ["Graceful shutdown", "IHostApplicationLifetime, stoppingToken", "SIGTERM + server.close()"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single-stage Dockerfile with SDK in production. Binding to localhost (127.0.0.1) instead of 0.0.0.0/+ in container. Readiness check includes slow external API — all pods marked unready during outage. Liveness check hits database — restart loop when DB down. Forgetting migration strategy — app starts but readiness fails until MigrateAsync runs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: kubectl describe pod shows readiness probe failures with HTTP status. Application Insights dependency failures correlate with readiness 503 spikes. Image scan (Trivy, Grype) on CI — no critical CVEs in base image. Deploy pipeline: build → test → push to GHCR → rolling update with maxUnavailable 0. dotnet-counters inside container via kubectl exec for threadpool during rollout. PreStop hook + graceful shutdown: verify outbox messages not duplicated on deploy."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Health probe design",
+          "headers": ["Probe", "Should check", "Should NOT check"],
+          "rows": [
+            ["Liveness", "Process responsive", "Database, SQS, external APIs"],
+            ["Readiness", "DB connection, migrations done", "Business logic correctness"],
+            ["Startup probe", "Slow initial EF migration", "Heavy computation"],
+            ["Docker HEALTHCHECK", "Basic HTTP 200", "Same as liveness — lightweight"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Single-stage Dockerfile with SDK in production. Liveness probe checking database — causes restart storm when DB is down. Not knowing difference between liveness and readiness. Unable to explain graceful shutdown for BackgroundService during rolling deploy."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Multi-stage Dockerfile: SDK builds, aspnet runtime runs — smaller, more secure production image.",
+    "Liveness = process alive (restart on fail). Readiness = can serve traffic (DB connected) — remove from LB on fail.",
+    "Production tip: non-root USER, ASPNETCORE_URLS=:8080, extend ShutdownTimeout for BackgroundService drain.",
+    "60s: SDK stage restore build publish. Aspnet stage copy output ENTRYPOINT dotnet. Map /health/live and /health/ready with tag filters. K8s readiness on DB, liveness lightweight. Graceful shutdown with stoppingToken.",
+    "Follow-up: how do rolling deploys interact with BackgroundService and outbox duplicate publishes?"
+  ],
+  "commonPitfalls": [
+    "SDK image in production gets you rejected — always multi-stage with aspnet runtime.",
+    "Liveness probe hitting database — restart loop when DB unavailable; readiness should check DB instead.",
+    "Strong answer: 'Multi-stage Dockerfile ~200MB aspnet image. Readiness includes DbContextCheck. Liveness is self-check only. terminationGracePeriodSeconds 45 for outbox drain. Trivy scan in CI. NestJS same pattern with node:alpine.'"
+  ],
+  "introducedIn": "Docker support since .NET Core 1.0; health checks since ASP.NET Core 2.2",
+  "relatedTopicIds": [
+    "dotnet-11-health-checks",
+    "dotnet-12-ihostedservice-background",
+    "dotnet-01-kestrel-and-reverse-proxy",
+    "dotnet-01-environments-and-startup"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS Docker multi-stage",
+      "note": "NestJS uses node:20-alpine builder stage (npm ci, nest build) and slim runtime stage — same multi-stage principle. Health endpoint via @nestjs/terminus mirrors MapHealthChecks.",
+      "futureTopicSlug": "typescript/nestjs/docker-deployment"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express in Docker with health check",
+      "note": "Express Dockerfile copies package.json, npm ci --omit=dev, node dist/index.js. Manual /health route — no built-in DbContext check like ASP.NET AddDbContextCheck.",
+      "futureTopicSlug": "javascript/express/docker-kubernetes"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Containerize a .NET app",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/docker/build-container"
+    },
+    {
+      "title": "Health checks in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

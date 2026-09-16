@@ -1,0 +1,241 @@
+{
+  "id": "dotnet-12-ihostedservice-background",
+  "slug": "ihostedservice-background",
+  "title": "IHostedService and BackgroundService (long-running workers)",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 1,
+  "hook": "A Web API often needs work that continues after the HTTP response is sent — sending emails, processing queues, or polling an outbox table. IHostedService and BackgroundService run that work inside the same process as your API, started and stopped with the host.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IHostedService is an interface with StartAsync and StopAsync that the Generic Host runs when the application starts and stops. BackgroundService is a base class that implements IHostedService and gives you ExecuteAsync — a long-running loop you override. Register with builder.Services.AddHostedService<T>(). Workers share the same dependency injection (DI) container as controllers and minimal API endpoints, but they are singletons and must not inject scoped services like Entity Framework Core DbContext directly."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IHostedService",
+              "longForm": "IHostedService",
+              "plainDefinition": "Interface for background work started and stopped by the host alongside Kestrel.",
+              "example": "public class MyWorker : IHostedService"
+            },
+            {
+              "term": "BackgroundService",
+              "longForm": "BackgroundService",
+              "plainDefinition": "Abstract base class with ExecuteAsync for continuous background loops.",
+              "example": "public class QueueWorker : BackgroundService"
+            },
+            {
+              "term": "Generic Host",
+              "longForm": "Generic Host",
+              "plainDefinition": "The runtime that hosts Kestrel, DI, configuration, logging, and hosted services.",
+              "example": "WebApplication.CreateBuilder(args)"
+            },
+            {
+              "term": "CancellationToken",
+              "longForm": "CancellationToken (stopping token)",
+              "plainDefinition": "Signals graceful shutdown so the worker can finish current work and exit.",
+              "example": "while (!stoppingToken.IsCancellationRequested)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Without hosted services you would run a separate console app or cron job for every background task — extra deployment, duplicated configuration, and harder local development. Co-hosting workers in the API process is simple for outbox dispatchers, cache warmers, and lightweight queue consumers. The tradeoff is that heavy CPU work in the same process can starve HTTP request threads, so know when to split workers into a dedicated service."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to co-host vs split",
+          "body": "Co-host: outbox polling, periodic cache refresh, low-volume SQS consumer. Split: video transcoding, ML inference, high-throughput batch jobs — run a separate Worker Service project or container."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "BackgroundService lifecycle",
+          "items": [
+            {
+              "title": "Host starts",
+              "body": "StartAsync runs on all IHostedService registrations. BackgroundService starts ExecuteAsync on a background thread."
+            },
+            {
+              "title": "Worker loop",
+              "body": "ExecuteAsync runs until stoppingToken is cancelled — poll queue, process channel, or sleep with PeriodicTimer."
+            },
+            {
+              "title": "Scoped work per item",
+              "body": "Inject IServiceScopeFactory (singleton-safe). CreateScope per message or batch to resolve DbContext."
+            },
+            {
+              "title": "Graceful shutdown",
+              "body": "SIGTERM / Ctrl+C cancels stoppingToken. Worker exits loop; StopAsync completes within host shutdown timeout."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Hosted service in the ASP.NET Core host",
+            "source": "flowchart TD\n  Host[Generic Host] --> Kestrel[Kestrel HTTP]\n  Host --> BG[BackgroundService\\nIHostedService]\n  BG --> SF[IServiceScopeFactory]\n  SF --> Scope[Per-work-item scope]\n  Scope --> DB[AppDbContext scoped]\n  Kestrel --> Req[HTTP requests\\nscoped per request]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register and implement BackgroundService",
+            "code": "// Program.cs\nbuilder.Services.AddHostedService<OutboxDispatcher>();\n\npublic sealed class OutboxDispatcher(\n    IServiceScopeFactory scopes,\n    ILogger<OutboxDispatcher> logger) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n    {\n        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));\n        while (await timer.WaitForNextTickAsync(stoppingToken))\n        {\n            await using var scope = scopes.CreateAsyncScope();\n            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n            // poll and dispatch outbox rows...\n        }\n    }\n}",
+            "explanation": "AddHostedService registers the worker as a singleton. ExecuteAsync is the entry point. PeriodicTimer avoids Thread.Sleep blocking. CreateAsyncScope per tick gives a fresh DbContext."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Graceful shutdown with cancellation",
+            "code": "protected override async Task ExecuteAsync(CancellationToken stoppingToken)\n{\n    while (!stoppingToken.IsCancellationRequested)\n    {\n        try\n        {\n            var message = await _queue.ReceiveAsync(stoppingToken);\n            await ProcessMessageAsync(message, stoppingToken);\n        }\n        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)\n        {\n            break; // expected on shutdown\n        }\n        catch (Exception ex)\n        {\n            _logger.LogError(ex, \"Message processing failed\");\n            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);\n        }\n    }\n    _logger.LogInformation(\"OutboxDispatcher stopped gracefully\");\n}",
+            "explanation": "Always pass stoppingToken to async calls so shutdown is not blocked. Distinguish shutdown cancellation from other cancellations. Log graceful stop for operations dashboards."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IHostedService without BackgroundService",
+            "code": "public sealed class StartupWarmupService : IHostedService\n{\n    private readonly IServiceScopeFactory _scopes;\n\n    public StartupWarmupService(IServiceScopeFactory scopes) => _scopes = scopes;\n\n    public async Task StartAsync(CancellationToken cancellationToken)\n    {\n        await using var scope = _scopes.CreateAsyncScope();\n        var cache = scope.ServiceProvider.GetRequiredService<ICacheWarmer>();\n        await cache.WarmAsync(cancellationToken); // runs once at startup\n    }\n\n    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;\n}",
+            "explanation": "Use raw IHostedService when work runs once at startup (cache warmup, schema validation) rather than a continuous loop. Still use scoped services via IServiceScopeFactory."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode — captive DbContext in BackgroundService",
+            "code": "// ANTI-PATTERN — DbContext injected into singleton worker\npublic sealed class BadWorker(AppDbContext db) : BackgroundService\n{\n    protected override async Task ExecuteAsync(CancellationToken ct)\n    {\n        while (!ct.IsCancellationRequested)\n        {\n            var rows = await db.OutboxMessages.ToListAsync(ct);\n            // Same DbContext forever — change tracker grows, connection held\n        }\n    }\n}\n\n// Diagnosis: dotnet-counters Microsoft.EntityFrameworkCore active-db-contexts stuck at 1\n// Fix: inject IServiceScopeFactory, CreateScope per iteration",
+            "explanation": "Injecting DbContext into BackgroundService is the captive dependency trap. The diagnostics counter active-db-contexts staying at 1 during processing confirms the bug."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Background workers across stacks",
+          "headers": ["Pattern", "ASP.NET Core", "NestJS", "Express / Node"],
+          "rows": [
+            ["Co-hosted worker", "BackgroundService + AddHostedService", "@nestjs/schedule Cron in same process", "setInterval or Bull worker in same Node process"],
+            ["Scoped DB per job", "IServiceScopeFactory.CreateScope", "ModuleRef.resolve(REQUEST scope)", "pg pool.connect() per job, release in finally"],
+            ["Graceful shutdown", "stoppingToken + host shutdown timeout", "onModuleDestroy lifecycle hook", "SIGTERM handler + server.close()"],
+            ["Separate worker process", "Worker Service template project", "Separate Nest microservice", "Dedicated worker container with Bull/BullMQ"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Injecting DbContext directly into BackgroundService. One IServiceScope for the entire worker lifetime. Blocking ExecuteAsync with Thread.Sleep instead of await Task.Delay or PeriodicTimer. Fire-and-forget Task.Run without its own scope. Ignoring stoppingToken so deploys hang until host kills the process."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dotnet-counters Microsoft.EntityFrameworkCore active-db-contexts should spike per batch then return to baseline — not stay at 1 forever. OpenTelemetry spans on background work should show DbContext lifetime matching scope disposal, not BackgroundService lifetime. Kubernetes readiness should not depend on background queue depth unless you expose a custom health check. Integration test with WebApplicationFactory: start host, enqueue work, assert DB updated within timeout, restart host 100 times without ObjectDisposedException. Pair with outbox pattern — same interview arc as scoped DbContext."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "When to use", "Risk"],
+          "rows": [
+            ["BackgroundService in API", "Low-volume outbox, cache refresh", "CPU-heavy work starves HTTP thread pool"],
+            ["Worker Service project", "Dedicated queue consumer fleet", "Extra deployment artifact"],
+            ["Hangfire / Quartz", "Scheduled jobs with dashboard", "External storage dependency"],
+            ["External queue + Lambda", "Burst traffic, pay-per-invoke", "Cold start, local dev complexity"],
+            ["IServiceScopeFactory per item", "Any worker needing DbContext", "Required — not optional"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Injecting DbContext into BackgroundService without mentioning IServiceScopeFactory. Saying BackgroundService is scoped (it is singleton). Not knowing stoppingToken exists for graceful shutdown. Unable to explain when to split workers into a separate process vs co-hosting in the API."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IHostedService runs with the host; BackgroundService provides ExecuteAsync for long-running loops.",
+    "BackgroundService is singleton — never inject scoped DbContext; use IServiceScopeFactory per work item.",
+    "Production tip: monitor active-db-contexts and thread-pool queue length; split heavy workers to a dedicated service.",
+    "60s: Register AddHostedService. Override ExecuteAsync. Inject IServiceScopeFactory not DbContext. CreateScope per message or batch. Pass stoppingToken for graceful shutdown. Co-host light work; split CPU-heavy jobs.",
+    "Follow-up: how do you test BackgroundService with WebApplicationFactory and assert scoped disposal?"
+  ],
+  "commonPitfalls": [
+    "DbContext in BackgroundService constructor gets you rejected — textbook captive dependency; IServiceScopeFactory is the expected answer.",
+    "One scope for the entire worker lifetime — same bug as captive dependency, DbContext never resets.",
+    "Strong answer: 'Singleton worker, scoped work via CreateAsyncScope per unit. PeriodicTimer not Thread.Sleep. stoppingToken for K8s SIGTERM. Outbox dispatcher is the canonical example. NestJS uses ModuleRef.resolve for same pattern.'"
+  ],
+  "introducedIn": "ASP.NET Core 2.1 (IHostedService); BackgroundService in ASP.NET Core 3.0",
+  "relatedTopicIds": [
+    "dotnet-05-iservicescopefactory",
+    "dotnet-05-captive-dependency-trap",
+    "dotnet-05-service-lifetimes",
+    "dotnet-12-outbox-pattern",
+    "dotnet-12-channels-and-queues",
+    "dotnet-09-dbcontext-lifetime"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS @Cron with ModuleRef.resolve",
+      "note": "NestJS cron jobs are singleton providers. Resolving REQUEST-scoped PrismaService requires ModuleRef.resolve per execution — identical to IServiceScopeFactory.CreateScope in BackgroundService.",
+      "futureTopicSlug": "typescript/nestjs/background-jobs"
+    },
+    {
+      "language": "javascript",
+      "concept": "Bull/BullMQ worker in same Node process",
+      "note": "Express apps often run Bull workers in the same process as the HTTP server — same co-hosting tradeoff as BackgroundService. Heavy jobs should move to a dedicated worker container.",
+      "futureTopicSlug": "javascript/node/background-workers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Background tasks with hosted services",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services"
+    },
+    {
+      "title": "Use scoped services within a BackgroundService",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services#consuming-a-scoped-service-in-a-background-service"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

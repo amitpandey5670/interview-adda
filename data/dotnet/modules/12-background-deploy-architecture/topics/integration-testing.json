@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-12-integration-testing",
+  "slug": "integration-testing",
+  "title": "Integration testing (WebApplicationFactory, TestServer)",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 4,
+  "hook": "Unit tests mock everything and miss wiring bugs — wrong middleware order, missing DI registration, broken database queries. WebApplicationFactory boots your real ASP.NET Core application in memory with TestServer so integration tests hit actual HTTP endpoints against a test database.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "WebApplicationFactory<TEntryPoint> is a test harness from Microsoft.AspNetCore.Mvc.Testing that creates an in-memory TestServer hosting your application. It uses the same Program.cs startup, middleware pipeline, and dependency injection as production — but lets you override services (swap SQL Server for SQLite or Testcontainers PostgreSQL, replace IAmazonSQS with a fake). Tests send HttpClient requests to the in-memory server without network I/O."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "WebApplicationFactory",
+              "longForm": "WebApplicationFactory<TEntryPoint>",
+              "plainDefinition": "Test class that boots the full ASP.NET Core app for integration tests.",
+              "example": "public class ApiTests : IClassFixture<CustomWebApplicationFactory>"
+            },
+            {
+              "term": "TestServer",
+              "longForm": "TestServer",
+              "plainDefinition": "In-memory HTTP server that routes requests through the real middleware pipeline.",
+              "example": "factory.CreateClient() returns HttpClient wired to TestServer"
+            },
+            {
+              "term": "IClassFixture",
+              "longForm": "IClassFixture (xUnit)",
+              "plainDefinition": "xUnit fixture that shares one factory instance across tests in a class — expensive startup once.",
+              "example": "IClassFixture<CustomWebApplicationFactory>"
+            },
+            {
+              "term": "ConfigureTestServices",
+              "longForm": "ConfigureTestServices",
+              "plainDefinition": "Override DI registrations after Program.cs — swap real services for test doubles.",
+              "example": "services.AddScoped<IEventPublisher, FakeEventPublisher>();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior engineers prove production readiness with integration tests: POST /orders creates DB row and outbox message, auth middleware returns 401 without token, optimistic concurrency returns 409. WebApplicationFactory catches bugs unit tests miss — forgotten AddHostedService registration still runs in tests (often undesirable, so disable background workers in test config). This is a top Reddit r/dotnet and LeetCode system design follow-up after discussing outbox and BackgroundService."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Test pyramid balance",
+          "body": "Many fast unit tests for business logic. Fewer integration tests for HTTP + DB + auth wiring. Even fewer end-to-end tests against deployed environments. WebApplicationFactory sits in the integration layer."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Integration test setup",
+          "items": [
+            {
+              "title": "Create custom factory",
+              "body": "Subclass WebApplicationFactory<Program>, override ConfigureWebHost."
+            },
+            {
+              "title": "Override configuration",
+              "body": "Use test connection string, disable external services, set environment to Testing."
+            },
+            {
+              "title": "Swap services",
+              "body": "ConfigureTestServices: fake SQS publisher, in-memory cache, disable BackgroundService if needed."
+            },
+            {
+              "title": "Send HTTP requests",
+              "body": "CreateClient(), POST/GET endpoints, assert status code and response body."
+            },
+            {
+              "title": "Assert database state",
+              "body": "Resolve AppDbContext from factory.Services, query directly to verify side effects."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "WebApplicationFactory test architecture",
+            "source": "flowchart TD\n  Test[xUnit test] --> Client[HttpClient]\n  Client --> TS[TestServer in-memory]\n  TS --> Pipeline[Real middleware pipeline]\n  Pipeline --> EP[Endpoints]\n  EP --> DB[(Test database)]\n  Factory[WebApplicationFactory] --> TS\n  Factory -->|ConfigureTestServices| Fake[Fake IEventPublisher]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom WebApplicationFactory",
+            "code": "public sealed class CustomWebApplicationFactory : WebApplicationFactory<Program>\n{\n    protected override void ConfigureWebHost(IWebHostBuilder builder)\n    {\n        builder.UseEnvironment(\"Testing\");\n\n        builder.ConfigureAppConfiguration((ctx, config) =>\n        {\n            config.AddInMemoryCollection(new Dictionary<string, string?>\n            {\n                [\"ConnectionStrings:Default\"] = \"Host=localhost;Database=orders_test;...\"\n            });\n        });\n\n        builder.ConfigureTestServices(services =>\n        {\n            services.AddSingleton<IEventPublisher, FakeEventPublisher>();\n            // Optionally remove hosted services that poll in background\n            services.RemoveAll(typeof(IHostedService));\n        });\n    }\n}",
+            "explanation": "Testing environment isolates config. ConfigureTestServices runs after Program.cs registrations — last registration wins for same interface if using Replace pattern. RemoveAll IHostedService prevents outbox dispatcher racing in tests."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Integration test with database assertion",
+            "code": "public class OrderApiTests(CustomWebApplicationFactory factory) : IClassFixture<CustomWebApplicationFactory>\n{\n    [Fact]\n    public async Task PostOrder_creates_order_and_outbox_row()\n    {\n        var client = factory.CreateClient();\n\n        var response = await client.PostAsJsonAsync(\"/orders\", new { customerId = \"cust-1\" });\n\n        response.StatusCode.Should().Be(HttpStatusCode.Created);\n        var body = await response.Content.ReadFromJsonAsync<CreateOrderResponse>();\n\n        await using var scope = factory.Services.CreateAsyncScope();\n        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n\n        var order = await db.Orders.FindAsync(body!.OrderId);\n        order.Should().NotBeNull();\n\n        var outbox = await db.OutboxMessages\n            .FirstOrDefaultAsync(m => m.Payload.Contains(body.OrderId.ToString()));\n        outbox.Should().NotBeNull();\n        outbox!.ProcessedAt.Should().BeNull();\n    }\n}",
+            "explanation": "HttpClient exercises real endpoint. factory.Services resolves same DI container as the app. Assert both HTTP response and database side effects including outbox row."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Auth integration test with JWT",
+            "code": "[Fact]\npublic async Task GetOrders_without_token_returns_401()\n{\n    var client = factory.CreateClient();\n    var response = await client.GetAsync(\"/orders\");\n    response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);\n}\n\n[Fact]\npublic async Task GetOrders_with_valid_token_returns_200()\n{\n    var client = factory.CreateClient();\n    var token = TestJwtHelper.CreateToken(userId: \"user-1\", roles: [\"Admin\"]);\n    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(\"Bearer\", token);\n\n    var response = await client.GetAsync(\"/orders\");\n    response.StatusCode.Should().Be(HttpStatusCode.OK);\n}",
+            "explanation": "Integration tests verify auth middleware wiring — not just handler logic. TestJwtHelper signs a token with the same key configured in test appsettings."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Testcontainers PostgreSQL for realistic DB",
+            "code": "public sealed class PostgresWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime\n{\n    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder().Build();\n\n    public async Task InitializeAsync()\n    {\n        await _postgres.StartAsync();\n        await using var scope = Services.CreateAsyncScope();\n        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();\n        await db.Database.MigrateAsync();\n    }\n\n    protected override void ConfigureWebHost(IWebHostBuilder builder)\n    {\n        builder.ConfigureAppConfiguration((_, config) =>\n        {\n            config.AddInMemoryCollection(new Dictionary<string, string?>\n            {\n                [\"ConnectionStrings:Default\"] = _postgres.GetConnectionString()\n            });\n        });\n    }\n\n    public async Task DisposeAsync() => await _postgres.DisposeAsync();\n}",
+            "explanation": "Testcontainers spins real PostgreSQL in Docker — catches provider-specific SQL issues SQLite misses. IAsyncLifetime starts container before tests run."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Integration testing across stacks",
+          "headers": ["Concern", "ASP.NET Core", "NestJS / Express"],
+          "rows": [
+            ["In-memory server", "WebApplicationFactory + TestServer", "supertest against app.getHttpServer()"],
+            ["Override DI", "ConfigureTestServices", "app.overrideProvider().useValue()"],
+            ["Test database", "SQLite / Testcontainers PostgreSQL", "Testcontainers + Prisma migrate"],
+            ["Auth testing", "Bearer token in DefaultRequestHeaders", "supertest.set('Authorization', 'Bearer ...')"],
+            ["Parallel safety", "Unique DB per test class or collection", "Separate schema or transaction rollback"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Sharing mutable database state across parallel tests without isolation. Leaving BackgroundService running — flaky tests from background polling. Not calling MigrateAsync or EnsureCreated on test database. Testing against production connection string. Forgetting to expose Program class as partial for top-level statements (InternalsVisibleTo or public partial class Program)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: CI pipeline runs integration tests on every PR with Testcontainers — same Dockerfile base image as prod. Test outbox end-to-end: POST order, manually invoke OutboxDispatcher method or use fake publisher and assert FakeEventPublisher.Messages count. Performance: WebApplicationFactory startup is slow — use IClassFixture to amortize, ICollectionFixture for shared Postgres container. Flaky test diagnosis: parallel xUnit collections, disable hosted services, use Respawn library to reset DB between tests."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Testing strategy tradeoffs",
+          "headers": ["Approach", "Speed", "Fidelity"],
+          "rows": [
+            ["Unit tests with mocks", "Fastest", "Low — misses wiring"],
+            ["WebApplicationFactory + SQLite", "Fast", "Medium — SQL dialect gaps"],
+            ["WebApplicationFactory + Testcontainers", "Slower", "High — real PostgreSQL"],
+            ["Deployed E2E (Playwright + API)", "Slowest", "Highest — full stack"],
+            ["Contract tests (Pact)", "Medium", "Cross-service API shape"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Only mentioning unit tests for API projects. Not knowing WebApplicationFactory exists. Unable to explain how to test outbox pattern or auth middleware. Saying integration tests hit a deployed server only — missing in-memory TestServer option."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "WebApplicationFactory boots the real app pipeline in-memory via TestServer — catches DI and middleware wiring bugs.",
+    "ConfigureTestServices swaps real services for fakes; remove IHostedService to prevent flaky background polling in tests.",
+    "Production tip: Testcontainers PostgreSQL in CI; IClassFixture amortizes factory startup; Respawn resets DB between tests.",
+    "60s: Subclass WebApplicationFactory, override ConfigureWebHost, test connection string, fake IEventPublisher. CreateClient POST endpoint. Assert status and DB state via factory.Services scope. Testcontainers for real SQL.",
+    "Follow-up: how do you test BackgroundService and outbox dispatcher without waiting for poll interval?"
+  ],
+  "commonPitfalls": [
+    "Only unit tests with mocked DbContext gets you rejected for API roles — WebApplicationFactory is expected.",
+    "BackgroundService running during tests — flaky failures from race with assertions.",
+    "Strong answer: 'WebApplicationFactory + TestServer for HTTP integration. ConfigureTestServices for fake SQS. Testcontainers Postgres in CI. Assert outbox row after POST. Remove hosted services or invoke dispatcher directly. NestJS supertest is the JS equivalent.'"
+  ],
+  "introducedIn": "Microsoft.AspNetCore.Mvc.Testing since ASP.NET Core 2.1",
+  "relatedTopicIds": [
+    "dotnet-12-outbox-pattern",
+    "dotnet-12-ihostedservice-background",
+    "dotnet-07-jwt-bearer-flow",
+    "dotnet-09-ef-core-basics",
+    "dotnet-04-middleware-order"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS supertest e2e tests",
+      "note": "TestingModule.createNestApplication() + supertest mirrors WebApplicationFactory — boots real module graph, override providers, send HTTP without network. Same integration layer in the test pyramid.",
+      "futureTopicSlug": "typescript/nestjs/e2e-testing"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express supertest with test database",
+      "note": "app = express(); supertest(app).post('/orders') tests HTTP layer. Testcontainers postgres + node-pg-migrate matches Testcontainers + EF MigrateAsync pattern.",
+      "futureTopicSlug": "javascript/express/integration-testing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Integration tests in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/test/integration-tests"
+    },
+    {
+      "title": "WebApplicationFactory<TEntryPoint>",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.mvc.testing.webapplicationfactory-1"
+    }
+  ],
+  "animationHint": "flow"
+}

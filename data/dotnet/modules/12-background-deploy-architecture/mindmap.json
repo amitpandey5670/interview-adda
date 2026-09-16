@@ -1,0 +1,66 @@
+{
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "title": "Background, deployment, and architecture — concept map",
+  "intro": "This module covers production-grade patterns for ASP.NET Core Web APIs: long-running BackgroundService workers with scoped DbContext via IServiceScopeFactory, in-process Channels and Amazon SQS queues, the transactional outbox pattern for reliable messaging, WebApplicationFactory integration tests, Docker multi-stage deployment with Kubernetes health probes, Clean Architecture layering, and gRPC versus REST tradeoffs for internal versus public APIs.",
+  "overviewDiagram": {
+    "type": "mermaid",
+    "title": "Module 12 production architecture flow",
+    "source": "flowchart TD\n  Client[HTTP Client] -->|POST /orders REST| API[Web API Presentation]\n  API --> App[Application Handler]\n  App --> DB[(PostgreSQL\\nOrder + Outbox same transaction)]\n  API -->|202 optional| SQS[SQS queue]\n  BG[BackgroundService\\nOutboxDispatcher] -->|poll outbox| DB\n  BG -->|IServiceScopeFactory per batch| Scope[Scoped DbContext]\n  BG -->|SendMessage| SQS\n  CH[Channel consumer] -->|in-process| BG\n  Test[WebApplicationFactory] -->|TestServer| API\n  Docker[Docker multi-stage] --> K8s[Kubernetes\\nliveness + readiness]\n  Internal[Internal services] -->|gRPC HTTP2| API\n  Public[Public clients] -->|REST JSON| API"
+  },
+  "conceptCards": [
+    {
+      "id": "card-hosted",
+      "title": "IHostedService / BackgroundService",
+      "summary": "Long-running workers co-hosted with API. Singleton — inject IServiceScopeFactory not DbContext. stoppingToken for graceful shutdown.",
+      "example": "AddHostedService<OutboxDispatcher>()",
+      "topicSlug": "ihostedservice-background"
+    },
+    {
+      "id": "card-channels",
+      "title": "Channels and SQS",
+      "summary": "Channel<T> for in-process async queues with backpressure. SQS for durable at-least-once cross-service messaging. Idempotent consumers required.",
+      "example": "BoundedChannelFullMode.Wait + DeleteMessage on success",
+      "topicSlug": "channels-and-queues"
+    },
+    {
+      "id": "card-outbox",
+      "title": "Outbox pattern",
+      "summary": "Domain + outbox row in one DB transaction. Dispatcher publishes to SQS. Solves dual-write. Duplicates ok, lost events not.",
+      "example": "OutboxMessages table + OutboxDispatcher BackgroundService",
+      "topicSlug": "outbox-pattern"
+    },
+    {
+      "id": "card-integration",
+      "title": "Integration testing",
+      "summary": "WebApplicationFactory boots real pipeline in TestServer. ConfigureTestServices for fakes. Testcontainers for real PostgreSQL.",
+      "example": "factory.CreateClient() + assert outbox row in DB",
+      "topicSlug": "integration-testing"
+    },
+    {
+      "id": "card-docker",
+      "title": "Docker deployment",
+      "summary": "Multi-stage: SDK build, aspnet runtime. /health/live vs /health/ready. K8s probes. Graceful shutdown for workers.",
+      "example": "USER $APP_UID, ASPNETCORE_URLS=http://+:8080",
+      "topicSlug": "docker-deployment"
+    },
+    {
+      "id": "card-clean",
+      "title": "Clean Architecture",
+      "summary": "Domain → Application → Infrastructure → Presentation. Dependency rule: inward only. MediatR handlers + port interfaces.",
+      "example": "IOrderRepository in Application, EfOrderRepository in Infrastructure",
+      "topicSlug": "clean-architecture-apis"
+    },
+    {
+      "id": "card-grpc",
+      "title": "gRPC vs REST",
+      "summary": "REST JSON public and browser. gRPC protobuf internal HTTP/2. BFF hybrid. Shared Application layer behind both.",
+      "example": "MapControllers + MapGrpcService<OrderGrpcService>",
+      "topicSlug": "grpc-vs-rest"
+    }
+  ],
+  "revisionDiagram": {
+    "type": "mermaid",
+    "title": "Module 12 revision mind map",
+    "source": "mindmap\n  root((Module 12 Advanced))\n    BackgroundService\n      IHostedService lifecycle\n      ExecuteAsync loop\n      IServiceScopeFactory per work item\n      stoppingToken graceful shutdown\n      Never inject DbContext directly\n    Channels SQS\n      Bounded channel backpressure\n      SQS at-least-once delivery\n      Visibility timeout\n      DeleteMessage on success\n      DLQ poison messages\n      Idempotent consumers\n    Outbox Pattern\n      Dual-write problem\n      Same transaction domain plus outbox\n      Dispatcher polls publishes\n      Publish before mark processed\n      Outbox lag metric\n      CDC Debezium alternative\n    Integration Testing\n      WebApplicationFactory TestServer\n      ConfigureTestServices fakes\n      Remove IHostedService in tests\n      Testcontainers PostgreSQL\n      Assert DB plus outbox row\n    Docker Deploy\n      Multi-stage SDK to aspnet\n      Liveness vs readiness probes\n      AddDbContextCheck ready tag\n      Non-root USER\n      ShutdownTimeout workers\n    Clean Architecture\n      Dependency rule inward\n      Domain Application Infra Api\n      MediatR handlers ports\n      NetArchTest CI enforcement\n      Vertical slice alternative\n    gRPC vs REST\n      REST public OpenAPI\n      gRPC internal HTTP2 protobuf\n      Browser needs grpc-web\n      BFF hybrid pattern\n      Shared Application handlers"
+  }
+}

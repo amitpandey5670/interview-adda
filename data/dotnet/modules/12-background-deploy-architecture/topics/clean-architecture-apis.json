@@ -1,0 +1,243 @@
+{
+  "id": "dotnet-12-clean-architecture-apis",
+  "slug": "clean-architecture-apis",
+  "title": "Clean Architecture for Web APIs (layers and dependency rule)",
+  "moduleId": "dotnet-12-background-deploy-architecture",
+  "order": 6,
+  "hook": "A Web API that puts SQL queries inside controllers becomes impossible to test and painful to change. Clean Architecture organizes code into layers — Domain, Application, Infrastructure, Presentation — with a strict dependency rule: inner layers never reference outer layers.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Clean Architecture (popularized by Robert C. Martin) separates business rules from frameworks and databases. For ASP.NET Core Web APIs: Domain holds entities and value objects with zero framework references. Application holds use cases (commands/queries), interfaces for repositories and messaging, and DTOs. Infrastructure implements EF Core DbContext, SQS publishers, email senders. Presentation is controllers or minimal API endpoints that call Application services. Dependencies point inward — Infrastructure references Application, never the reverse."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Dependency rule",
+              "longForm": "Clean Architecture dependency rule",
+              "plainDefinition": "Source code dependencies only point inward — Domain has no outward dependencies.",
+              "example": "Application defines IOrderRepository; Infrastructure implements it"
+            },
+            {
+              "term": "Domain layer",
+              "longForm": "Domain layer",
+              "plainDefinition": "Entities, value objects, domain events, business invariants — pure C#.",
+              "example": "public class Order { public void Ship() { ... } }"
+            },
+            {
+              "term": "Application layer",
+              "longForm": "Application layer",
+              "plainDefinition": "Use cases orchestrating domain logic; defines ports (interfaces) for infrastructure.",
+              "example": "PlaceOrderHandler : IRequestHandler<PlaceOrderCommand, OrderDto>"
+            },
+            {
+              "term": "Infrastructure layer",
+              "longForm": "Infrastructure layer",
+              "plainDefinition": "EF Core, SQS, external HTTP clients — framework and IO implementations.",
+              "example": "EfOrderRepository : IOrderRepository"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior interviews at product companies ask how you structure a microservice for testability and team scaling. Clean Architecture lets you unit test PlaceOrderHandler with a fake IOrderRepository without spinning up a database. It prevents EF Core entities leaking into every layer. The tradeoff is more projects and interfaces — overkill for a prototype, essential for long-lived APIs with multiple developers."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Pragmatic Clean Architecture",
+          "body": "You do not need 10 projects on day one. Start with Domain + Application + Infrastructure + Api folders in one solution. Add MediatR for command/query dispatch. Extract projects when boundaries stabilize."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request flow through layers",
+          "items": [
+            {
+              "title": "HTTP request hits Presentation",
+              "body": "Controller or minimal API endpoint receives POST /orders."
+            },
+            {
+              "title": "Dispatch to Application",
+              "body": "Endpoint sends PlaceOrderCommand via MediatR to PlaceOrderHandler."
+            },
+            {
+              "title": "Domain logic executes",
+              "body": "Handler loads Order via IOrderRepository, calls domain methods, enforces invariants."
+            },
+            {
+              "title": "Infrastructure persists",
+              "body": "EfOrderRepository saves via DbContext; OutboxMessage written in same transaction."
+            },
+            {
+              "title": "Response returns",
+              "body": "Handler returns OrderDto mapped from domain entity — no EF entity in HTTP response."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Clean Architecture layers",
+            "source": "flowchart TB\n  subgraph outer [Presentation - Api]\n    CTRL[Controllers / Minimal APIs]\n  end\n  subgraph infra [Infrastructure]\n    EF[EF Core DbContext]\n    SQS[SQS Publisher]\n  end\n  subgraph app [Application]\n    H[Handlers / Use Cases]\n    PORTS[IOrderRepository IEventPublisher]\n  end\n  subgraph dom [Domain]\n    ENT[Order Entity ValueObjects]\n  end\n  CTRL --> H\n  H --> ENT\n  H --> PORTS\n  EF -.implements.-> PORTS\n  SQS -.implements.-> PORTS\n  infra --> app\n  app --> dom"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Domain entity with business logic",
+            "code": "// OrderApi.Domain — no ASP.NET or EF references\nnamespace OrderApi.Domain.Orders;\n\npublic sealed class Order\n{\n    public Guid Id { get; private set; }\n    public string CustomerId { get; private set; } = \"\";\n    public OrderStatus Status { get; private set; }\n\n    public static Order Create(string customerId)\n    {\n        if (string.IsNullOrWhiteSpace(customerId))\n            throw new DomainException(\"CustomerId required\");\n        return new Order { Id = Guid.NewGuid(), CustomerId = customerId, Status = OrderStatus.Pending };\n    }\n\n    public void Ship()\n    {\n        if (Status != OrderStatus.Paid)\n            throw new DomainException(\"Cannot ship unpaid order\");\n        Status = OrderStatus.Shipped;\n    }\n}",
+            "explanation": "Domain encapsulates invariants. No data annotations, no EF attributes — pure business rules testable without any framework."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Application handler and port interface",
+            "code": "// OrderApi.Application\npublic sealed record PlaceOrderCommand(string CustomerId) : IRequest<OrderDto>;\n\npublic interface IOrderRepository\n{\n    Task AddAsync(Order order, CancellationToken ct);\n    Task SaveChangesAsync(CancellationToken ct);\n}\n\npublic sealed class PlaceOrderHandler(IOrderRepository repo) : IRequestHandler<PlaceOrderCommand, OrderDto>\n{\n    public async Task<OrderDto> Handle(PlaceOrderCommand cmd, CancellationToken ct)\n    {\n        var order = Order.Create(cmd.CustomerId);\n        await repo.AddAsync(order, ct);\n        await repo.SaveChangesAsync(ct);\n        return new OrderDto(order.Id, order.CustomerId, order.Status.ToString());\n    }\n}",
+            "explanation": "Application defines the port (IOrderRepository) and use case (handler). Depends on Domain only. Infrastructure will implement IOrderRepository."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Infrastructure EF implementation and API endpoint",
+            "code": "// OrderApi.Infrastructure\npublic sealed class EfOrderRepository(AppDbContext db) : IOrderRepository\n{\n    public Task AddAsync(Order order, CancellationToken ct)\n    {\n        db.Orders.Add(OrderMapper.ToPersistence(order));\n        return Task.CompletedTask;\n    }\n    public Task SaveChangesAsync(CancellationToken ct) => db.SaveChangesAsync(ct);\n}\n\n// OrderApi.Api — Presentation\napp.MapPost(\"/orders\", async (PlaceOrderCommand cmd, ISender mediator, CancellationToken ct) =>\n{\n    var result = await mediator.Send(cmd, ct);\n    return Results.Created($\"/orders/{result.Id}\", result);\n});\n\n// Program.cs DI wiring\nbuilder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(PlaceOrderCommand).Assembly));\nbuilder.Services.AddScoped<IOrderRepository, EfOrderRepository>();",
+            "explanation": "Infrastructure implements port with EF. API is thin — dispatches command, returns result. DI registration in Presentation/Infrastructure project."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Unit test Application without database",
+            "code": "public class PlaceOrderHandlerTests\n{\n    [Fact]\n    public async Task Handle_creates_order()\n    {\n        var repo = new FakeOrderRepository();\n        var handler = new PlaceOrderHandler(repo);\n\n        var result = await handler.Handle(new PlaceOrderCommand(\"cust-1\"), CancellationToken.None);\n\n        result.CustomerId.Should().Be(\"cust-1\");\n        repo.Orders.Should().HaveCount(1);\n        repo.Orders[0].Status.Should().Be(OrderStatus.Pending);\n    }\n}\n\nfile sealed class FakeOrderRepository : IOrderRepository\n{\n    public List<Order> Orders { get; } = [];\n    public Task AddAsync(Order order, CancellationToken ct) { Orders.Add(order); return Task.CompletedTask; }\n    public Task SaveChangesAsync(CancellationToken ct) => Task.CompletedTask;\n}",
+            "explanation": "Application layer unit tests use fake repositories — fast, no WebApplicationFactory needed. Integration tests still verify EF wiring separately."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Layered architecture across stacks",
+          "headers": ["Layer", "ASP.NET Core Clean Architecture", "NestJS"],
+          "rows": [
+            ["Domain", "Pure C# entities", "Domain entities (no @Injectable)"],
+            ["Application", "MediatR handlers + interfaces", "Use cases / application services"],
+            ["Infrastructure", "EF Core, SQS implementations", "TypeORM/Prisma repositories"],
+            ["Presentation", "Controllers / minimal APIs", "Controllers with DTOs"],
+            ["Dependency rule", "Infrastructure → Application → Domain", "Infrastructure module imports Application module"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Anemic domain model — entities are DTO bags, all logic in handlers. EF entities used as domain entities — persistence concerns leak into Domain. Application referencing Infrastructure — breaks dependency rule. Over-abstracting with IRepository<T> for every entity when DbContext suffices. Clean Architecture ceremony on a 3-endpoint CRUD API."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application project has zero PackageReference to Microsoft.EntityFrameworkCore — enforce with architecture tests (NetArchTest.Rules). Code review rejects DbContext in controllers. Team ownership: Domain+Application owned by feature team, Infrastructure shared platform team. MediatR pipeline behaviors for logging, validation, transactions wrap handlers consistently. When to bend the rule: read-heavy reporting endpoints may query DbContext directly in Infrastructure query services — document the exception."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Architecture tradeoffs",
+          "headers": ["Approach", "Testability", "Complexity"],
+          "rows": [
+            ["Clean Architecture + MediatR", "High — fake ports", "Medium-high"],
+            ["Vertical slice architecture", "High per feature", "Lower ceremony"],
+            ["Direct DbContext in controllers", "Low", "Lowest — fine for prototypes"],
+            ["CQRS + Event Sourcing", "High", "Highest — event store infra"],
+            ["Repository over DbContext", "Medium", "Often unnecessary abstraction"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain the dependency rule or draw layer diagram. Saying Clean Architecture means 'use a repository for everything'. Application layer referencing EF Core types. Unable to contrast with vertical slice or when to skip layers for a small API."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Dependency rule: dependencies point inward — Domain has zero framework references.",
+    "Application defines ports (interfaces); Infrastructure implements them — enables unit testing handlers with fakes.",
+    "Production tip: NetArchTest enforces layer rules in CI; MediatR behaviors for cross-cutting concerns.",
+    "60s: Domain entities with business logic. Application handlers + IOrderRepository interface. Infrastructure EF implementation. Thin API dispatches MediatR command. Dependencies: Infra → App → Domain only.",
+    "Follow-up: Clean Architecture vs vertical slice — when would you choose each?"
+  ],
+  "commonPitfalls": [
+    "Cannot state dependency rule gets you rejected — inner layers never depend on outer layers.",
+    "IRepository<T> for everything without justification — over-abstraction red flag.",
+    "Strong answer: 'Domain pure C#. Application use cases + ports. Infrastructure EF/SQS. API thin. Test handlers with fake repo. NetArchTest in CI. Vertical slices for smaller teams. Repository only when swapping persistence.'"
+  ],
+  "introducedIn": "Pattern by Robert C. Martin; common in .NET since ~2018 with MediatR adoption",
+  "relatedTopicIds": [
+    "dotnet-09-repository-vs-direct-dbcontext",
+    "dotnet-12-outbox-pattern",
+    "dotnet-05-di-fundamentals",
+    "dotnet-03-controllers-vs-minimal-apis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "NestJS modular layered architecture",
+      "note": "NestJS modules enforce boundaries: DomainModule exports entities, ApplicationModule imports Domain, InfrastructureModule provides TypeORM repositories implementing application ports — same dependency inversion.",
+      "futureTopicSlug": "typescript/nestjs/clean-architecture"
+    },
+    {
+      "language": "javascript",
+      "concept": "Express route → service → repository",
+      "note": "Express apps often use routes → services → repositories folder structure — informal Clean Architecture. Missing enforcement means routes import pg directly — equivalent to DbContext in controllers anti-pattern.",
+      "futureTopicSlug": "javascript/express/layered-architecture"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Common web application architectures",
+      "url": "https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures"
+    },
+    {
+      "title": "Clean Architecture (Robert C. Martin)",
+      "url": "https://blog.cleancoder.com/uncle-bob/2012/08/13/the-clean-architecture.html"
+    }
+  ],
+  "animationHint": "flow"
+}
