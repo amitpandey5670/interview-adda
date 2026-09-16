@@ -1,0 +1,239 @@
+{
+  "id": "dotnet-08-endpoint-filters",
+  "slug": "endpoint-filters",
+  "title": "Endpoint filters in minimal APIs (IEndpointFilter)",
+  "moduleId": "dotnet-08-validation-filters-problems",
+  "order": 4,
+  "hook": "Endpoint filters are the minimal API equivalent of action filters — they wrap route handlers with validation, logging, and authorization checks using the same IEndpointFilter interface introduced in .NET 7.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IEndpointFilter defines InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next) — code before await next(context) runs before the route handler; code after runs after. Filters attach with AddEndpointFilter<T>() on individual routes, on RouteGroupBuilder for a group, or globally via AddEndpointFilter on MapGroup. EndpointFilterInvocationContext exposes HttpContext, Arguments (bound parameters), and the endpoint metadata. This is where minimal APIs get FluentValidation, custom 400 responses, and audit logging without switching to controllers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IEndpointFilter",
+              "longForm": "IEndpointFilter interface",
+              "plainDefinition": "Minimal API filter interface; InvokeAsync wraps the route delegate.",
+              "example": "public async ValueTask<object?> InvokeAsync(...)"
+            },
+            {
+              "term": "EndpointFilterDelegate",
+              "longForm": "EndpointFilterDelegate",
+              "plainDefinition": "The next filter or final route handler in the chain — await next(context) to continue.",
+              "example": "return await next(context);"
+            },
+            {
+              "term": "RouteGroupBuilder",
+              "longForm": "RouteGroupBuilder",
+              "plainDefinition": "Groups routes under a prefix and shared filters, OpenAPI tags, and authorization.",
+              "example": "var api = app.MapGroup(\"/api/v1\").AddEndpointFilter<AuditFilter>();"
+            },
+            {
+              "term": "AddEndpointFilterFactory",
+              "longForm": "AddEndpointFilterFactory",
+              "plainDefinition": "Registers a filter factory for parameterized or conditional filter instances.",
+              "example": "builder.AddEndpointFilterFactory((ctx, next) => new LoggingFilter(next));"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Minimal APIs are first-class in modern ASP.NET Core — skipping endpoint filters means duplicating validation in every MapPost lambda or abandoning minimal APIs for controllers. Endpoint filters see bound arguments after model binding equivalent, making them the correct layer for validation in minimal APIs. Senior interviews specifically ask how validation works in minimal APIs and how endpoint filters differ from middleware."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Validation in minimal APIs",
+          "body": "There is no [ApiController] automatic ModelState 400. Use an IEndpointFilter with IValidator<T> or Validator.TryValidateObject, returning Results.ValidationProblem(errors) before await next()."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Endpoint filter chain",
+          "items": [
+            {
+              "title": "Routing selects minimal API endpoint",
+              "body": "Parameter binding runs — body, route, query, services from DI."
+            },
+            {
+              "title": "Outermost endpoint filter runs",
+              "body": "First registered filter's code before await next executes."
+            },
+            {
+              "title": "Inner filters and handler",
+              "body": "Each filter calls next until the route delegate executes."
+            },
+            {
+              "title": "Return value becomes HTTP response",
+              "body": "IResult, Results.*, or typed return serialized — filter can replace return value."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Endpoint filter onion",
+            "source": "flowchart TD\n  MW[Middleware pipeline] --> RT[Routing]\n  RT --> EF1[Endpoint Filter 1]\n  EF1 --> EF2[Endpoint Filter 2]\n  EF2 --> Handler[Route Handler]\n  Handler --> EF2o[Filter 2 after]\n  EF2o --> EF1o[Filter 1 after]\n  EF1o --> Resp[HTTP Response]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Validation endpoint filter for minimal APIs",
+            "code": "public sealed class ValidationFilter<T>(IValidator<T> validator) : IEndpointFilter\n{\n    public async ValueTask<object?> InvokeAsync(\n        EndpointFilterInvocationContext context, EndpointFilterDelegate next)\n    {\n        var arg = context.Arguments.OfType<T>().FirstOrDefault();\n        if (arg is null)\n            return Results.BadRequest(new ProblemDetails { Title = \"Missing request body.\" });\n\n        var result = await validator.ValidateAsync(arg, context.HttpContext.RequestAborted);\n        if (!result.IsValid)\n        {\n            var errors = result.Errors.GroupBy(e => e.PropertyName)\n                .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());\n            return Results.ValidationProblem(errors);\n        }\n        return await next(context);\n    }\n}",
+            "explanation": "Arguments holds bound parameters after model binding. Returning IResult short-circuits without calling the handler."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Route group with shared filters",
+            "code": "var api = app.MapGroup(\"/api/products\")\n    .AddEndpointFilter<CorrelationIdFilter>()\n    .AddEndpointFilter<ValidationFilter<CreateProductRequest>>()\n    .RequireAuthorization();\n\napi.MapPost(\"/\", (CreateProductRequest req, ProductService svc) =>\n    Results.Created($\"/api/products/1\", req));\n\napi.MapGet(\"/{id:int}\", (int id, ProductService svc) =>\n    Results.Ok(svc.Get(id)));",
+            "explanation": "Group-level filters apply to every route in the group. RequireAuthorization adds endpoint metadata like [Authorize]."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Data annotations without FluentValidation",
+            "code": "public sealed class DataAnnotationsFilter<T> : IEndpointFilter\n{\n    public ValueTask<object?> InvokeAsync(\n        EndpointFilterInvocationContext context, EndpointFilterDelegate next)\n    {\n        var model = context.Arguments.OfType<T>().FirstOrDefault();\n        if (model is null) return ValueTask.FromResult<object?>(Results.BadRequest());\n\n        var results = new List<ValidationResult>();\n        var ctx = new ValidationContext(model);\n        if (!Validator.TryValidateObject(model, ctx, results, true))\n        {\n            var errors = results.ToDictionary(\n                r => r.MemberNames.FirstOrDefault() ?? string.Empty,\n                r => new[] { r.ErrorMessage ?? \"Invalid.\" });\n            return ValueTask.FromResult<object?>(Results.ValidationProblem(errors));\n        }\n        return next(context);\n    }\n}",
+            "explanation": "Runs the same annotation pipeline as [ApiController] manually. Attach via .AddEndpointFilter<DataAnnotationsFilter<CreateUserRequest>>()."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Integration test — endpoint filter returns 400",
+            "code": "[Fact]\npublic async Task Minimal_api_validation_filter_blocks_invalid_body()\n{\n    await using var factory = new WebApplicationFactory<Program>();\n    var client = factory.CreateClient();\n    var response = await client.PostAsJsonAsync(\"/api/products\",\n        new { name = \"\", price = -1 });\n\n    Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);\n    Assert.Equal(\"application/problem+json\",\n        response.Content.Headers.ContentType?.MediaType);\n}",
+            "explanation": "Proves filter runs before handler. application/problem+json confirms ValidationProblem or ProblemDetails output."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Endpoint filters vs Express/Fastify hooks",
+          "headers": ["Aspect", "IEndpointFilter", "Express / Fastify"],
+          "rows": [
+            ["Attachment", "AddEndpointFilter / MapGroup", "preHandler hook per route or plugin"],
+            ["Arguments", "context.Arguments bound parameters", "req.body after parse middleware"],
+            ["Short-circuit", "return Results.* without next", "return res.status() without calling handler"],
+            ["Scope", "Per route, group, or factory", "app.use sub-router or route array"],
+            ["DI", "Constructor injection on filter class", "req.app.get('service') or awilix"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling await next() after already returning a result — only one exit path. Attaching validation filter to GET routes without body — arg is null, spurious 400. Using middleware for per-route validation when endpoint filter has bound args — middleware parses body twice or misses typed model. Forgetting RequireAuthorization on group when migrating from [Authorize] controllers."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: endpoint filters run after routing but inside the endpoint — OpenTelemetry can tag spans with route pattern from endpoint metadata. Filter order on MapGroup is registration order outside-in. For correlation ID in errors, read HttpContext.TraceIdentifier or custom header in filter and add to Problem Details extensions before returning ValidationProblem. .NET 8+ supports IEndpointFilter on both minimal APIs and can complement controller apps that mix both styles — maintain shared ValidationFilter<T> registered once. Avoid heavy work in filters on high-QPS GET routes — scope filters per verb via separate groups."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["IEndpointFilter", "Bound args; minimal API native", "Not shared with controller actions automatically"],
+            ["Middleware", "Global all endpoints", "No typed Arguments; runs before binding"],
+            ["Controller + [ApiController]", "Auto validation built-in", "More ceremony for small APIs"],
+            ["Source generator filters", "Convention-based attach", "Extra build complexity"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying minimal APIs have the same automatic validation as [ApiController] without filters. Unable to name IEndpointFilter or EndpointFilterInvocationContext. Using try/catch in every MapPost instead of global IExceptionHandler. Not knowing Results.ValidationProblem produces Problem Details shape."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IEndpointFilter wraps minimal API handlers; await next(context) invokes inner filters then the route delegate.",
+    "When not to use: transport concerns before routing — middleware; controller apps — action filters.",
+    "Production tip: attach ValidationFilter<T> on MapGroup; integration-test 400 + application/problem+json.",
+    "60s: Minimal APIs need endpoint filters for validation — no [ApiController] auto 400. InvokeAsync gets bound Arguments. MapGroup shares filters. Return Results.ValidationProblem to short-circuit. Pair with IExceptionHandler for unhandled throws.",
+    "Follow-up: how do you apply the same validator to controllers and minimal APIs?"
+  ],
+  "commonPitfalls": [
+    "Saying 'MapPost validates [Required] automatically' gets you rejected — explicit filter or Validator call required.",
+    "Global middleware reading body for validation — breaks model binding or doubles deserialization cost.",
+    "Strong answer: 'IEndpointFilter with IValidator<T> on MapGroup. Arguments has bound DTO. Results.ValidationProblem for 400. Share validator with FluentValidation. Global errors via IExceptionHandler, not per-route try/catch.'"
+  ],
+  "introducedIn": ".NET 7 — IEndpointFilter",
+  "relatedTopicIds": [
+    "dotnet-08-fluentvalidation",
+    "dotnet-08-action-filters",
+    "dotnet-08-problem-details",
+    "dotnet-03-controllers-vs-minimal-apis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Fastify preValidation hook",
+      "note": "Fastify preValidation runs after parsing with typed schema validation — closest to endpoint filter after binding. Invalid payload returns 400 before route handler like returning Results.ValidationProblem.",
+      "futureTopicSlug": "javascript/fastify/hooks"
+    },
+    {
+      "language": "typescript",
+      "concept": "tRPC middleware",
+      "note": "tRPC middleware wraps procedures with input validation (Zod) before the resolver — analogous to IEndpointFilter calling validator then next(). Both keep handlers free of validation boilerplate.",
+      "futureTopicSlug": "typescript/trpc/middleware"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Filters in Minimal API apps",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis/min-api-filters"
+    },
+    {
+      "title": "IEndpointFilter interface",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.http.iendpointfilter"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}
