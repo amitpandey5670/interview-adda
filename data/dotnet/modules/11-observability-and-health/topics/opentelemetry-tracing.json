@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-11-opentelemetry-tracing",
+  "slug": "opentelemetry-tracing",
+  "title": "OpenTelemetry tracing (Activity, spans, exporters)",
+  "moduleId": "dotnet-11-observability-and-health",
+  "order": 2,
+  "hook": "Distributed tracing records how long each step of a request took across your API, database, and downstream services. OpenTelemetry is the vendor-neutral standard that turns those timings into spans you can view in Jaeger, Grafana Tempo, or Application Insights.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OpenTelemetry (OTel) is a CNCF standard for collecting traces, metrics, and logs. In .NET, tracing builds on System.Diagnostics.Activity — each span represents a unit of work (HTTP request, database query, outbound HttpClient call) with a trace id shared across services and a parent span id linking children. ASP.NET Core instruments incoming requests automatically when you add OpenTelemetry. Exporters send spans to OTLP collectors, Azure Monitor, or Jaeger. W3C traceparent headers propagate context to downstream microservices so one user click becomes one connected flame graph."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Span",
+              "longForm": "Trace span",
+              "plainDefinition": "A timed operation with name, start/end, attributes (tags), and optional events — maps to Activity in .NET.",
+              "example": "GET /api/orders duration 45ms"
+            },
+            {
+              "term": "Trace",
+              "longForm": "Distributed trace",
+              "plainDefinition": "A tree of spans sharing the same trace id — root span is the entry HTTP request.",
+              "example": "trace_id: 4bf92f3577b34da6..."
+            },
+            {
+              "term": "OTLP",
+              "longForm": "OpenTelemetry Protocol",
+              "plainDefinition": "Standard wire format for exporting telemetry to collectors — gRPC or HTTP/protobuf.",
+              "example": "http://otel-collector:4317"
+            },
+            {
+              "term": "Activity",
+              "longForm": "System.Diagnostics.Activity",
+              "plainDefinition": ".NET runtime type backing OTel spans; ActivitySource creates custom spans.",
+              "example": "activitySource.StartActivity(\"ProcessPayment\")"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Logs tell you something failed; traces tell you where time was spent. A 2-second API response might be 50ms in your code and 1.9s waiting on a downstream inventory service — you will never see that from average response time alone. In microservice interviews, explaining trace propagation (traceparent header), parent-child span relationships, and sampling strategy separates seniors from juniors. Without OTel, each team picks a proprietary agent and cross-service debugging becomes impossible."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Three pillars of observability",
+          "body": "Metrics answer 'how much and how fast' (request rate, p95). Logs answer 'what happened' (structured events). Traces answer 'where did time go' (span waterfall). OpenTelemetry unifies all three with one SDK."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Distributed trace across two services",
+          "items": [
+            {
+              "title": "Gateway receives HTTP request",
+              "body": "ASP.NET Core instrumentation creates root span; extracts or generates traceparent."
+            },
+            {
+              "title": "Handler calls Inventory via HttpClient",
+              "body": "HttpClient instrumentation injects traceparent into outbound headers automatically."
+            },
+            {
+              "title": "Inventory service continues trace",
+              "body": "Incoming middleware reads traceparent, creates child span linked to same trace id."
+            },
+            {
+              "title": "Database span (optional)",
+              "body": "EF Core or Npgsql instrumentation adds grandchild span for SQL execution."
+            },
+            {
+              "title": "Exporter batches spans to collector",
+              "body": "OTLP exporter sends completed spans; backend renders flame graph by trace id."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Distributed tracing across microservices",
+            "source": "sequenceDiagram\n  participant Client\n  participant Orders as Orders API\n  participant Inventory as Inventory API\n  participant DB as PostgreSQL\n  Client->>Orders: GET /orders/1 traceparent\n  Note over Orders: Span Orders GET 120ms\n  Orders->>Inventory: GET /stock traceparent child\n  Note over Inventory: Span Inventory GET 80ms\n  Inventory->>DB: SELECT\n  Note over DB: Span SQL 60ms\n  Inventory-->>Orders: 200 JSON\n  Orders-->>Client: 200 JSON\n  Note over Client,DB: Same trace_id in all spans"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register OpenTelemetry tracing in Program.cs",
+            "code": "builder.Services.AddOpenTelemetry()\n    .ConfigureResource(r => r.AddService(\"orders-api\"))\n    .WithTracing(tracing => tracing\n        .AddAspNetCoreInstrumentation()\n        .AddHttpClientInstrumentation()\n        .AddEntityFrameworkCoreInstrumentation()\n        .AddSource(\"MyApp.Orders\") // custom ActivitySource name\n        .AddOtlpExporter(o =>\n        {\n            o.Endpoint = new Uri(builder.Configuration[\"Otlp:Endpoint\"]!);\n        }));\n\n// Optional: also export to Azure Monitor\n// .UseAzureMonitor()",
+            "explanation": "AddAspNetCoreInstrumentation creates spans per request. HttpClientInstrumentation propagates traceparent to downstream services. AddSource registers your custom ActivitySource. OTLP is the portable exporter."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom span with ActivitySource",
+            "code": "public class PaymentService\n{\n    private static readonly ActivitySource Source = new(\"MyApp.Orders\");\n\n    public async Task ChargeAsync(Guid orderId, decimal amount)\n    {\n        using var activity = Source.StartActivity(\"ChargePayment\", ActivityKind.Internal);\n        activity?.SetTag(\"order.id\", orderId.ToString());\n        activity?.SetTag(\"payment.amount\", amount);\n\n        try\n        {\n            await _gateway.ChargeAsync(amount);\n            activity?.SetStatus(ActivityStatusCode.Ok);\n        }\n        catch (Exception ex)\n        {\n            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);\n            activity?.RecordException(ex);\n            throw;\n        }\n    }\n}",
+            "explanation": "Custom spans bracket business logic invisible to automatic instrumentation. SetTag adds searchable attributes. RecordException attaches stack trace to the span for the trace UI."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "HttpClient propagation (automatic with instrumentation)",
+            "code": "// With AddHttpClientInstrumentation(), this call inherits parent span\n// and injects W3C traceparent + tracestate headers:\nvar response = await httpClient.GetAsync(\"https://inventory.internal/api/stock/42\");\n\n// Manual propagation only if you bypass HttpClient:\nvar request = new HttpRequestMessage(HttpMethod.Get, url);\nPropagators.DefaultTextMapPropagator.Inject(\n    new PropagationContext(Activity.Current?.Context ?? default, default),\n    request,\n    (msg, key, value) => msg.Headers.TryAddWithoutValidation(key, value));\nawait httpClient.SendAsync(request);",
+            "explanation": "Prefer AddHttpClientInstrumentation — manual Inject is for gRPC or exotic clients. Missing propagation breaks the distributed trace at service boundaries."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Head-based sampling for high-traffic APIs",
+            "code": "builder.Services.AddOpenTelemetry()\n    .WithTracing(t => t\n        .SetSampler(new TraceIdRatioBasedSampler(0.1)) // 10% of traces\n        .AddAspNetCoreInstrumentation(o =>\n        {\n            o.Filter = ctx => !ctx.Request.Path.StartsWithSegments(\"/health\");\n        })\n        .AddOtlpExporter());",
+            "explanation": "TraceIdRatioBasedSampler keeps cost predictable — 10% sample still captures slow outliers if you add tail-based sampling at the collector. Filter excludes health probe noise from traces."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "OpenTelemetry tracing: Node vs ASP.NET Core",
+          "headers": ["Feature", "Node (@opentelemetry/sdk-node)", "ASP.NET Core"],
+          "rows": [
+            ["Auto HTTP server spans", "@opentelemetry/instrumentation-http", "AddAspNetCoreInstrumentation"],
+            ["Outbound HTTP", "@opentelemetry/instrumentation-http", "AddHttpClientInstrumentation"],
+            ["Custom spans", "tracer.startActiveSpan('name')", "ActivitySource.StartActivity"],
+            ["Propagation", "W3C tracecontext", "Same W3C traceparent header"],
+            ["Export", "OTLPTraceExporter", "AddOtlpExporter"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forgetting AddHttpClientInstrumentation — outbound calls become orphan spans. Creating a new ActivitySource per request instead of static singleton. Not registering AddSource for custom ActivitySource names — custom spans never export. 100% trace sampling on high-QPS APIs — cost explosion. Tracing /health endpoints — pollutes dashboards; filter them out."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: pick a trace id from a slow request in Application Insights end-to-end transaction view; confirm child spans exist for HttpClient and SQL. If the trace stops at service A, check traceparent on outbound headers with a test call. Distributed tracing across microservices requires consistent service.name resource attribute and clock sync (NTP). Head-based sampling decides at trace start; tail-based sampling at the collector keeps all error traces — senior teams use both. Activity.Current flows across async await in .NET — unlike some older Java thread-local models."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tracing backend tradeoffs",
+          "headers": ["Backend", "Best for", "Watch out"],
+          "rows": [
+            ["Application Insights", "Azure-native, logs+traces correlation", "Vendor lock-in; sampling defaults"],
+            ["Jaeger / Tempo", "OSS, Grafana integration", "Operate your own storage retention"],
+            ["OTLP Collector", "Vendor-neutral fan-out to multiple sinks", "Another component to deploy and monitor"],
+            ["Zipkin", "Simple local dev", "Less feature-rich than Jaeger"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing traces with logs — traces are timed spans with parent links, not text lines. Saying 'we use Application Insights so we do not need OpenTelemetry' without knowing App Insights supports OTel exporters. Not explaining traceparent propagation when asked about microservice debugging. Claiming 100% sampling is always fine in production."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "OpenTelemetry tracing = tree of spans (Activity) sharing trace id; W3C traceparent propagates across HttpClient calls.",
+    "Tradeoff: full sampling gives complete picture but is expensive — use ratio sampling plus error tail sampling at collector.",
+    "Production tip: AddAspNetCoreInstrumentation + HttpClientInstrumentation + EF instrumentation; filter /health; verify traceparent on service boundaries.",
+    "60s: OTel standardizes traces metrics logs. .NET uses Activity. ASP.NET creates root span per request. HttpClient injects traceparent. Exporter sends OTLP to Jaeger or App Insights. Custom ActivitySource for business steps. Sampling controls cost.",
+    "Follow-up: what happens to the trace when one microservice forgets to forward traceparent?"
+  ],
+  "commonPitfalls": [
+    "Saying distributed tracing is 'logging with timestamps' gets you rejected — spans have parent-child links and shared trace id across processes.",
+    "Missing HttpClient instrumentation — most microservice bugs are cross-service latency invisible without propagated spans.",
+    "Strong answer: 'Instrument ASP.NET and HttpClient, register custom ActivitySource, OTLP export, 10% head sampling, filter health checks, prove end-to-end trace in App Insights transaction view.'"
+  ],
+  "introducedIn": "OpenTelemetry .NET SDK 1.0+; built-in ASP.NET Core OTel packages in .NET 8",
+  "relatedTopicIds": [
+    "dotnet-11-structured-logging",
+    "dotnet-11-correlation-ids",
+    "dotnet-11-metrics-and-counters",
+    "dotnet-11-application-insights",
+    "dotnet-10-diagnosing-slow-apis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "@opentelemetry/sdk-node auto-instrumentation",
+      "note": "Node http instrumentation creates server spans and injects traceparent on fetch/axios — same W3C headers as AddHttpClientInstrumentation.",
+      "futureTopicSlug": "javascript/nodejs/opentelemetry"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS OpenTelemetry module",
+      "note": "nestjs-otel wraps controllers with spans similar to AddAspNetCoreInstrumentation; both rely on async context propagation.",
+      "futureTopicSlug": "typescript/nestjs/opentelemetry"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "OpenTelemetry in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel"
+    },
+    {
+      "title": "Distributed tracing in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/log-mon/distributed-tracing"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

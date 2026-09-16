@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-11-metrics-and-counters",
+  "slug": "metrics-and-counters",
+  "title": "Metrics and dotnet-counters (request rates, GC, thread pool)",
+  "moduleId": "dotnet-11-observability-and-health",
+  "order": 3,
+  "hook": "Metrics are numbers that change over time — requests per second, error rate, garbage collection pauses, thread-pool queue depth. The dotnet-counters tool lets you watch these live in production without attaching a debugger or restarting your API.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": ".NET exposes built-in metrics via System.Diagnostics.Metrics: counters (monotonically increasing, e.g. total requests), gauges (point-in-time values, e.g. queue length), and histograms (distribution of values, e.g. request duration). ASP.NET Core publishes http.server.request.duration and Kestrel connection metrics automatically. OpenTelemetry can export these to Prometheus, Grafana, or Application Insights. For ad-hoc production diagnosis, dotnet-counters connects to a running process and streams EventCounter values — thread-pool starvation, Gen2 GC frequency, exception rate — to your terminal without code changes."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Counter",
+              "longForm": "Metric counter",
+              "plainDefinition": "A value that only increases — total HTTP requests, exceptions thrown. Rate = delta over time.",
+              "example": "http.server.active_requests"
+            },
+            {
+              "term": "Histogram",
+              "longForm": "Metric histogram",
+              "plainDefinition": "Records distribution of measurements — used for latency percentiles (p50, p95, p99).",
+              "example": "http.server.request.duration"
+            },
+            {
+              "term": "dotnet-counters",
+              "longForm": "dotnet-counters CLI tool",
+              "plainDefinition": "Diagnostic tool that monitors EventCounters and metrics from a live .NET process.",
+              "example": "dotnet-counters monitor -n MyApi --counters System.Runtime"
+            },
+            {
+              "term": "EventCounter",
+              "longForm": "EventCounter",
+              "plainDefinition": "Lightweight runtime counter (GC, thread pool) surfaced through the diagnostics port.",
+              "example": "threadpool-queue-length"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Logs and traces help debug individual requests; metrics alert you before users notice — error rate spike, p95 latency doubling, thread-pool queue growing. Reddit r/dotnet threads on 'API slow under load' often trace to thread-pool starvation from sync-over-async or Gen2 GC pressure from large object allocations. Senior engineers know which dotnet-counters to watch (System.Runtime, Microsoft.AspNetCore.Hosting, Microsoft.EntityFrameworkCore) and how to correlate metric spikes with deploys or traffic patterns."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Metrics vs logs",
+          "body": "Metrics are cheap aggregates (millions of data points per minute). Logs are expensive per-event records. Alert on metrics (error rate > 1%); investigate with traces and logs."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From runtime to dashboard",
+          "items": [
+            {
+              "title": "Runtime publishes EventCounters",
+              "body": "GC, thread pool, exception rate updated on intervals inside the CLR."
+            },
+            {
+              "title": "ASP.NET Core adds HTTP metrics",
+              "body": "Request count, duration histogram, active connections via built-in Meter."
+            },
+            {
+              "title": "OpenTelemetry exports to backend",
+              "body": "AddOpenTelemetry().WithMetrics() + Prometheus exporter or OTLP."
+            },
+            {
+              "title": "dotnet-counters for live diagnosis",
+              "body": "Attach to process by name or PID; refresh terminal table every second."
+            },
+            {
+              "title": "Alerting rules fire",
+              "body": "Grafana/Prometheus alert when p95 > threshold or threadpool-queue-length > 0 sustained."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Metrics collection paths",
+            "source": "flowchart TD\n  Runtime[System.Runtime EventCounters] --> DiagPort[Diagnostics port]\n  AspNet[ASP.NET Core Meters] --> OTel[OpenTelemetry SDK]\n  DiagPort --> DotnetCounters[dotnet-counters CLI]\n  OTel --> Prom[Prometheus scrape]\n  OTel --> AI[Application Insights]\n  Prom --> Grafana[Grafana dashboards alerts]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "OpenTelemetry metrics export",
+            "code": "builder.Services.AddOpenTelemetry()\n    .ConfigureResource(r => r.AddService(\"orders-api\"))\n    .WithMetrics(metrics => metrics\n        .AddAspNetCoreInstrumentation()\n        .AddHttpClientInstrumentation()\n        .AddRuntimeInstrumentation()\n        .AddMeter(\"MyApp.Orders\")\n        .AddPrometheusExporter()); // scrape /metrics endpoint\n\napp.MapPrometheusScrapingEndpoint(); // exposes /metrics for Prometheus",
+            "explanation": "AddRuntimeInstrumentation exports GC and thread-pool metrics to OTel. Prometheus exporter creates a scrape endpoint Grafana polls. AddMeter registers custom business metrics."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom business counter and histogram",
+            "code": "public static class OrderMetrics\n{\n    private static readonly Meter Meter = new(\"MyApp.Orders\", \"1.0\");\n    private static readonly Counter<long> OrdersCreated =\n        Meter.CreateCounter<long>(\"orders.created\", description: \"Orders successfully created\");\n    private static readonly Histogram<double> CheckoutDuration =\n        Meter.CreateHistogram<double>(\"orders.checkout.duration\", unit: \"ms\");\n\n    public static void RecordCreated() => OrdersCreated.Add(1);\n\n    public static void RecordCheckout(double milliseconds) =>\n        CheckoutDuration.Record(milliseconds);\n}",
+            "explanation": "CreateCounter for totals; CreateHistogram for latency distributions. Static Meter instance lives for app lifetime. Tags (dimensions) can be added: OrdersCreated.Add(1, new KeyValuePair<string, object?>(\"region\", \"eu\"))."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "dotnet-counters for production diagnosis",
+            "code": "# List running .NET processes\ndotnet-counters ps\n\n# Monitor key runtime and ASP.NET counters live\ndotnet-counters monitor -n OrdersApi \\\n  --counters System.Runtime[cpu-usage,gc-heap-size,gen-2-gc-count,threadpool-queue-length,exception-count] \\\n  --counters Microsoft.AspNetCore.Hosting[requests-per-second,current-requests,total-requests]\n\n# Export to file for post-incident analysis\ndotnet-counters collect -n OrdersApi -o /tmp/metrics.csv --format csv",
+            "explanation": "threadpool-queue-length > 0 sustained indicates starvation — often sync-over-async. gen-2-gc-count spike suggests allocation pressure. No restart or profiler attach required."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "dotnet-trace for CPU hotspots (complement to counters)",
+            "code": "# When counters show high CPU but not which method:\ndotnet-trace collect -n OrdersApi --profile cpu-sampling -o /tmp/trace.nettrace\n# Open in Visual Studio or speedscope.app\n\n# Combine with counters during load test:\ndotnet-counters monitor -n OrdersApi --counters System.Runtime &\nab -n 10000 -c 50 http://localhost:5000/api/orders/",
+            "explanation": "Counters tell you symptoms (CPU 90%, thread pool queued). dotnet-trace tells you cause (which method burns CPU). Use both in incident response."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Metrics: prom-client vs .NET Meters",
+          "headers": ["Concept", "Node (prom-client)", "ASP.NET Core / .NET"],
+          "rows": [
+            ["Counter", "new client.Counter({ name })", "Meter.CreateCounter<long>()"],
+            ["Histogram", "new client.Histogram({ buckets })", "Meter.CreateHistogram<double>()"],
+            ["HTTP metrics", "express-prom-bundle middleware", "AddAspNetCoreInstrumentation (built-in)"],
+            ["Live CLI", "No built-in — use /metrics scrape", "dotnet-counters monitor"],
+            ["Export", "/metrics endpoint", "Prometheus exporter or OTLP"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "High-cardinality labels on metrics (per-user-id tag) — explodes Prometheus memory. Alerting on averages instead of p95/p99 latency. Ignoring threadpool-queue-length until users timeout. Creating new Meter per request. Not exposing /metrics behind auth in production — can leak operational data."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: during a latency incident, run dotnet-counters on the pod (kubectl exec) and watch threadpool-queue-length and gen-2-gc-count while reproducing load. If queue length grows, profile for sync-over-async (.Result, .Wait()) or blocking I/O. If GC spikes, check large object heap allocations. RED method for APIs: Rate (requests/s), Errors (5xx ratio), Duration (p95). USE for resources: Utilization, Saturation, Errors. Application Insights request telemetry gives p95 out of the box; Prometheus + Grafana gives cheaper long-retention custom dashboards."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Diagnostic tool selection",
+          "headers": ["Tool", "When to use", "Impact on prod"],
+          "rows": [
+            ["dotnet-counters", "Live GC, thread pool, request rate", "Low overhead — safe on prod"],
+            ["dotnet-trace", "CPU sampling, wall-clock profile", "Low-moderate — short captures"],
+            ["dotnet-dump", "Memory leak, deadlock post-mortem", "Pause during full dump — brief freeze"],
+            ["Application Insights Live Metrics", "Azure quick view without CLI", "Continuous if enabled — cost"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot name thread-pool starvation symptoms or how dotnet-counters reveals them. Saying 'we only use logs' for performance incidents. Not knowing difference between counter and histogram. Suggesting attaching Visual Studio debugger to production for every slowdown."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Metrics = aggregated numbers over time (counters, histograms); dotnet-counters streams runtime EventCounters from live processes.",
+    "Tradeoff: high-cardinality metric labels (UserId per request) destroy Prometheus — use logs/traces for per-user detail.",
+    "Production tip: alert on p95 latency and error rate; dotnet-counters threadpool-queue-length for starvation; gen-2-gc-count for allocation issues.",
+    "60s: ASP.NET publishes HTTP metrics. OTel exports to Prometheus or App Insights. dotnet-counters monitor shows GC thread pool requests live. RED method Rate Errors Duration. Counters for totals histograms for latency percentiles.",
+    "Follow-up: how would you diagnose thread-pool starvation vs database slowness from metrics alone?"
+  ],
+  "commonPitfalls": [
+    "Saying metrics and logs are the same gets you rejected — metrics are cheap aggregates; logs are per-event records.",
+    "Alerting on average latency hides tail latency — use p95/p99 histograms.",
+    "Strong answer: 'dotnet-counters for live thread pool and GC; OTel Prometheus for dashboards; p95 alerts; dotnet-trace when counters show CPU but not which method.'"
+  ],
+  "introducedIn": "System.Diagnostics.Metrics in .NET 6; dotnet-counters since .NET Core 3.0",
+  "relatedTopicIds": [
+    "dotnet-11-opentelemetry-tracing",
+    "dotnet-11-application-insights",
+    "dotnet-10-async-api-performance",
+    "dotnet-10-diagnosing-slow-apis",
+    "csharp-14-memory-and-gc"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "prom-client and express-prom-bundle",
+      "note": "Node exposes /metrics for Prometheus scrape similar to MapPrometheusScrapingEndpoint; both use counter/histogram semantics.",
+      "futureTopicSlug": "javascript/nodejs/prometheus-metrics"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS Prometheus module",
+      "note": "@willsoto/nestjs-prometheus decorates methods with counters — parallel to static Meter.CreateCounter in .NET services.",
+      "futureTopicSlug": "typescript/nestjs/prometheus"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Metrics in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/metrics"
+    },
+    {
+      "title": "dotnet-counters diagnostic tool",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

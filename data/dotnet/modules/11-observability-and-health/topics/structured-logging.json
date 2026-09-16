@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-11-structured-logging",
+  "slug": "structured-logging",
+  "title": "Structured logging (ILogger, log levels, scopes)",
+  "moduleId": "dotnet-11-observability-and-health",
+  "order": 1,
+  "hook": "Structured logging means your API writes machine-readable key-value fields instead of plain text sentences. When an order fails at 2 a.m., you can filter logs by OrderId, UserId, and TraceId in seconds — not grep through paragraphs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASP.NET Core uses the Microsoft.Extensions.Logging abstraction with ILogger<T> injected into controllers, minimal API handlers, and services. Log calls accept a message template with named placeholders — `LogInformation(\"Order {OrderId} created for {UserId}\", orderId, userId)` — and providers (Console, Serilog, Application Insights) serialize those fields as structured properties. Log levels (Trace, Debug, Information, Warning, Error, Critical) filter noise in production. BeginScope adds contextual key-value pairs to every log line inside a using block — essential for request-scoped OrderId or CorrelationId without repeating parameters on every call."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ILogger",
+              "longForm": "ILogger interface",
+              "plainDefinition": "Category-based logger resolved from DI; ILogger<T> uses the type name as category for filtering.",
+              "example": "ILogger<OrdersController> _logger"
+            },
+            {
+              "term": "Structured logging",
+              "longForm": "Structured logging",
+              "plainDefinition": "Logs stored as named fields (JSON properties) rather than unparsed strings — enables queries like OrderId = 42.",
+              "example": "{ \"OrderId\": 42, \"UserId\": \"u-1\" }"
+            },
+            {
+              "term": "Log scope",
+              "longForm": "Logging scope",
+              "plainDefinition": "A disposable context (BeginScope) that attaches properties to all logs within the block — like async-local baggage for logging.",
+              "example": "using (_logger.BeginScope(new { OrderId = id }))"
+            },
+            {
+              "term": "Log level",
+              "longForm": "Log level",
+              "plainDefinition": "Severity filter: Information for business events, Warning for recoverable issues, Error for failures, Debug only in dev.",
+              "example": "\"Logging:LogLevel:Default\": \"Information\""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "String interpolation (`$\"Order {id} failed\"`) destroys structure — the id is baked into text and cannot be indexed. Unstructured logs make incident response slow: you cannot join API logs to database slow-query logs by TraceId. Over-logging at Information in hot paths increases cost and hides real errors. Senior engineers design log schemas (consistent property names across services), use scopes for request context, and never log secrets, tokens, or full credit card numbers."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Message templates, not interpolation",
+          "body": "Use `_logger.LogInformation(\"Paid {Amount} for {OrderId}\", amount, orderId)` — not `$\"Paid {amount}\"`. The template preserves field names for Application Insights, Seq, and Elasticsearch."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request logging flow",
+          "items": [
+            {
+              "title": "Host registers logging providers",
+              "body": "builder.Logging.AddConsole(), AddOpenTelemetry(), or Serilog via UseSerilog() in Program.cs."
+            },
+            {
+              "title": "ILogger<T> resolved from DI",
+              "body": "Category name is the full type name — filter per namespace in appsettings.json."
+            },
+            {
+              "title": "BeginScope at request start",
+              "body": "Middleware or ASP.NET Core hosting adds scopes for RequestId, TraceId, and your CorrelationId."
+            },
+            {
+              "title": "Log with template + level",
+              "body": "Provider serializes structured fields; filters drop below configured minimum level."
+            },
+            {
+              "title": "Export to sink",
+              "body": "Console for dev; Application Insights, Seq, or OTLP collector in production."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Structured logging pipeline",
+            "source": "flowchart LR\n  Handler[Controller or Minimal API] -->|LogInformation template| ILogger[ILogger T]\n  ILogger --> Scope[BeginScope CorrelationId]\n  Scope --> Filter[Log level filter appsettings]\n  Filter --> Providers[Console Serilog OTel]\n  Providers --> Sink[App Insights Seq Elasticsearch]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Structured logging with ILogger<T>",
+            "code": "public class OrdersService(ILogger<OrdersService> logger)\n{\n    public async Task<Order> CreateAsync(CreateOrderDto dto, CancellationToken ct)\n    {\n        logger.LogInformation(\"Creating order for {UserId} with {LineCount} lines\",\n            dto.UserId, dto.Lines.Count);\n\n        try\n        {\n            var order = await _repo.SaveAsync(dto, ct);\n            logger.LogInformation(\"Order {OrderId} created\", order.Id);\n            return order;\n        }\n        catch (DbUpdateException ex)\n        {\n            logger.LogError(ex, \"Failed to create order for {UserId}\", dto.UserId);\n            throw;\n        }\n    }\n}",
+            "explanation": "Named placeholders become queryable fields. Pass the exception as the first argument to LogError so stack traces are captured. Never log passwords or full payment payloads."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Log scopes for request and operation context",
+            "code": "app.Use(async (ctx, next) =>\n{\n    var correlationId = ctx.Request.Headers[\"X-Correlation-Id\"].FirstOrDefault()\n        ?? Activity.Current?.TraceId.ToString()\n        ?? Guid.NewGuid().ToString(\"N\");\n\n    ctx.Response.Headers[\"X-Correlation-Id\"] = correlationId;\n\n    using (logger.BeginScope(new Dictionary<string, object>\n    {\n        [\"CorrelationId\"] = correlationId,\n        [\"RequestPath\"] = ctx.Request.Path.Value ?? \"\"\n    }))\n    {\n        await next();\n    }\n});\n\n// Inside service — all logs inherit CorrelationId without repeating it\nusing (_logger.BeginScope(\"Order {OrderId}\", orderId))\n{\n    _logger.LogInformation(\"Charging payment\");\n    _logger.LogInformation(\"Sending confirmation email\");\n}",
+            "explanation": "BeginScope pushes properties onto a stack for the async flow. Nested scopes merge — middleware scope + operation scope both appear in exported logs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "appsettings.Production.json log level tuning",
+            "code": "{\n  \"Logging\": {\n    \"LogLevel\": {\n      \"Default\": \"Information\",\n      \"Microsoft.AspNetCore\": \"Warning\",\n      \"Microsoft.EntityFrameworkCore.Database.Command\": \"Warning\",\n      \"MyApp.Orders\": \"Information\"\n    }\n  }\n}",
+            "explanation": "Suppress noisy framework categories in production. EF SQL logs at Information flood Application Insights — keep Warning unless debugging a query."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Serilog enrichment for production (optional provider)",
+            "code": "builder.Host.UseSerilog((ctx, services, config) => config\n    .ReadFrom.Configuration(ctx.Configuration)\n    .ReadFrom.Services(services)\n    .Enrich.FromLogContext()\n    .Enrich.WithProperty(\"Environment\", ctx.HostingEnvironment.EnvironmentName)\n    .WriteTo.Console(new JsonFormatter())\n    .WriteTo.ApplicationInsights(services.GetRequiredService<TelemetryConfiguration>(),\n        TelemetryConverter.Traces));",
+            "explanation": "Serilog plugs into ILogger via AddSerilog. FromLogContext reads BeginScope properties. JsonFormatter outputs one JSON object per line for log aggregators."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Structured logging: Winston/Pino vs ILogger",
+          "headers": ["Concept", "Node (Pino/Winston)", "ASP.NET Core ILogger"],
+          "rows": [
+            ["Structured fields", "logger.info({ orderId }, 'created')", "LogInformation(\"created {OrderId}\", orderId)"],
+            ["Child context", "logger.child({ requestId })", "BeginScope(new { RequestId })"],
+            ["Level filter", "LOG_LEVEL env or transport config", "Logging:LogLevel in appsettings"],
+            ["DI integration", "Manual import or nestjs-pino", "ILogger<T> constructor injection"],
+            ["Export", "pino-opentelemetry-transport", "OpenTelemetry logging exporter or App Insights"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "String interpolation in log calls (`$\"Order {id}\"`) — fields are not indexed. Logging at Information inside tight loops (millions of lines per hour). Logging JWT tokens, API keys, or PII. Using LogCritical for every handled exception. Forgetting to pass Exception object to LogError — you lose stack traces."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: query Application Insights or Seq for a single CorrelationId and confirm all scoped properties appear on every log line from middleware through downstream HttpClient calls. Use log scopes to bracket multi-step sagas — payment, inventory, shipping — so one failed step is obvious without reading 200 lines. High-cardinality fields (UserId on every debug log) inflate cost; sample Debug in prod or use dynamic sampling. ILogger is synchronous by design — heavy formatting in hot paths blocks threads; defer expensive serialization or use IsEnabled checks before building large objects."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Logging provider tradeoffs",
+          "headers": ["Provider", "Pros", "Cons"],
+          "rows": [
+            ["Built-in Console + App Insights", "Zero extra deps, OTel integration", "Less flexible enrichment than Serilog"],
+            ["Serilog", "Rich sinks, compact JSON, LogContext", "Another dependency; learn config DSL"],
+            ["OpenTelemetry Logs", "Vendor-neutral, unified with traces/metrics", "Exporter setup; not all backends mature"],
+            ["EF Core SQL logging", "Great for N+1 debugging", "Information level floods prod — use Warning default"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying structured logging means 'writing JSON strings manually in LogInformation'. Not knowing BeginScope propagates to child loggers in the same async context. Claiming you log full request bodies in production for debugging (PII and secrets). Unable to explain why message templates beat string interpolation for observability backends."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Structured logging = named template placeholders serialized as queryable fields, not interpolated strings.",
+    "Tradeoff: verbose Information logging in hot paths increases cost and noise — tune per namespace; EF SQL at Warning in prod.",
+    "Production tip: BeginScope CorrelationId in middleware; nest operation scopes (OrderId) in services; never log tokens or PII.",
+    "60s: Inject ILogger<T>. Use message templates with named fields. BeginScope adds context to all logs in the block. Filter levels in appsettings. Export via App Insights, Serilog, or OpenTelemetry. Scopes are how you avoid repeating TraceId on every line.",
+    "Follow-up: how do log scopes interact with async/await and thread pool switches?"
+  ],
+  "commonPitfalls": [
+    "Saying '$\"Order {id}\"' is structured logging gets you rejected — interpolation destroys indexed fields; use template placeholders.",
+    "Logging JWT or credit card data at any level — compliance violation and security incident.",
+    "Strong answer: 'Message templates for structure, scopes for request context, tune Microsoft.AspNetCore to Warning, pass exceptions to LogError, prove correlation in App Insights by TraceId join.'"
+  ],
+  "introducedIn": "Microsoft.Extensions.Logging in .NET Core 1.0; OpenTelemetry logging in .NET 8+",
+  "relatedTopicIds": [
+    "dotnet-11-correlation-ids",
+    "dotnet-11-application-insights",
+    "dotnet-11-opentelemetry-tracing",
+    "dotnet-04-exception-handling-middleware",
+    "csharp-13-task-async-await"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Pino child logger and bindings",
+      "note": "logger.child({ requestId }) mirrors BeginScope — child loggers inherit context without repeating fields on every call.",
+      "futureTopicSlug": "javascript/nodejs/pino-logging"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS Logger and Pino integration",
+      "note": "nestjs-pino injects request context via middleware similar to ASP.NET BeginScope; both attach trace id before controller runs.",
+      "futureTopicSlug": "typescript/nestjs/logging"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Logging in .NET",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/extensions/logging"
+    },
+    {
+      "title": "Logging in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/logging/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

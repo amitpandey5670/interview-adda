@@ -1,0 +1,245 @@
+{
+  "id": "dotnet-11-health-checks",
+  "slug": "health-checks",
+  "title": "Health checks (/health, readiness vs liveness)",
+  "moduleId": "dotnet-11-observability-and-health",
+  "order": 4,
+  "hook": "Health check endpoints tell orchestrators whether your API is alive and ready to receive traffic. Kubernetes uses separate liveness and readiness probes — confusing them causes pods killed during startup or traffic routed to broken instances.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASP.NET Core health checks (`AddHealthChecks`, `MapHealthChecks`) expose HTTP endpoints that run registered IHealthCheck implementations and return Healthy, Degraded, or Unhealthy with optional JSON details. Liveness probes answer 'is the process hung?' — failure restarts the pod. Readiness probes answer 'can this instance handle requests?' — failure removes it from the load balancer without restart. Startup probes give slow-starting apps extra time before liveness kicks in. Built-in checks cover SQL Server, Redis, and URL groups; custom checks validate your critical dependencies."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Liveness probe",
+              "longForm": "Kubernetes liveness probe",
+              "plainDefinition": "Checks if the container is running; failure triggers pod restart. Should be lightweight — not depend on external DB.",
+              "example": "GET /health/live → 200 if process responds"
+            },
+            {
+              "term": "Readiness probe",
+              "longForm": "Kubernetes readiness probe",
+              "plainDefinition": "Checks if instance can serve traffic; failure removes from Service endpoints without restart.",
+              "example": "GET /health/ready → 200 only if DB reachable"
+            },
+            {
+              "term": "IHealthCheck",
+              "longForm": "IHealthCheck interface",
+              "plainDefinition": "Custom check returning HealthCheckResult with status and description.",
+              "example": "CheckHealthAsync returns Unhealthy if Redis down"
+            },
+            {
+              "term": "Health Checks UI",
+              "longForm": "AspNetCore.HealthChecks.UI",
+              "plainDefinition": "Optional dashboard package aggregating multiple service health endpoints — dev/staging, not for public prod.",
+              "example": "MapHealthChecksUI at /health-ui"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A common production incident: readiness check includes database, database blips, Kubernetes marks all pods NotReady, Service has zero endpoints — full outage. Another trap: liveness check hits the database; slow DB causes liveness failure → restart loop. Senior engineers design three endpoints (/health/live, /health/ready, optional /health/startup), keep liveness dumb (self-check only), put dependency checks on readiness, and exclude health paths from authentication and heavy tracing."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Liveness = restart, readiness = route traffic",
+          "body": "Never put external dependency checks on liveness — transient DB outage should not kill your pod. Readiness failure is recoverable when the dependency returns."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Kubernetes probe lifecycle",
+          "items": [
+            {
+              "title": "Pod starts, startup probe runs (optional)",
+              "body": "Allows 60+ seconds for EF migrations or cache warm-up before liveness applies."
+            },
+            {
+              "title": "Readiness fails during warm-up",
+              "body": "Pod running but not in Service endpoints — no traffic yet."
+            },
+            {
+              "title": "Readiness passes",
+              "body": "Pod receives traffic from Ingress/Service load balancer."
+            },
+            {
+              "title": "Liveness runs periodically",
+              "body": "Lightweight self-check; deadlock or hung thread pool → restart."
+            },
+            {
+              "title": "Readiness fails on dependency loss",
+              "body": "Pod removed from LB; process keeps running; recovers when DB returns."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Liveness vs readiness in Kubernetes",
+            "source": "flowchart TD\n  Start[Pod starts] --> Startup{Startup probe}\n  Startup -->|fail timeout| Kill[Container restart]\n  Startup -->|pass| ReadyCheck{Readiness probe}\n  ReadyCheck -->|fail| NoTraffic[Removed from Service no traffic]\n  ReadyCheck -->|pass| Traffic[Receives traffic]\n  Traffic --> Live{Liveness probe}\n  Live -->|fail| Kill\n  Live -->|pass| Traffic\n  NoTraffic -->|DB recovers| ReadyCheck"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register health checks with tags",
+            "code": "builder.Services.AddHealthChecks()\n    .AddCheck(\"self\", () => HealthCheckResult.Healthy(), tags: [\"live\"])\n    .AddNpgSql(builder.Configuration.GetConnectionString(\"OrdersDb\")!,\n        name: \"postgres\", tags: [\"ready\"])\n    .AddRedis(builder.Configuration[\"Redis:Connection\"]!,\n        name: \"redis-cache\", tags: [\"ready\"])\n    .AddUrlGroup(new Uri(\"https://payments.internal/health\"),\n        name: \"payments-api\", tags: [\"ready\"]);",
+            "explanation": "Tags partition checks into liveness (self only) and readiness (dependencies). AddNpgSql runs SELECT 1 — keep timeout short (2-3 seconds)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Map separate liveness and readiness endpoints",
+            "code": "app.MapHealthChecks(\"/health/live\", new HealthCheckOptions\n{\n    Predicate = check => check.Tags.Contains(\"live\"),\n    ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse\n});\n\napp.MapHealthChecks(\"/health/ready\", new HealthCheckOptions\n{\n    Predicate = check => check.Tags.Contains(\"ready\"),\n    ResultStatusCodes =\n    {\n        [HealthStatus.Healthy] = StatusCodes.Status200OK,\n        [HealthStatus.Degraded] = StatusCodes.Status200OK, // still serve traffic\n        [HealthStatus.Unhealthy] = StatusCodes.Status503ServiceUnavailable\n    }\n});\n\n// Exclude from auth — probes have no Bearer token\napp.MapHealthChecks(\"/health/live\").AllowAnonymous();",
+            "explanation": "Predicate filters which checks run per endpoint. Degraded as 200 is a team choice — document it. Kubernetes expects 200 healthy, non-200 unhealthy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Kubernetes deployment probes",
+            "code": "spec:\n  containers:\n  - name: orders-api\n    livenessProbe:\n      httpGet:\n        path: /health/live\n        port: 8080\n      initialDelaySeconds: 10\n      periodSeconds: 15\n      failureThreshold: 3\n    readinessProbe:\n      httpGet:\n        path: /health/ready\n        port: 8080\n      initialDelaySeconds: 5\n      periodSeconds: 10\n      failureThreshold: 2\n    startupProbe:\n      httpGet:\n        path: /health/ready\n        port: 8080\n      failureThreshold: 30\n      periodSeconds: 5",
+            "explanation": "startupProbe allows 30×5s = 150s warm-up before liveness kills the pod. readinessProbe failureThreshold 2 removes pod quickly from LB on DB failure."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom health check with timeout and cache",
+            "code": "public class PaymentGatewayHealthCheck(IPaymentClient client) : IHealthCheck\n{\n    public async Task<HealthCheckResult> CheckHealthAsync(\n        HealthCheckContext context, CancellationToken ct = default)\n    {\n        try\n        {\n            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);\n            cts.CancelAfter(TimeSpan.FromSeconds(2));\n            var ok = await client.PingAsync(cts.Token);\n            return ok\n                ? HealthCheckResult.Healthy(\"Payment gateway reachable\")\n                : HealthCheckResult.Unhealthy(\"Payment gateway returned false\");\n        }\n        catch (Exception ex)\n        {\n            return HealthCheckResult.Unhealthy(\"Payment gateway unreachable\", ex);\n        }\n    }\n}",
+            "explanation": "Always timeout external checks — hung health check hangs the probe and cascades. Register with tags: ['ready'] only, never 'live'."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Health endpoints: Express vs ASP.NET Core",
+          "headers": ["Aspect", "Node / Express", "ASP.NET Core"],
+          "rows": [
+            ["Registration", "app.get('/health', handler)", "AddHealthChecks + MapHealthChecks"],
+            ["Dependency checks", "Manual pg.query in handler", "AddNpgSql, AddRedis packages"],
+            ["Tagged filtering", "Separate routes manually", "Predicate on Tags"],
+            ["K8s JSON response", "Custom res.json", "UIResponseWriter or custom ResponseWriter"],
+            ["Auth exclusion", "Skip auth middleware for /health", "AllowAnonymous or MapWhen branch"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single /health endpoint used for both liveness and readiness with DB check — causes restart loops. Health checks behind JWT authentication — K8s probes get 401. Heavy work in health checks (full table scan). Not using startupProbe for slow EF migrations. Health check spam in traces and logs — exclude /health from OTel and reduce logging."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: kubectl describe pod shows Last State and probe failure messages. Simulate readiness failure by blocking DB network policy — pods should go NotReady without restart. Simulate liveness failure only with a deliberate deadlock test in staging. Degraded status is useful for non-critical dependency failure (recommendation engine down) while core API stays ready — document team policy. Health Checks UI is great for ops dashboards in staging; in prod use Prometheus blackbox exporter or synthetic monitors. Align probe timeouts with health check CancellationToken — K8s timeoutSeconds must exceed your slowest ready check."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Probe design decisions",
+          "headers": ["Check", "Liveness", "Readiness", "Startup"],
+          "rows": [
+            ["Process responds", "Yes", "Yes", "Yes"],
+            ["Database reachable", "No", "Yes", "Yes (during boot)"],
+            ["Downstream API", "No", "Yes (critical only)", "Optional"],
+            ["Failure action", "Restart pod", "Remove from LB", "Block liveness until pass"],
+            ["Typical period", "15-30s", "5-10s", "5s, high failureThreshold"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying liveness and readiness are the same endpoint with the same checks. Putting database on liveness probe. Not knowing K8s removes NotReady pods from Service endpoints without restarting. Unable to explain startupProbe purpose for slow-starting .NET apps with migrations."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Health checks expose HTTP endpoints; liveness = restart if hung, readiness = route traffic only if dependencies ok.",
+    "Tradeoff: strict readiness (many deps) improves traffic quality but increases blast radius when shared DB blips — mark non-critical deps Degraded.",
+    "Production tip: /health/live tags ['live'] self only; /health/ready tags ['ready'] for DB/Redis; AllowAnonymous; startupProbe for migrations.",
+    "60s: AddHealthChecks with tags. MapHealthChecks separate live and ready paths. K8s liveness restarts pod. Readiness removes from load balancer. Never DB on liveness. startupProbe for slow boot. Exclude from auth and tracing.",
+    "Follow-up: what happens if all pods fail readiness simultaneously during a database outage?"
+  ],
+  "commonPitfalls": [
+    "Saying 'one /health endpoint is enough for Kubernetes' gets you rejected — liveness and readiness have different failure actions.",
+    "Database check on liveness — transient outage kills all pods in restart loop instead of graceful traffic drain.",
+    "Strong answer: 'Tagged checks, separate endpoints, liveness is dumb self-check, readiness validates deps, startupProbe for EF migrations, 503 on unhealthy ready, probes unauthenticated.'"
+  ],
+  "introducedIn": "ASP.NET Core 2.2 AddHealthChecks; Kubernetes probe patterns platform-agnostic",
+  "relatedTopicIds": [
+    "dotnet-11-opentelemetry-tracing",
+    "dotnet-11-structured-logging",
+    "dotnet-04-middleware-order",
+    "dotnet-09-ef-core-basics",
+    "dotnet-01-kestrel-and-reverse-proxy"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express /health and @godaddy/terminus",
+      "note": "terminus exposes /healthcheck for K8s and handles graceful shutdown on SIGTERM — ASP.NET uses IHostApplicationLifetime for similar drain.",
+      "futureTopicSlug": "javascript/nodejs/kubernetes-health"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS Terminus module",
+      "note": "@nestjs/terminus provides HealthCheckService with indicators (TypeOrm, Redis) — mirrors AddNpgSql/AddRedis tagged checks.",
+      "futureTopicSlug": "typescript/nestjs/terminus-health"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Health checks in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks"
+    },
+    {
+      "title": "Configure liveness, readiness and startup probes",
+      "url": "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

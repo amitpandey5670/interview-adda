@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-11-application-insights",
+  "slug": "application-insights",
+  "title": "Application Insights and cloud observability patterns",
+  "moduleId": "dotnet-11-observability-and-health",
+  "order": 6,
+  "hook": "Application Insights is Azure's application performance monitoring service that automatically collects requests, dependencies, exceptions, and traces from your ASP.NET Core API. It connects logs, metrics, and distributed traces in one portal — the fastest path to production observability on Azure.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Azure Application Insights (App Insights) is part of Azure Monitor. The Microsoft.ApplicationInsights.AspNetCore SDK auto-collects HTTP requests, dependency calls (SQL, HttpClient, Redis), exceptions, and custom events. It correlates them via operation_Id — the same concept as correlation id / trace id. Modern integration uses OpenTelemetry with UseAzureMonitor() exporter instead of the legacy SDK-only path. Cloud observability patterns include: unified telemetry pipeline (OTel collector → multiple backends), sampling to control cost, smart detection alerts, and workbooks for SLO dashboards. App Insights works best on Azure but OTel export keeps you portable."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Application Insights",
+              "longForm": "Azure Application Insights",
+              "plainDefinition": "Azure APM service collecting requests, dependencies, traces, exceptions, and custom metrics from apps.",
+              "example": "InstrumentationKey or ConnectionString in config"
+            },
+            {
+              "term": "operation_Id",
+              "longForm": "Application Insights operation ID",
+              "plainDefinition": "Internal correlation key linking request, dependencies, and exceptions in one end-to-end transaction view.",
+              "example": "Same id on SQL dependency and parent HTTP request"
+            },
+            {
+              "term": "Dependency telemetry",
+              "longForm": "Dependency tracking",
+              "plainDefinition": "Automatic timing of outbound calls — SQL, HTTP, Azure services — shown as child nodes in transaction view.",
+              "example": "POST sql | OrdersDb | 23ms"
+            },
+            {
+              "term": "Adaptive sampling",
+              "longForm": "Adaptive sampling",
+              "plainDefinition": "App Insights reduces ingested telemetry volume while preserving interesting items (errors, slow requests).",
+              "example": "SamplingSettings:IsEnabled true"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Production APIs need observability without building your own log aggregation stack. App Insights gives transaction search, failure analysis, live metrics stream, and availability tests in minutes on Azure. Interview questions often ask how you debug a slow endpoint in production — the answer is end-to-end transaction view showing which dependency consumed 90% of time. Senior engineers configure sampling, disable PII logging, set cloud_RoleName per microservice, and integrate alerts with PagerDuty or Teams."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "OpenTelemetry path is the future",
+          "body": "Use Azure.Monitor.OpenTelemetry.AspNetCore (UseAzureMonitor) for new projects — one OTel pipeline exports to App Insights and can fan out to Prometheus simultaneously."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Telemetry flow to Azure Monitor",
+          "items": [
+            {
+              "title": "SDK / OTel exporter initializes",
+              "body": "Connection string from appsettings or APPLICATIONINSIGHTS_CONNECTION_STRING env var."
+            },
+            {
+              "title": "ASP.NET Core auto-instrumentation",
+              "body": "Each request creates Request telemetry; status code and duration recorded."
+            },
+            {
+              "title": "Dependency auto-collection",
+              "body": "SqlClient, HttpClient, Azure SDK calls become Dependency telemetry children."
+            },
+            {
+              "title": "ILogger integration",
+              "body": "Log entries linked to active operation when LogLevel >= configured threshold."
+            },
+            {
+              "title": "Ingestion and portal views",
+              "body": "Transaction search, Application Map, Failures blade, Log Analytics queries (Kusto KQL)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Cloud observability architecture",
+            "source": "flowchart LR\n  API[ASP.NET Core API] --> OTel[OpenTelemetry SDK]\n  OTel --> Azure[Azure Monitor App Insights]\n  OTel --> Prom[Prometheus optional]\n  Azure --> Map[Application Map]\n  Azure --> Trans[End-to-end transactions]\n  Azure --> KQL[Log Analytics KQL]\n  Azure --> Alert[Smart detection alerts]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Modern OpenTelemetry + Azure Monitor setup",
+            "code": "builder.Services.AddOpenTelemetry()\n    .UseAzureMonitor(options =>\n    {\n        options.ConnectionString = builder.Configuration[\"ApplicationInsights:ConnectionString\"];\n    })\n    .ConfigureResource(r => r\n        .AddService(\"orders-api\")\n        .AddAttributes(new Dictionary<string, object>\n        {\n            [\"deployment.environment\"] = builder.Environment.EnvironmentName\n        }));\n\n// appsettings.json:\n// \"ApplicationInsights\": { \"ConnectionString\": \"InstrumentationKey=...;IngestionEndpoint=...\" }",
+            "explanation": "UseAzureMonitor registers trace, metric, and log exporters to Azure. AddService sets cloud role name in Application Map. Connection string preferred over legacy InstrumentationKey."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Custom events and metrics via TelemetryClient (legacy SDK pattern)",
+            "code": "public class CheckoutService(TelemetryClient telemetry)\n{\n    public async Task CompleteAsync(Order order)\n    {\n        var sw = Stopwatch.StartNew();\n        try\n        {\n            await _payment.ChargeAsync(order.Total);\n            telemetry.TrackEvent(\"CheckoutCompleted\",\n                properties: new Dictionary<string, string>\n                {\n                    [\"OrderId\"] = order.Id.ToString(),\n                    [\"PaymentMethod\"] = order.PaymentMethod\n                },\n                metrics: new Dictionary<string, double> { [\"OrderTotal\"] = (double)order.Total });\n        }\n        catch (Exception ex)\n        {\n            telemetry.TrackException(ex, new Dictionary<string, string>\n            {\n                [\"OrderId\"] = order.Id.ToString()\n            });\n            throw;\n        }\n        finally\n        {\n            telemetry.TrackMetric(\"Checkout.DurationMs\", sw.ElapsedMilliseconds);\n        }\n    }\n}",
+            "explanation": "TrackEvent for business milestones searchable in portal. TrackException links to active request operation_Id. Prefer OTel Meter for new metric code; TelemetryClient still valid for custom events."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Sampling and PII configuration",
+            "code": "{\n  \"ApplicationInsights\": {\n    \"ConnectionString\": \"...\",\n    \"EnableAdaptiveSampling\": true,\n    \"EnableDependencyTrackingTelemetryModule\": true\n  },\n  \"Logging\": {\n    \"ApplicationInsights\": {\n      \"LogLevel\": {\n        \"Default\": \"Information\"\n      }\n    }\n  }\n}",
+            "explanation": "Adaptive sampling reduces cost on high-traffic APIs — errors and slow requests are still captured. Tune LogLevel to avoid shipping Debug logs to Azure."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "kusto",
+            "label": "KQL query — slow requests with dependency breakdown",
+            "code": "requests\n| where timestamp > ago(1h)\n| where duration > 2000\n| project timestamp, name, duration, operation_Id, resultCode\n| join kind=inner (\n    dependencies\n    | where timestamp > ago(1h)\n    | project operation_Id, dependencyType, name, target, duration\n) on operation_Id\n| order by duration desc\n| take 50",
+            "explanation": "Join requests to dependencies by operation_Id to find which SQL or HTTP call caused slowness. Use in Log Analytics or App Insights Logs blade during incidents."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "APM: Application Insights vs Node alternatives",
+          "headers": ["Feature", "Node on Azure", "ASP.NET Core on Azure"],
+          "rows": [
+            ["SDK", "applicationinsights npm package", "Azure.Monitor.OpenTelemetry.AspNetCore"],
+            ["Auto HTTP tracking", "Yes", "AddAspNetCoreInstrumentation / auto"],
+            ["Dependency tracking", "autoCollectDependencies", "SqlClient + HttpClient auto"],
+            ["Custom events", "client.trackEvent()", "TelemetryClient or OTel events"],
+            ["Portal views", "Same Azure portal", "Same — unified if same App Insights resource"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Multiple microservices sharing one cloud_RoleName — Application Map becomes useless. Logging PII (emails, tokens) to App Insights — compliance violation. Disabling sampling on high-QPS API — cost explosion. Using separate App Insights resources per service with no shared workspace — harder cross-service queries. Relying only on portal UI without learning basic KQL."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: open Failures blade after deploy — new exception type spikes indicate regression. Application Map shows dependency failure rate between services. Live Metrics Stream validates a canary deploy before full rollout. For multi-cloud strategy, export OTel to collector fan-out: App Insights + Grafana Cloud. Smart Detection alerts on anomaly (dependency duration increase) beat static thresholds for unknown unknowns. Correlate App Insights operation_Id with your X-Correlation-Id via custom properties on TrackRequest or log scope enrichment."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Observability backend selection",
+          "headers": ["Backend", "Strength", "Weakness"],
+          "rows": [
+            ["Application Insights", "Fast Azure setup, transaction view, smart alerts", "KQL learning curve; Azure-centric pricing"],
+            ["Datadog / New Relic", "Multi-cloud SaaS, rich dashboards", "Per-host cost; agent overhead"],
+            ["Prometheus + Grafana", "OSS, Kubernetes native", "Operate yourself; traces need Tempo/Jaeger"],
+            ["OTel Collector hub", "Vendor neutral fan-out", "Another service to maintain"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying Application Insights only does logging — it does requests, dependencies, metrics, traces, and availability tests. Not knowing operation_Id links a request to its SQL dependencies. Unable to write or read a basic KQL query for slow requests. Claiming App Insights replaces health checks or Kubernetes probes."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Application Insights = Azure APM collecting requests, dependencies, exceptions, traces; operation_Id correlates end-to-end transactions.",
+    "Tradeoff: adaptive sampling saves cost but may hide rare errors — use OTel tail sampling or custom always-on rules for critical paths.",
+    "Production tip: UseAzureMonitor with OTel; unique cloud_RoleName per service; KQL joins requests+dependencies; alerts on failure rate and p95.",
+    "60s: OTel UseAzureMonitor exports to Azure. Auto tracks HTTP SQL HttpClient. Transaction view shows waterfall. operation_Id links telemetry. KQL for slow request analysis. Sampling controls cost. Application Map for service topology.",
+    "Follow-up: how would you migrate from legacy ApplicationInsights SDK to OpenTelemetry without losing dashboards?"
+  ],
+  "commonPitfalls": [
+    "Saying 'App Insights is just log storage' gets you rejected — it provides distributed tracing, dependency map, metrics, and smart alerts.",
+    "All microservices same role name — Application Map shows one blob instead of service graph.",
+    "Strong answer: 'OTel UseAzureMonitor, role name per service, adaptive sampling, KQL join requests dependencies by operation_Id, correlate custom CorrelationId property, alert on dependency duration anomaly.'"
+  ],
+  "introducedIn": "Application Insights ASP.NET Core SDK; Azure.Monitor.OpenTelemetry.AspNetCore in 2024+",
+  "relatedTopicIds": [
+    "dotnet-11-structured-logging",
+    "dotnet-11-opentelemetry-tracing",
+    "dotnet-11-metrics-and-counters",
+    "dotnet-11-correlation-ids",
+    "dotnet-10-diagnosing-slow-apis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "applicationinsights npm SDK",
+      "note": "Node appinsights.autoCollectRequests mirrors ASP.NET auto request telemetry; both set operation_Id for correlation in the same Azure resource.",
+      "futureTopicSlug": "javascript/nodejs/application-insights"
+    },
+    {
+      "language": "typescript",
+      "concept": "Azure Monitor OpenTelemetry distro for Node",
+      "note": "@azure/monitor-opentelemetry parallels UseAzureMonitor() — same ingestion endpoint, unified portal across .NET and Node microservices.",
+      "futureTopicSlug": "typescript/azure/opentelemetry"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Application Insights for ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/asp-net-core"
+    },
+    {
+      "title": "OpenTelemetry with Azure Monitor",
+      "url": "https://learn.microsoft.com/en-us/azure/azure-monitor/app/opentelemetry-enable?tabs=aspnetcore"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

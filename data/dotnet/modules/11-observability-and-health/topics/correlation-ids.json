@@ -1,0 +1,244 @@
+{
+  "id": "dotnet-11-correlation-ids",
+  "slug": "correlation-ids",
+  "title": "Correlation IDs and distributed tracing across services",
+  "moduleId": "dotnet-11-observability-and-health",
+  "order": 5,
+  "hook": "A correlation ID is a unique string that ties together every log, trace, and error from one user action across multiple services. When checkout fails, you search one ID and see the full story from the gateway through payment to inventory.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A correlation ID (also called request ID or trace ID) identifies a single logical operation across HTTP calls, message queues, and background jobs. Clients may send X-Correlation-Id or X-Request-Id headers; if absent, the API generates one. Middleware stores it in HttpContext.Items, adds it to response headers, injects it into ILogger scopes, and forwards it on outbound HttpClient calls. OpenTelemetry's trace id (W3C traceparent) serves a similar role at the tracing layer — senior systems align correlation id with trace id or map between them explicitly. Distributed tracing across microservices requires every hop to read incoming headers and propagate them downstream."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Correlation ID",
+              "longForm": "Correlation identifier",
+              "plainDefinition": "Business-friendly unique id linking logs and support tickets across services — often UUID or trace id string.",
+              "example": "X-Correlation-Id: 7f3c2a1b9e4d..."
+            },
+            {
+              "term": "traceparent",
+              "longForm": "W3C traceparent header",
+              "plainDefinition": "Standard header encoding trace-id and parent-span-id for OpenTelemetry propagation.",
+              "example": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+            },
+            {
+              "term": "Request ID",
+              "longForm": "ASP.NET Core Request ID",
+              "plainDefinition": "Built-in HttpContext.TraceIdentifier — unique per HTTP request; can be used as correlation id.",
+              "example": "0HN7...:00000001"
+            },
+            {
+              "term": "Baggage",
+              "longForm": "OpenTelemetry baggage",
+              "plainDefinition": "Key-value context propagated across services alongside trace context — e.g. tenant-id, user-segment.",
+              "example": "tenant-id=acme-corp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Without correlation, support teams cannot connect a user's error screenshot to backend logs. Microservice debugging without propagation means five separate log searches guessing timestamps. Problem Details (RFC 7807) extensions often include correlationId so API clients display it to users. In interviews, explaining middleware that generates/propagates IDs, HttpClient forwarding, and alignment with OpenTelemetry trace id demonstrates production experience."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Return correlation ID to the client",
+          "body": "Include X-Correlation-Id in the response header and in Problem Details JSON extensions. Users and support can quote it; you find the exact request in seconds."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Correlation across three services",
+          "items": [
+            {
+              "title": "Client sends request",
+              "body": "Optional X-Correlation-Id header; SPA can generate UUID per user action."
+            },
+            {
+              "title": "API gateway middleware",
+              "body": "Reads or creates correlation id; sets HttpContext.Items; BeginScope for logs."
+            },
+            {
+              "title": "Downstream HttpClient call",
+              "body": "DelegatingHandler copies correlation id and traceparent to outbound headers."
+            },
+            {
+              "title": "Orders and Payment services",
+              "body": "Each service's middleware reads same id; all logs share CorrelationId field."
+            },
+            {
+              "title": "Error response to client",
+              "body": "Problem Details includes correlationId extension; response header echoed back."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Correlation ID propagation",
+            "source": "sequenceDiagram\n  participant Browser\n  participant Gateway\n  participant Orders\n  participant Payment\n  Browser->>Gateway: POST /checkout X-Correlation-Id abc123\n  Note over Gateway: Scope CorrelationId=abc123\n  Gateway->>Orders: POST /orders X-Correlation-Id abc123 traceparent\n  Note over Orders: Same CorrelationId in logs\n  Orders->>Payment: POST /charge X-Correlation-Id abc123 traceparent\n  Payment-->>Orders: 402 Problem Details correlationId abc123\n  Orders-->>Gateway: 500\n  Gateway-->>Browser: 500 X-Correlation-Id abc123"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Correlation ID middleware",
+            "code": "public class CorrelationIdMiddleware(RequestDelegate next, ILogger<CorrelationIdMiddleware> logger)\n{\n    public const string HeaderName = \"X-Correlation-Id\";\n\n    public async Task InvokeAsync(HttpContext context)\n    {\n        var correlationId = context.Request.Headers[HeaderName].FirstOrDefault()\n            ?? Activity.Current?.TraceId.ToString()\n            ?? Guid.NewGuid().ToString(\"N\");\n\n        context.Items[\"CorrelationId\"] = correlationId;\n        context.Response.OnStarting(() =>\n        {\n            context.Response.Headers[HeaderName] = correlationId;\n            return Task.CompletedTask;\n        });\n\n        using (logger.BeginScope(new Dictionary<string, object>\n        {\n            [\"CorrelationId\"] = correlationId\n        }))\n        {\n            await next(context);\n        }\n    }\n}\n\napp.UseMiddleware<CorrelationIdMiddleware>(); // early in pipeline",
+            "explanation": "Prefer incoming client id for end-to-end tracing; fall back to OTel trace id or new GUID. OnStarting ensures header is set even on error responses. Register early — before exception handler inner pipeline if possible."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Forward correlation ID on HttpClient",
+            "code": "public class CorrelationIdHandler(IHttpContextAccessor accessor) : DelegatingHandler\n{\n    protected override Task<HttpResponseMessage> SendAsync(\n        HttpRequestMessage request, CancellationToken ct)\n    {\n        var ctx = accessor.HttpContext;\n        if (ctx?.Items[\"CorrelationId\"] is string id)\n            request.Headers.TryAddWithoutValidation(CorrelationIdMiddleware.HeaderName, id);\n\n        // OpenTelemetry HttpClient instrumentation adds traceparent automatically\n        return base.SendAsync(request, ct);\n    }\n}\n\nbuilder.Services.AddTransient<CorrelationIdHandler>();\nbuilder.Services.AddHttpClient<IInventoryClient, InventoryClient>()\n    .AddHttpMessageHandler<CorrelationIdHandler>();",
+            "explanation": "DelegatingHandler runs on every outbound call from that typed client. IHttpContextAccessor bridges request scope to HttpClient. OTel handles traceparent separately — both headers should travel together."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Problem Details with correlationId extension",
+            "code": "builder.Services.AddProblemDetails(options =>\n{\n    options.CustomizeProblemDetails = ctx =>\n    {\n        var correlationId = ctx.HttpContext.Items[\"CorrelationId\"]?.ToString()\n            ?? ctx.HttpContext.TraceIdentifier;\n        ctx.ProblemDetails.Extensions[\"correlationId\"] = correlationId;\n        ctx.ProblemDetails.Extensions[\"traceId\"] = Activity.Current?.TraceId.ToString();\n    };\n});\n\n// Client receives:\n// { \"type\":\"...\", \"title\":\"Payment failed\", \"status\":402,\n//   \"correlationId\":\"abc123\", \"traceId\":\"4bf92f...\" }",
+            "explanation": "RFC 7807 extensions are the standard place for correlationId in API errors. Include both business correlation id and OTel trace id for different lookup tools."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Message queue propagation (background worker)",
+            "code": "public record OrderPlacedEvent(Guid OrderId, string CorrelationId);\n\n// Publisher — capture from HTTP context\nvar correlationId = httpContext.Items[\"CorrelationId\"]?.ToString()!;\nawait bus.PublishAsync(new OrderPlacedEvent(order.Id, correlationId));\n\n// Consumer — restore scope in background service\npublic class OrderPlacedHandler(ILogger<OrderPlacedHandler> logger) : IConsumer<OrderPlacedEvent>\n{\n    public async Task Handle(OrderPlacedEvent msg, CancellationToken ct)\n    {\n        using (logger.BeginScope(new { msg.CorrelationId, msg.OrderId }))\n        {\n            logger.LogInformation(\"Processing order placed event\");\n            await _processor.RunAsync(msg.OrderId, ct);\n        }\n    }\n}",
+            "explanation": "HTTP context does not exist in consumers — embed correlation id in message envelope. Same pattern for Azure Service Bus application properties or RabbitMQ headers."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Request correlation: Express vs ASP.NET Core",
+          "headers": ["Pattern", "Node / Express", "ASP.NET Core"],
+          "rows": [
+            ["Read incoming id", "req.headers['x-request-id']", "Request.Headers['X-Correlation-Id']"],
+            ["Generate if missing", "uuid v4 in middleware", "Guid.NewGuid() or Activity.TraceId"],
+            ["Attach to logs", "req.id + pino child logger", "BeginScope CorrelationId"],
+            ["Forward downstream", "axios interceptor", "DelegatingHandler on HttpClient"],
+            ["Return to client", "res.setHeader('x-request-id')", "Response.Headers or Problem Details"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Generating a new correlation id on every internal service hop — breaks end-to-end search. Not forwarding on HttpClient — downstream logs have different ids. Only using HttpContext.TraceIdentifier without returning it to clients. Trusting client-supplied ids without length/format validation (log injection risk). Forgetting queue consumers — correlation stops at HTTP boundary."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: trigger an error, copy correlationId from Problem Details, search Application Insights across all role names with that property — every log and dependency call should appear. Distributed tracing across microservices: if logs correlate but traces do not, traceparent is missing on HttpClient — fix instrumentation not correlation middleware. Align strategies: use OTel trace id as correlation id (simplest), or maintain separate business correlation id in baggage. For BFF pattern, generate correlation id at browser edge; for service mesh, Istio/Linkerd may add headers — document precedence rules."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Correlation vs trace id",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["Same as OTel trace id", "One id for logs and traces", "Trace id changes if sampling drops span"],
+            ["Separate X-Correlation-Id", "Stable business id regardless of sampling", "Two ids to teach support staff"],
+            ["RequestId only", "Built-in, zero code", "Not propagated to client by default"],
+            ["Baggage tenant-id + trace", "Rich context propagation", "Baggage size limits; PII risk"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying correlation id and trace id are unrelated with no propagation strategy. Not knowing HttpClient does not forward headers automatically without a handler. Claiming GUID per microservice call is correct — that fragments the story. Unable to explain how background workers continue correlation from HTTP requests."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Correlation ID links logs and errors across services; propagate via header, BeginScope, HttpClient handler, and message envelopes.",
+    "Tradeoff: separate business id vs OTel trace id — align explicitly; sampling may drop traces but logs should keep correlation id.",
+    "Production tip: middleware early in pipeline; DelegatingHandler on typed HttpClients; correlationId in Problem Details extensions; queue message headers.",
+    "60s: Read or generate X-Correlation-Id. Store in Items and BeginScope. Forward on HttpClient. Return in response and Problem Details. OTel traceparent for span linking. Embed in async messages. Search one id in App Insights across services.",
+    "Follow-up: how do you propagate correlation through a fire-and-forget background task?"
+  ],
+  "commonPitfalls": [
+    "Saying 'each service generates its own correlation id' gets you rejected — propagation must preserve the original id end-to-end.",
+    "HttpClient without DelegatingHandler — downstream service logs are unsearchable from the user's error report.",
+    "Strong answer: 'Middleware reads or creates id, scopes logs, handler forwards header, Problem Details returns to client, OTel traceparent for spans, message properties for workers.'"
+  ],
+  "introducedIn": "Community pattern; ASP.NET Core TraceIdentifier built-in; W3C tracecontext in .NET 5+",
+  "relatedTopicIds": [
+    "dotnet-11-structured-logging",
+    "dotnet-11-opentelemetry-tracing",
+    "dotnet-11-application-insights",
+    "dotnet-08-problem-details",
+    "dotnet-04-custom-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "cls-hooked and AsyncLocalStorage request context",
+      "note": "Node uses AsyncLocalStorage to carry requestId across async calls — equivalent to HttpContext.Items plus BeginScope in ASP.NET.",
+      "futureTopicSlug": "javascript/nodejs/async-local-storage"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS CLS (continuation-local-storage) module",
+      "note": "nestjs-cls provides getCorrelationId() in any service without passing parameters — mirrors IHttpContextAccessor pattern.",
+      "futureTopicSlug": "typescript/nestjs/cls-correlation"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "W3C Trace Context (traceparent)",
+      "url": "https://www.w3.org/TR/trace-context/"
+    },
+    {
+      "title": "Problem Details for HTTP APIs (RFC 7807)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/web-api/handle-errors"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}
