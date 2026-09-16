@@ -1,0 +1,235 @@
+{
+  "id": "dotnet-02-http-fundamentals",
+  "slug": "http-fundamentals",
+  "title": "HTTP fundamentals (request/response, headers, body)",
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "order": 1,
+  "hook": "Every Web API call is a Hypertext Transfer Protocol (HTTP) message: a client sends a request with a method, URL, headers, and optional body; the server returns a status code, headers, and optional body. ASP.NET Core maps that wire format into HttpContext.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "HTTP is the application-layer protocol browsers and API clients use to talk to servers. A request names what you want (method + path), carries metadata (headers), and may include a payload (body). A response reports success or failure (status code), returns metadata (headers), and may include a payload. In ASP.NET Core, Kestrel parses the raw bytes into HttpRequest and HttpResponse objects exposed through HttpContext per connection."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "HTTP",
+              "shortForm": "HTTP",
+              "longForm": "Hypertext Transfer Protocol",
+              "plainDefinition": "A text-based request/response protocol for transferring representations of resources over a network.",
+              "example": "GET /api/orders/42 HTTP/1.1"
+            },
+            {
+              "term": "Header",
+              "longForm": "HTTP header",
+              "plainDefinition": "Key-value metadata on a request or response — content type, authorization, caching directives, correlation IDs.",
+              "example": "Content-Type: application/json"
+            },
+            {
+              "term": "Body",
+              "longForm": "Message body",
+              "plainDefinition": "The optional payload after headers — JSON, form data, file bytes. GET requests usually have no body.",
+              "example": "{\"name\":\"Ada\"}"
+            },
+            {
+              "term": "HttpContext",
+              "longForm": "HttpContext",
+              "plainDefinition": "ASP.NET Core's per-request object holding Request, Response, Items, and user identity for the lifetime of one HTTP exchange.",
+              "example": "app.MapGet(\"/ping\", (HttpContext ctx) => ctx.Response.WriteAsync(\"ok\"));"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "You cannot design honest APIs without understanding what actually crosses the wire. Headers control caching, compression, authentication, and tracing. The body format (JSON, form-urlencoded, multipart) determines model binding. Misreading HTTP/1.1 keep-alive, HTTP/2 multiplexing, or HTTP/3 over QUIC leads to wrong assumptions about connection reuse and latency in production."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview baseline",
+          "body": "Senior interviews expect you to explain request flow from socket bytes to controller action — not just attribute routing syntax. HTTP fundamentals are the vocabulary for every later topic: middleware, auth, caching, and versioning."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "One HTTP round trip through ASP.NET Core",
+          "items": [
+            {
+              "title": "Client opens a connection",
+              "body": "Kestrel accepts TCP (or TLS). HTTP/2 may multiplex many requests on one connection."
+            },
+            {
+              "title": "Request line and headers arrive",
+              "body": "Method, path, query string, and headers are parsed into HttpRequest."
+            },
+            {
+              "title": "Body is streamed (if present)",
+              "body": "Large uploads stream through Request.Body — do not buffer entire files in memory by default."
+            },
+            {
+              "title": "Middleware pipeline runs",
+              "body": "Each component can read headers, short-circuit, or pass to the next delegate."
+            },
+            {
+              "title": "Endpoint writes the response",
+              "body": "Status code, response headers, and body are sent. Connection may stay open for the next request."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "HTTP request through Kestrel",
+            "source": "sequenceDiagram\n  participant C as Client\n  participant K as Kestrel\n  participant P as Middleware pipeline\n  participant E as Endpoint\n  C->>K: TCP/TLS + HTTP request\n  K->>P: HttpContext\n  P->>E: Invoke endpoint\n  E->>P: Status + headers + body\n  P->>K: HttpResponse\n  K->>C: HTTP response"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal API — read request parts",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\n\napp.MapGet(\"/echo\", (HttpRequest request) =>\n{\n    var accept = request.Headers.Accept.ToString();\n    var correlationId = request.Headers[\"X-Correlation-Id\"].FirstOrDefault();\n    var query = request.Query[\"filter\"].ToString();\n    return Results.Json(new { accept, correlationId, query });\n});\n\napp.Run();",
+            "explanation": "Headers are case-insensitive on the wire but exposed as a dictionary-like structure. Query string is separate from the path. Always propagate correlation IDs from inbound headers to logs and outbound calls."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "POST with JSON body binding",
+            "code": "app.MapPost(\"/customers\", async (HttpRequest request, CancellationToken ct) =>\n{\n    var dto = await request.ReadFromJsonAsync<CreateCustomerDto>(ct);\n    if (dto is null)\n        return Results.BadRequest(\"Body must be JSON.\");\n\n    return Results.Created($\"/customers/{Guid.NewGuid()}\", dto);\n});\n\nrecord CreateCustomerDto(string Name, string Email);",
+            "explanation": "ReadFromJsonAsync deserializes the request body stream. Content-Type: application/json is expected. CancellationToken flows from Kestrel when the client disconnects."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Set response headers explicitly",
+            "code": "app.MapGet(\"/reports/{id}\", (string id, HttpResponse response) =>\n{\n    response.Headers.CacheControl = \"private, max-age=60\";\n    response.Headers.Append(\"X-Request-Id\", id);\n    return Results.File(\"report.pdf\", \"application/pdf\");\n});\n\n// Controller equivalent:\n// [HttpGet(\"{id}\")]\n// public IActionResult Get(string id)\n// {\n//     Response.Headers.CacheControl = \"private, max-age=60\";\n//     return File(bytes, \"application/pdf\");\n// }",
+            "explanation": "Response headers are set before the body is written. Cache-Control on dynamic PDFs prevents CDN misuse. Append adds a header without replacing existing values."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "HTTP in ASP.NET Core vs Express",
+          "headers": ["Aspect", "ASP.NET Core", "Express (Node.js)"],
+          "rows": [
+            ["Request object", "HttpRequest on HttpContext", "req (IncomingMessage)"],
+            ["Response object", "HttpResponse + IResult helpers", "res (ServerResponse)"],
+            ["Body parsing", "Built-in ReadFromJsonAsync, [FromBody]", "express.json() middleware"],
+            ["Header access", "request.Headers[\"Name\"]", "req.get('name') or req.headers"],
+            ["Correlation ID", "Middleware + IHttpClientFactory", "middleware sets req.id, pino child logger"],
+            ["Streaming", "Request.Body as Stream", "req pipe or busboy for multipart"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming GET requests never carry a body — some clients send one, but proxies may strip it. Reading Request.Body twice without enabling buffering. Forgetting Content-Type on JSON responses (Results.Json sets it automatically; manual WriteAsync does not). Logging full Authorization headers in production."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: enable Kestrel connection logging and compare HTTP/1.1 vs HTTP/2 request counts per connection in Application Insights. Watch for 499 (client closed) spikes when mobile clients cancel in-flight calls. Use dotnet-trace with Microsoft-AspNetCore-Hosting to see time spent in header parsing vs endpoint execution. Large file uploads should use streaming — buffering a 500 MB body into a byte[] will OOM the pod."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "HTTP version tradeoffs",
+          "headers": ["Version", "Connection model", "Production note"],
+          "rows": [
+            ["HTTP/1.1", "One request at a time per connection (pipelining rare)", "Many connections behind load balancers — tune connection limits"],
+            ["HTTP/2", "Multiplexed streams on one connection", "Head-of-line blocking at TCP layer; great for browser APIs"],
+            ["HTTP/3", "QUIC over UDP", "Faster handshake on lossy networks; check firewall UDP rules"],
+            ["TLS termination", "At reverse proxy vs Kestrel", "X-Forwarded-* headers must be trusted only from the proxy"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'HTTP is just JSON over TCP' — it is a structured message format with methods, status codes, and cache semantics. Claiming headers are case-sensitive on the wire. Not knowing that HttpContext is scoped per request and must not be captured in singleton services."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "HTTP is request (method, URL, headers, body) + response (status, headers, body); ASP.NET Core exposes this as HttpContext per request.",
+    "Stream large bodies; do not buffer entire uploads. GET usually has no body — do not rely on one.",
+    "Propagate X-Correlation-Id (or trace context) from inbound headers through logs and HttpClient outbound calls.",
+    "60s: Client sends HTTP request. Kestrel parses into HttpContext. Middleware pipeline runs. Endpoint sets status, headers, body. Connection may reuse for HTTP/2. Headers carry auth, caching, and tracing — not just JSON metadata.",
+    "Follow-up: where does TLS terminate in your deployment, and how do forwarded headers affect routing?"
+  ],
+  "commonPitfalls": [
+    "Saying 'headers are optional decoration' gets you rejected — they drive caching, auth, content negotiation, and tracing.",
+    "Capturing HttpContext in a singleton service causes cross-request data leaks.",
+    "Strong answer: 'One request, one HttpContext. Stream bodies. Set Cache-Control and correlation headers deliberately. Know HTTP/2 multiplexing vs HTTP/1.1 connection counts behind a load balancer.'"
+  ],
+  "introducedIn": "HTTP/1.0 (1996); ASP.NET Core unifies HttpContext since 1.0",
+  "relatedTopicIds": [
+    "dotnet-02-rest-principles",
+    "dotnet-02-http-methods-status-codes",
+    "dotnet-02-idempotency-and-caching-headers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express req/res objects",
+      "note": "Express middleware receives (req, res, next). ASP.NET Core uses HttpContext with a delegate pipeline — same HTTP semantics, different object model. express.json() is analogous to [FromBody] model binding.",
+      "futureTopicSlug": "javascript/nodejs/express-basics"
+    },
+    {
+      "language": "typescript",
+      "concept": "Fetch API Request/Response",
+      "note": "Browser fetch and Node fetch expose Headers as a web-standard API. HttpClient in .NET mirrors this for outbound calls; inbound Kestrel uses HttpRequest.Headers with slightly different ergonomics.",
+      "futureTopicSlug": "typescript/http/fetch-api"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "HTTP protocol support in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/http2"
+    },
+    {
+      "title": "HttpContext in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/http-context"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

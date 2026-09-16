@@ -1,0 +1,248 @@
+{
+  "id": "dotnet-02-http-methods-status-codes",
+  "slug": "http-methods-status-codes",
+  "title": "HTTP methods and status codes (honest 4xx/5xx usage)",
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "order": 3,
+  "hook": "HTTP methods tell the server what kind of action you intend; status codes tell the client what actually happened. Returning 200 for validation errors or 500 for 'not found' breaks caches, retries, and client libraries — senior APIs use 4xx and 5xx honestly.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Safe methods (GET, HEAD, OPTIONS) should not change server state. Idempotent methods (GET, PUT, DELETE) produce the same effect when repeated. POST creates resources and is not idempotent by default. Status codes group into 1xx informational, 2xx success, 3xx redirection, 4xx client error, and 5xx server error. ASP.NET Core maps IActionResult, IResult, and exceptions to these codes through built-in helpers like Results.NotFound() and ProblemDetails."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Safe method",
+              "longForm": "Safe HTTP method",
+              "plainDefinition": "A method that only reads data — GET, HEAD, OPTIONS. Safe to retry without side effects.",
+              "example": "GET /api/products?page=2"
+            },
+            {
+              "term": "Idempotent",
+              "longForm": "Idempotent method",
+              "plainDefinition": "Repeating the request does not change the outcome beyond the first successful call.",
+              "example": "DELETE /api/items/5 twice — second call returns 404, item stays deleted."
+            },
+            {
+              "term": "4xx",
+              "longForm": "Client error status",
+              "plainDefinition": "The request was invalid, unauthorized, or targeted a missing resource — fix the client or credentials.",
+              "example": "400 Bad Request, 401 Unauthorized, 404 Not Found, 409 Conflict"
+            },
+            {
+              "term": "5xx",
+              "longForm": "Server error status",
+              "plainDefinition": "The server failed despite a valid request — client may retry with backoff.",
+              "example": "500 Internal Server Error, 503 Service Unavailable"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Load balancers, CDNs, and HttpClient retry policies key off status codes. A 404 stops retries; a 500 triggers them. Returning 200 with { error: true } means Polly, axios, and fetch will not retry transient failures correctly. Payment and inventory APIs that misuse 409 vs 422 cause duplicate charges or lost updates in production."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "The honesty principle",
+          "body": "If the client sent a bad email format, return 400 or 422 — not 500. If the row was deleted by another user, return 409 Conflict — not 200 with a warning flag. Interviewers probe whether you know which code fits which scenario."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choose method and status for CRUD",
+          "items": [
+            {
+              "title": "GET /resources",
+              "body": "200 with list or 404 if singleton resource missing."
+            },
+            {
+              "title": "POST /resources",
+              "body": "201 Created with Location header and body; 400 for validation failure."
+            },
+            {
+              "title": "PUT /resources/{id}",
+              "body": "200 or 204 on replace; 404 if id unknown; 409 on version conflict."
+            },
+            {
+              "title": "PATCH /resources/{id}",
+              "body": "200 with updated representation; 422 for semantic validation errors."
+            },
+            {
+              "title": "DELETE /resources/{id}",
+              "body": "204 No Content on success; 404 if already gone (team policy varies)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Status code decision tree",
+            "source": "flowchart TD\n  A[Request arrives] --> B{Authenticated?}\n  B -->|No| C[401 Unauthorized]\n  B -->|Yes| D{Authorized for resource?}\n  D -->|No| E[403 Forbidden]\n  D -->|Yes| F{Resource exists?}\n  F -->|No| G[404 Not Found]\n  F -->|Yes| H{Valid input?}\n  H -->|No| I[400 or 422]\n  H -->|Yes| J{Conflict?}\n  J -->|Yes| K[409 Conflict]\n  J -->|No| L[2xx Success]\n  H -->|Server bug| M[500 Internal Server Error]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Honest status codes in minimal APIs",
+            "code": "app.MapPost(\"/api/payments\", async (PaymentRequest req, IPaymentService svc) =>\n{\n    if (req.Amount <= 0)\n        return Results.ValidationProblem(new Dictionary<string, string[]>\n        {\n            [\"amount\"] = [\"Amount must be positive.\"]\n        }); // 400\n\n    var result = await svc.ChargeAsync(req);\n    return result switch\n    {\n        PaymentOutcome.Success s => Results.Created($\"/api/payments/{s.Id}\", s),\n        PaymentOutcome.Duplicate => Results.Conflict(new { error = \"Duplicate idempotency key.\" }),\n        PaymentOutcome.Declined d => Results.UnprocessableEntity(new { error = d.Reason }),\n        _ => Results.StatusCode(502) // upstream gateway failure\n    };\n});\n\nrecord PaymentRequest(decimal Amount, string IdempotencyKey);",
+            "explanation": "Validation → 400. Duplicate idempotency key → 409 Conflict. Card declined (valid request, business rule) → 422. Upstream processor down → 502 Bad Gateway, not 500 with a generic message."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Controller with typed results",
+            "code": "[HttpPut(\"{id:guid}\")]\n[ProducesResponseType(typeof(ProductDto), StatusCodes.Status200OK)]\n[ProducesResponseType(StatusCodes.Status404NotFound)]\n[ProducesResponseType(StatusCodes.Status409Conflict)]\npublic async Task<ActionResult<ProductDto>> Replace(\n    Guid id, ProductDto dto, CancellationToken ct)\n{\n    var existing = await repo.GetAsync(id, ct);\n    if (existing is null) return NotFound();\n\n    if (existing.RowVersion != dto.RowVersion)\n        return Conflict(\"Row was modified by another user.\");\n\n    await repo.ReplaceAsync(dto, ct);\n    return Ok(dto);\n}",
+            "explanation": "ProducesResponseType documents OpenAPI responses. RowVersion mismatch is 409 — client should refresh and retry. NotFound is 404, not null body with 200."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "RFC 7807 Problem Details",
+            "code": "builder.Services.AddProblemDetails(options =>\n{\n    options.CustomizeProblemDetails = ctx =>\n    {\n        ctx.ProblemDetails.Extensions[\"traceId\"] =\n            Activity.Current?.Id ?? ctx.HttpContext.TraceIdentifier;\n    };\n});\n\napp.UseExceptionHandler();\napp.UseStatusCodePages();\n\n// Throws map to 500 with ProblemDetails body:\n// { \"type\", \"title\", \"status\", \"traceId\" }",
+            "explanation": "Problem Details standardizes error JSON across 4xx/5xx. traceId links client errors to server logs. Express equivalent: express error middleware returning { error, code }."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostic — log status distribution",
+            "code": "// Middleware snippet for observability\napp.Use(async (context, next) =>\n{\n    await next();\n    var status = context.Response.StatusCode;\n    logger.LogInformation(\n        \"HTTP {Method} {Path} => {Status}\",\n        context.Request.Method,\n        context.Request.Path,\n        status);\n\n    // Alert if 5xx rate > 1% over 5 minutes in your APM\n});",
+            "explanation": "Track 4xx vs 5xx ratio in Application Insights or OpenTelemetry. Spike in 499 means clients cancel; spike in 502 means downstream dependency failure."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Status handling in ASP.NET Core vs Express",
+          "headers": ["Scenario", "ASP.NET Core", "Express"],
+          "rows": [
+            ["Not found", "Results.NotFound() / NotFound()", "res.status(404).json(...)"],
+            ["Validation", "Results.ValidationProblem() → 400", "res.status(400).json({ errors })"],
+            ["Created", "Results.Created(uri, body)", "res.status(201).location(uri).json(body)"],
+            ["Global errors", "UseExceptionHandler + ProblemDetails", "app.use((err, req, res, next) => ...)"],
+            ["Retry policy", "HttpClient Polly on 5xx/408", "axios-retry on 5xx/network error"],
+            ["Anti-pattern", "return Ok(new { error = true })", "res.status(200).json({ success: false })"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using 401 when the user is authenticated but lacks permission — that is 403 Forbidden. Returning 500 for validation errors — clients will retry and hammer the server. Using 404 for 'no rows matched filter' on a collection GET — return 200 with an empty array. DELETE returning 200 with a body when 204 is clearer."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior depth on status codes: 401 vs 403 — 401 means 'who are you?' (missing/invalid auth); 403 means 'I know who you are, you cannot do this.' 409 vs 412 vs 422 — 409 for state conflict (duplicate key, stale ETag); 422 for semantically invalid JSON (amount negative on a valid schema); 412 Precondition Failed when If-Match ETag does not match. 502 vs 503 — 502 when your API called a bad upstream response; 503 when your service is intentionally down (maintenance) or overloaded. Payment APIs: never return 200 on charge failure; use 402 rarely (reserved); prefer 422 for declined cards and 409 for duplicate idempotency keys. Prove it: dashboard 4xx/5xx breakdown per endpoint in App Insights; alert on 5xx SLO burn rate."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Status code cheat sheet (senior)",
+          "headers": ["Code", "When to use", "When NOT to use"],
+          "rows": [
+            ["400 Bad Request", "Malformed JSON, failed model binding", "Business rule rejection — prefer 422"],
+            ["401 Unauthorized", "Missing or invalid token", "Authenticated but forbidden — that is 403"],
+            ["403 Forbidden", "Policy denied", "Wrong password on login — often 401"],
+            ["404 Not Found", "Resource id does not exist", "Empty search results on collection"],
+            ["409 Conflict", "Duplicate idempotency key, RowVersion clash", "Generic validation errors"],
+            ["422 Unprocessable Entity", "Valid syntax, business rule failed", "Malformed JSON"],
+            ["429 Too Many Requests", "Rate limit exceeded", "Generic overload without Retry-After"],
+            ["502 Bad Gateway", "Upstream API returned garbage", "Your own unhandled exception — 500"],
+            ["503 Service Unavailable", "Maintenance, circuit open", "Single record not found"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'we always return 200 and put errors in the body' — breaks HTTP semantics, caching, and retries. Confusing 401 and 403. Not knowing 204 must not include a body. Claiming DELETE is not idempotent — repeating delete should leave the resource deleted, even if the second call returns 404."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Methods express intent (GET safe, PUT idempotent replace, POST create); status codes express outcome — never hide errors in 200 bodies.",
+    "401 = auth missing/invalid; 403 = authenticated but denied; 409 = conflict; 422 = business validation on well-formed input.",
+    "Payment APIs: duplicate idempotency key → 409; card declined → 422; upstream processor failure → 502. Monitor 5xx SLO per endpoint.",
+    "60s: Safe methods do not mutate state. Idempotent methods can be retried. Use 4xx when the client can fix the request, 5xx when the server failed. Problem Details standardize errors. Never return 200 with error flags for machine clients.",
+    "Follow-up: how does your HttpClient retry policy treat 408, 429, and 503 with Retry-After?"
+  ],
+  "commonPitfalls": [
+    "Saying '500 for everything unknown' gets you rejected — distinguish 404, 409, 422, and 502 with clear client behavior.",
+    "Using 401 for permission denied shows you confuse authentication with authorization.",
+    "Strong answer: 'Honest codes drive retries and caches. 409 for conflicts, 422 for business rules, Problem Details with traceId. Dashboard 4xx/5xx per route in production.'"
+  ],
+  "introducedIn": "HTTP/1.1 (RFC 9110); Problem Details RFC 7807 in ASP.NET Core 3+",
+  "relatedTopicIds": [
+    "dotnet-02-http-fundamentals",
+    "dotnet-02-rest-principles",
+    "dotnet-02-idempotency-and-caching-headers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express res.status() and error middleware",
+      "note": "Express uses res.status(404).json() explicitly. ASP.NET Core IActionResult helpers encode the same semantics. Both need discipline — nothing stops you from res.status(200) on failure except code review.",
+      "futureTopicSlug": "javascript/nodejs/express-error-handling"
+    },
+    {
+      "language": "typescript",
+      "concept": "fetch response.ok and axios interceptors",
+      "note": "fetch only throws on network errors — HTTP 4xx/5xx still resolve. axios rejects on 4xx/5xx by default. Server-side honest codes let clients branch correctly without parsing body shapes.",
+      "futureTopicSlug": "typescript/http/axios-interceptors"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "HTTP status codes in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/web-api/action-return-types"
+    },
+    {
+      "title": "Handle errors in ASP.NET Core APIs (Problem Details)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

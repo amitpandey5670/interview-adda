@@ -1,0 +1,231 @@
+{
+  "id": "dotnet-02-api-versioning",
+  "slug": "api-versioning",
+  "title": "API versioning (URL, header, and query strategies)",
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "order": 4,
+  "hook": "Public APIs outlive mobile apps and partner integrations — versioning lets you ship breaking changes without silently breaking clients. ASP.NET Core supports version in the URL path, a header, or a query parameter; each choice has caching, gateway, and developer-experience tradeoffs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "API versioning assigns a label (1.0, 2.0, or a date like 2024-06-01) to a contract snapshot. Clients pin to a version until they migrate. The Asp.Versioning.Mvc package adds [ApiVersion], versioned route templates, and sunset headers. Breaking changes include removing fields, renaming properties, changing status codes, or altering URL shapes. Non-breaking additions (new optional fields) usually do not require a new major version."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Breaking change",
+              "longForm": "Breaking API change",
+              "plainDefinition": "A change that causes existing clients to fail without modification — removing a field, changing types, renaming routes.",
+              "example": "v1 returns amount as string; v2 returns amount as decimal"
+            },
+            {
+              "term": "URL versioning",
+              "longForm": "URL path versioning",
+              "plainDefinition": "Version embedded in the path segment — /api/v2/orders.",
+              "example": "[Route(\"api/v{version:apiVersion}/orders\")]"
+            },
+            {
+              "term": "Header versioning",
+              "longForm": "Header-based versioning",
+              "plainDefinition": "Client sends api-version: 2.0 or Accept header with version media type.",
+              "example": "api-version: 2.0 on every request"
+            },
+            {
+              "term": "Sunset header",
+              "longForm": "Sunset HTTP header",
+              "plainDefinition": "Signals when an old version will be retired so clients can plan migration.",
+              "example": "Sunset: Sat, 01 Jan 2027 00:00:00 GMT"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Without versioning, your only options are never breaking changes (impossible long-term) or breaking clients on deploy. Versioning plus deprecation policy is how Stripe, GitHub, and Microsoft Graph ship evolution. Wrong strategy — query-string versions break CDN caches; header-only versions are invisible in browser devtools URL bars."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Default version policy",
+          "body": "When a client omits a version, assume the oldest supported version or return 400 — document the choice. Silently routing to latest breaks clients when you ship v3."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Ship a v2 alongside v1",
+          "items": [
+            {
+              "title": "Register versioning services",
+              "body": "AddApiVersioning with readers for URL, header, and query; set default and report versions."
+            },
+            {
+              "title": "Mark controllers or minimal groups",
+              "body": "[ApiVersion(1.0)] and [ApiVersion(2.0)] on separate types or methods."
+            },
+            {
+              "title": "Document both in OpenAPI",
+              "body": "Swagger UI shows v1 and v2 documents or a single doc with version selector."
+            },
+            {
+              "title": "Deprecate v1",
+              "body": "Add [Obsolete] metadata, Sunset header, and metrics on v1 traffic before removal."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Version resolution flow",
+            "source": "flowchart LR\n  R[Incoming request] --> U{URL contains v2?}\n  U -->|Yes| V2[Route to v2 handlers]\n  U -->|No| H{api-version header?}\n  H -->|2.0| V2\n  H -->|1.0 or missing| V1[Route to v1 handlers]\n  V1 --> M[Deprecation middleware adds Sunset warning]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Register Asp.Versioning",
+            "code": "builder.Services.AddApiVersioning(options =>\n{\n    options.DefaultApiVersion = new ApiVersion(1, 0);\n    options.AssumeDefaultVersionWhenUnspecified = true;\n    options.ReportApiVersions = true;\n    options.ApiVersionReader = ApiVersionReader.Combine(\n        new UrlSegmentApiVersionReader(),\n        new HeaderApiVersionReader(\"api-version\"),\n        new QueryStringApiVersionReader(\"api-version\"));\n})\n.AddApiExplorer(options =>\n{\n    options.GroupNameFormat = \"'v'VVV\";\n    options.SubstituteApiVersionInUrl = true;\n});",
+            "explanation": "Combine readers for flexibility — public partners may use URL versioning while mobile apps send a header. ReportApiVersions echoes supported versions in response headers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Versioned controllers — breaking DTO change",
+            "code": "[ApiController]\n[Route(\"api/v{version:apiVersion}/shipments\")]\npublic class ShipmentsV1Controller : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    [MapToApiVersion(1.0)]\n    public ShipmentV1Dto Get(int id) => new(id, \"InTransit\");\n}\n\n[ApiController]\n[Route(\"api/v{version:apiVersion}/shipments\")]\npublic class ShipmentsV2Controller : ControllerBase\n{\n    [HttpGet(\"{id}\")]\n    [MapToApiVersion(2.0)]\n    public ShipmentV2Dto Get(int id) => new(id, ShipmentStatus.InTransit, DateTime.UtcNow);\n}\n\nrecord ShipmentV1Dto(int Id, string Status);\nenum ShipmentStatus { InTransit, Delivered }\nrecord ShipmentV2Dto(int Id, ShipmentStatus Status, DateTime LastUpdatedUtc);",
+            "explanation": "v2 replaces string status with an enum and adds a timestamp — breaking for strict clients. Separate controllers keep v1 frozen while v2 evolves."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Minimal API versioned groups",
+            "code": "var v1 = app.NewVersionedApi(\"Orders\").MapGroup(\"/api/v{version:apiVersion}/orders\")\n    .HasApiVersion(1, 0);\nvar v2 = app.NewVersionedApi(\"Orders\").MapGroup(\"/api/v{version:apiVersion}/orders\")\n    .HasApiVersion(2, 0);\n\nv1.MapGet(\"/{id}\", (int id) => Results.Ok(new { id, total = \"99.00\" }));\nv2.MapGet(\"/{id}\", (int id) => Results.Ok(new { id, total = 99.00m, currency = \"USD\" }));",
+            "explanation": "v1 returns total as string (legacy); v2 returns decimal plus currency. Same route template, different handlers per version."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Versioning strategies compared",
+          "headers": ["Strategy", "ASP.NET Core", "Express pattern"],
+          "rows": [
+            ["URL /v1/", "UrlSegmentApiVersionReader", "app.use('/v1', v1Router)"],
+            ["Header", "HeaderApiVersionReader", "middleware reads req.headers['api-version']"],
+            ["Query", "QueryStringApiVersionReader", "const v = req.query.v — cache unfriendly"],
+            ["OpenAPI", "AddApiExplorer group names", "separate swagger.json per version"],
+            ["Deprecation", "Sunset + Obsolete attributes", "custom middleware + response header"],
+            ["Default version", "AssumeDefaultVersionWhenUnspecified", "explicit branch or 400 if missing"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Versioning every endpoint when additive changes suffice. Using query-string version on cacheable GETs — CDNs ignore query strings inconsistently. Removing v1 without measuring traffic — breaks long-tail integrations. Mixing URL v2 with unversioned legacy routes in the same API surface."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior depth on versioning tradeoffs: URL versioning is visible, cache-friendly per path, and easy in API gateways — but pollutes REST purity and duplicates route tables. Header versioning keeps URLs clean and works for hypermedia — but harder to test in a browser address bar and easy to forget in HttpClient calls. Media-type versioning (Accept: application/vnd.company.v2+json) is precise but painful for tooling. Date-based versions (Stripe style) communicate sunset timelines clearly. In production, log api-version per request in App Insights; block v1 removal until traffic < 0.1% for two release cycles. Pair with OpenAPI diff in CI to catch accidental breaking changes."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Versioning tradeoffs (senior)",
+          "headers": ["Strategy", "Pros", "Cons"],
+          "rows": [
+            ["URL /api/v2/", "Explicit, CDN-friendly, easy routing", "Route duplication, not pure REST"],
+            ["Header api-version", "Clean URLs", "Invisible, easy to omit, cache key complexity"],
+            ["Query ?api-version=2", "Quick to prototype", "CDN/cache pitfalls, easy to strip by proxies"],
+            ["Accept media type", "Strong content negotiation", "Poor Swagger UX, client boilerplate"],
+            ["No versioning + additive only", "Simplest", "Cannot fix past mistakes; field removal blocked"],
+            ["GraphQL schema evolution", "Single endpoint", "Different toolchain; breaking changes are subtle"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'we just deploy breaking changes and fix clients' on a public API question. Recommending query-string versioning for a CDN-fronted catalog without mentioning cache keys. Not having a deprecation plan — Sunset headers, metrics, and comms channels for partners."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Version when you make breaking contract changes — not for every new optional field.",
+    "URL versioning is gateway- and cache-friendly; header versioning keeps URLs clean but is easier to forget.",
+    "Measure v1 traffic before removal; use Sunset headers and OpenAPI diff in CI.",
+    "60s: Pin clients to a version. URL for visibility, header for clean paths, avoid query for cacheable GETs. Ship v2 alongside v1. Deprecate with metrics. Breaking = remove/rename/type-change; additive fields are usually safe.",
+    "Follow-up: how would you version minimal APIs vs controllers in the same service?"
+  ],
+  "commonPitfalls": [
+    "Saying 'latest version when unspecified' gets you rejected — silent upgrades break clients on your next deploy.",
+    "Query-string versioning on GET catalog endpoints breaks CDN caching without custom cache keys.",
+    "Strong answer: 'URL for public partners, header for mobile, default 1.0 with ReportApiVersions, Sunset before removal, OpenAPI diff in CI.'"
+  ],
+  "introducedIn": "Asp.Versioning.Mvc 6+; Microsoft.AspNetCore.Mvc.Versioning deprecated",
+  "relatedTopicIds": [
+    "dotnet-02-rest-principles",
+    "dotnet-02-openapi-swagger",
+    "dotnet-02-http-methods-status-codes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express router versioning",
+      "note": "const v1 = express.Router(); app.use('/v1', v1) is the Express equivalent of URL segment versioning. No built-in header reader — you write middleware.",
+      "futureTopicSlug": "javascript/nodejs/api-versioning"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS @Version decorator",
+      "note": "NestJS supports URI, header, and media-type versioning with @Version('2'). Conceptually mirrors Asp.Versioning attribute model.",
+      "futureTopicSlug": "typescript/nestjs/versioning"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "API versioning in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/web-api/api-versioning"
+    },
+    {
+      "title": "Azure API design — versioning",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design#versioning-a-restful-web-api"
+    }
+  ],
+  "animationHint": "timeline"
+}

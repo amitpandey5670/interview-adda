@@ -1,0 +1,229 @@
+{
+  "id": "dotnet-02-rest-principles",
+  "slug": "rest-principles",
+  "title": "REST principles (resources, nouns in URLs, statelessness)",
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "order": 2,
+  "hook": "Representational State Transfer (REST) is not a framework — it is a set of constraints for designing networked APIs around resources (nouns), standard HTTP methods (verbs), and stateless servers that return representations like JSON.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "REST, defined by Roy Fielding, treats every URL as a resource identifier — customers, orders, invoices — not as remote procedure names. The server does not store client session state between requests; each call carries whatever context it needs (tokens, ETags, idempotency keys). Representations (JSON, XML, PDF) are negotiated via headers. Hypermedia (links in responses) is the ideal but most teams ship JSON with stable URLs and OpenAPI contracts instead."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "REST",
+              "shortForm": "REST",
+              "longForm": "Representational State Transfer",
+              "plainDefinition": "An architectural style using resources, representations, and uniform HTTP interfaces instead of RPC-style action URLs.",
+              "example": "GET /api/orders/42 — not GET /api/getOrder?id=42"
+            },
+            {
+              "term": "Resource",
+              "longForm": "Resource",
+              "plainDefinition": "A noun identified by a URL. Collections use plural paths; individual items add an id segment.",
+              "example": "/api/products and /api/products/7"
+            },
+            {
+              "term": "Statelessness",
+              "longForm": "Stateless server",
+              "plainDefinition": "The server does not remember prior requests. Authentication and context ride on every call.",
+              "example": "Authorization: Bearer <token> on each request"
+            },
+            {
+              "term": "Representation",
+              "longForm": "Representation",
+              "plainDefinition": "The bytes returned for a resource — usually JSON with the same fields the client sent on create/update.",
+              "example": "Content-Type: application/json"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "RESTful naming makes APIs predictable: clients guess /orders/{id}/items without reading docs. Stateless servers scale horizontally — any pod can handle any request if auth is self-contained. Violating REST (verbs in URLs, 200 for everything) creates brittle clients, broken caches, and interview red flags."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "REST is not CRUD only",
+          "body": "Create, read, update, delete map to POST, GET, PUT/PATCH, DELETE — but REST also cares about cacheability, layered systems, and uniform interfaces. A 'REST-ish' JSON API is fine for internal services; public APIs need stricter status codes and versioning."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Design a resource-oriented endpoint",
+          "items": [
+            {
+              "title": "Name the resource (noun, plural)",
+              "body": "Use /customers not /createCustomer. Sub-resources nest: /customers/{id}/addresses."
+            },
+            {
+              "title": "Pick the HTTP method",
+              "body": "GET reads, POST creates, PUT replaces, PATCH partial update, DELETE removes."
+            },
+            {
+              "title": "Return the right status",
+              "body": "201 + Location on create, 204 on delete with no body, 404 when the resource id does not exist."
+            },
+            {
+              "title": "Keep server stateless",
+              "body": "Store session in JWT or server-side token store keyed by Authorization header — not in-memory per connection."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Resource URL structure",
+            "source": "flowchart TB\n  A[/api] --> B[/orders collection]\n  B --> C[/orders/42 item]\n  C --> D[/orders/42/items sub-collection]\n  D --> E[/orders/42/items/9 sub-item]\n  B --> F[POST creates new order]\n  C --> G[GET read PATCH update DELETE remove]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "RESTful minimal API routes",
+            "code": "var orders = app.MapGroup(\"/api/orders\").WithTags(\"Orders\");\n\norders.MapGet(\"\", () => Results.Ok(Array.Empty<OrderDto>()));\norders.MapGet(\"/{id:int}\", (int id) =>\n    id == 0 ? Results.NotFound() : Results.Ok(new OrderDto(id, \"pending\")));\norders.MapPost(\"\", (CreateOrderDto dto) =>\n    Results.Created($\"/api/orders/99\", new OrderDto(99, dto.Status)));\norders.MapPatch(\"/{id:int}\", (int id, PatchOrderDto patch) => Results.Ok());\norders.MapDelete(\"/{id:int}\", (int id) => Results.NoContent());\n\nrecord OrderDto(int Id, string Status);\nrecord CreateOrderDto(string Status);\nrecord PatchOrderDto(string? Status);",
+            "explanation": "Plural collection path, id segment for items, correct status codes. MapGroup keeps routes DRY — similar to Express Router mounted at /api/orders."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Controller with resource naming",
+            "code": "[ApiController]\n[Route(\"api/[controller]\")]\npublic class InvoicesController : ControllerBase\n{\n    [HttpGet(\"{id:guid}\")]\n    public ActionResult<InvoiceDto> Get(Guid id) =>\n        Ok(new InvoiceDto(id, 100m));\n\n    [HttpPost]\n    public ActionResult<InvoiceDto> Create(CreateInvoiceDto dto)\n    {\n        var created = new InvoiceDto(Guid.NewGuid(), dto.Amount);\n        return CreatedAtAction(nameof(Get), new { id = created.Id }, created);\n    }\n}\n\nrecord InvoiceDto(Guid Id, decimal Amount);\nrecord CreateInvoiceDto(decimal Amount);",
+            "explanation": "[controller] token resolves to 'Invoices' — plural controller name becomes /api/Invoices. CreatedAtAction sets Location header pointing to the new resource."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Anti-pattern — RPC verbs in URL",
+            "code": "// Avoid:\napp.MapPost(\"/api/orders/cancelOrder\", (CancelRequest req) => { });\napp.MapGet(\"/api/getCustomerByEmail\", (string email) => { });\n\n// Prefer:\napp.MapPost(\"/api/orders/{id}/cancellation\", (int id) => { });\n// or PATCH /api/orders/{id} with { \"status\": \"cancelled\" }\napp.MapGet(\"/api/customers\", (string? email) => { }); // filter via query",
+            "explanation": "Cancellation is a state change on the order resource, not a new verb endpoint. Email lookup is a filtered collection read — use query parameters on the collection URL."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "REST routing in ASP.NET Core vs Express",
+          "headers": ["Pattern", "ASP.NET Core", "Express"],
+          "rows": [
+            ["Collection + item", "MapGroup + route templates", "router.get('/:id') mounted at /orders"],
+            ["Nested resource", "/orders/:id/items", "router.use('/:orderId/items', itemsRouter)"],
+            ["Created response", "Results.Created(uri, body)", "res.status(201).location(uri).json(body)"],
+            ["Filtering", "Query string on collection GET", "req.query.email on GET /customers"],
+            ["Stateless auth", "JWT bearer middleware", "passport-jwt or custom middleware"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using POST for every operation including reads. Singular URLs (/order) mixed with plural (/orders) in the same API. Returning 200 with { success: false } instead of 4xx. Storing shopping cart state only in server memory without a token — breaks scale-out."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "REST vs RPC vs GraphQL is a tradeoff interview. REST wins for cacheable public resources and CDN-friendly GETs. gRPC wins for internal high-throughput binary contracts. GraphQL wins when clients need flexible field selection — at the cost of cache complexity. In production, measure p95 latency and error budgets per resource — not ideological purity. HATEOAS (hypermedia links) is rare in JSON APIs but _links in Problem Details and pagination next/prev URLs are practical subsets."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "API style tradeoffs",
+          "headers": ["Style", "Strength", "Weakness"],
+          "rows": [
+            ["REST + JSON", "Simple, cacheable GETs, OpenAPI tooling", "Over/under-fetching, many round trips"],
+            ["RPC (gRPC)", "Strong contracts, streaming, fast binary", "Poor browser support without grpc-web"],
+            ["GraphQL", "Client-driven queries", "Harder HTTP caching, N+1 resolver risk"],
+            ["Action URLs", "Fast to ship", "Breaks caches, unpredictable URLs"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Defining REST as 'using JSON and HTTP' without mentioning resources, statelessness, or uniform interface. Insisting every API must be hypermedia-driven HATEOAS when your team ships OpenAPI + JSON. Not knowing when POST /search is acceptable (complex query bodies) vs GET with query strings."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "REST centers on resources (nouns), representations (JSON), and stateless servers — not RPC action names in URLs.",
+    "Plural collection paths, nested sub-resources, and honest HTTP status codes make APIs predictable and cache-friendly.",
+    "Statelessness means auth and context on every request — design for horizontal scale, not sticky sessions.",
+    "60s: URLs name resources. HTTP methods express intent. Server stores no client session between calls. Return 201 with Location on create, 404 when id missing. Avoid /cancelOrder — PATCH the resource or POST to a sub-resource.",
+    "Follow-up: when would you choose gRPC or GraphQL over REST for the same domain?"
+  ],
+  "commonPitfalls": [
+    "Saying 'REST means CRUD' gets you rejected — uniform interface and cacheability matter too.",
+    "Mixing /order and /orders in one API confuses clients and breaks route conventions.",
+    "Strong answer: 'Nouns in URLs, verbs in HTTP methods, stateless handlers, correct status codes. RPC-style URLs are for exceptions like OAuth token endpoints, not domain CRUD.'"
+  ],
+  "introducedIn": "Roy Fielding dissertation (2000); ASP.NET Core Web API since 1.0",
+  "relatedTopicIds": [
+    "dotnet-02-http-fundamentals",
+    "dotnet-02-http-methods-status-codes",
+    "dotnet-02-openapi-swagger"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express Router resource mounting",
+      "note": "express.Router() at '/api/orders' mirrors MapGroup in minimal APIs. Both encourage nesting sub-routes for sub-resources without verb-heavy paths.",
+      "futureTopicSlug": "javascript/nodejs/express-routing"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS controllers and DTOs",
+      "note": "NestJS @Controller('orders') + @Get(':id') maps closely to ASP.NET Core attribute routing. Both use class-based controllers; minimal APIs are closer to Express route callbacks.",
+      "futureTopicSlug": "typescript/nestjs/controllers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Web API design best practices",
+      "url": "https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design"
+    },
+    {
+      "title": "Create web APIs with ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/web-api/"
+    }
+  ],
+  "animationHint": "flow"
+}

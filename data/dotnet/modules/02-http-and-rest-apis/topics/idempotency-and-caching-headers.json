@@ -1,0 +1,241 @@
+{
+  "id": "dotnet-02-idempotency-and-caching-headers",
+  "slug": "idempotency-and-caching-headers",
+  "title": "Idempotency, ETags, and cache-control headers",
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "order": 6,
+  "hook": "Networks retry failed requests — without idempotency keys, a duplicated POST can charge a customer twice. ETags and Cache-Control tell browsers and CDNs when they can reuse a response instead of hitting your origin on every request.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An idempotent operation produces the same server-side effect when executed multiple times with the same inputs. PUT and DELETE are idempotent by HTTP definition; POST is not — so payment and order APIs accept an Idempotency-Key header (or custom header) and return the original response on replay. ETags are opaque version tokens for a resource representation — clients send If-None-Match on GET for conditional requests (304 Not Modified). Cache-Control directs browsers and reverse proxies how long a response may be stored."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Idempotency key",
+              "longForm": "Idempotency key",
+              "plainDefinition": "A client-generated unique token sent with POST so retries do not duplicate side effects.",
+              "example": "Idempotency-Key: 550e8400-e29b-41d4-a716-446655440000"
+            },
+            {
+              "term": "ETag",
+              "longForm": "Entity Tag",
+              "plainDefinition": "An opaque validator for a resource version — often a hash or row version.",
+              "example": "ETag: \"abc123\" with If-None-Match: \"abc123\" → 304"
+            },
+            {
+              "term": "Cache-Control",
+              "longForm": "Cache-Control header",
+              "plainDefinition": "Directives like max-age, no-store, private, public that control caching behavior.",
+              "example": "Cache-Control: public, max-age=300"
+            },
+            {
+              "term": "304 Not Modified",
+              "longForm": "304 Not Modified",
+              "plainDefinition": "Server tells the client the cached copy is still valid — no body is sent.",
+              "example": "GET with If-None-Match returns 304 when ETag matches"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Mobile clients on flaky networks retry POSTs. Load balancers replay requests on timeout. Without idempotency, you double-charge, double-ship, or create duplicate orders. Without Cache-Control, every catalog GET hits your database. Without ETags, clients download unchanged 5 MB JSON blobs. These headers are how senior APIs stay correct under retries and cheap under read load."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Payment API rule",
+          "body": "Stripe-style idempotency: same key + same body → replay stored response; same key + different body → 409 Conflict. Store keys in Redis or SQL with TTL (24–72 hours) and the serialized response."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Idempotent payment POST flow",
+          "items": [
+            {
+              "title": "Client generates a UUID key",
+              "body": "One key per logical operation — reuse on retry, never across different charges."
+            },
+            {
+              "title": "Server checks key store",
+              "body": "If key exists with same payload hash, return cached 201 response. If key exists with different payload, return 409."
+            },
+            {
+              "title": "Process payment once",
+              "body": "Call processor, persist result, store key → response mapping with TTL."
+            },
+            {
+              "title": "Client retries on timeout",
+              "body": "Same key hits cache — no second charge."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Idempotency key lookup",
+            "source": "sequenceDiagram\n  participant C as Client\n  participant A as API\n  participant R as Redis\n  participant P as Payment gateway\n  C->>A: POST /charges Idempotency-Key: abc\n  A->>R: GET idempotency:abc\n  R-->>A: miss\n  A->>P: Charge\n  P-->>A: success\n  A->>R: SET idempotency:abc response TTL 24h\n  A-->>C: 201 Created\n  C->>A: POST /charges Idempotency-Key: abc retry\n  A->>R: GET idempotency:abc\n  R-->>A: cached response\n  A-->>C: 201 replayed"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Idempotency middleware for payments",
+            "code": "public sealed class IdempotencyMiddleware(RequestDelegate next, IConnectionMultiplexer redis)\n{\n    public async Task InvokeAsync(HttpContext context)\n    {\n        if (HttpMethods.IsPost(context.Request.Method) &&\n            context.Request.Headers.TryGetValue(\"Idempotency-Key\", out var key))\n        {\n            var db = redis.GetDatabase();\n            var cacheKey = $\"idempotency:{key}\";\n            var cached = await db.StringGetAsync(cacheKey);\n            if (cached.HasValue)\n            {\n                context.Response.StatusCode = StatusCodes.Status201Created;\n                context.Response.ContentType = \"application/json\";\n                await context.Response.WriteAsync(cached!);\n                return;\n            }\n\n            var originalBody = context.Response.Body;\n            await using var buffer = new MemoryStream();\n            context.Response.Body = buffer;\n            await next(context);\n\n            if (context.Response.StatusCode == StatusCodes.Status201Created)\n            {\n                buffer.Position = 0;\n                var body = await new StreamReader(buffer).ReadToEndAsync();\n                await db.StringSetAsync(cacheKey, body, TimeSpan.FromHours(24));\n            }\n            buffer.Position = 0;\n            await buffer.CopyToAsync(originalBody);\n            context.Response.Body = originalBody;\n            return;\n        }\n        await next(context);\n    }\n}",
+            "explanation": "Intercept POST, check Redis for key, replay response on hit. On miss, capture 201 body and store with TTL. Production also hashes request body and returns 409 on key+body mismatch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ETag conditional GET",
+            "code": "[HttpGet(\"{id:guid}\")]\npublic async Task<IActionResult> GetProduct(Guid id, CancellationToken ct)\n{\n    var product = await repo.GetAsync(id, ct);\n    if (product is null) return NotFound();\n\n    var etag = product.RowVersion.ToString();\n    if (Request.Headers.IfNoneMatch == etag)\n        return StatusCode(StatusCodes.Status304NotModified);\n\n    Response.Headers.ETag = etag;\n    Response.Headers.CacheControl = \"private, max-age=60\";\n    return Ok(product);\n}",
+            "explanation": "RowVersion as ETag — client sends If-None-Match on refresh. 304 saves bandwidth. private max-age allows browser cache but not shared CDN for user-specific data."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ASP.NET Core output caching",
+            "code": "builder.Services.AddOutputCache(options =>\n{\n    options.AddBasePolicy(b => b.Expire(TimeSpan.FromMinutes(5)));\n    options.AddPolicy(\"Catalog\", b => b\n        .Expire(TimeSpan.FromMinutes(10))\n        .SetVaryByQuery(\"category\", \"page\")\n        .Tag(\"catalog\"));\n});\n\napp.UseOutputCache();\n\napp.MapGet(\"/api/products\", async (IProductService svc) =>\n    Results.Ok(await svc.ListAsync()))\n   .CacheOutput(\"Catalog\");",
+            "explanation": "Output caching stores full responses in memory — distinct from HTTP Cache-Control sent to clients. VaryByQuery prevents wrong cache hits. Express equivalent: apicache or CDN cache rules."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Payment service — 409 on key/body mismatch",
+            "code": "public async Task<ChargeResult> ChargeAsync(ChargeRequest req, string idempotencyKey, CancellationToken ct)\n{\n    var hash = ComputeHash(req);\n    var existing = await store.GetAsync(idempotencyKey, ct);\n    if (existing is not null)\n    {\n        if (existing.RequestHash != hash)\n            throw new IdempotencyConflictException(idempotencyKey);\n        return existing.Result; // replay\n    }\n\n    var result = await gateway.ChargeAsync(req, ct);\n    await store.SaveAsync(idempotencyKey, hash, result, TimeSpan.FromHours(48), ct);\n    return result;\n}",
+            "explanation": "Same key with different amount → 409 Conflict, not silent wrong charge. TTL 48h covers weekend retry windows. Store request hash, not just key presence."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Caching and idempotency in .NET vs Express",
+          "headers": ["Concern", "ASP.NET Core", "Express"],
+          "rows": [
+            ["Response caching", "AddOutputCache + CacheOutput", "apicache, redis-cache middleware"],
+            ["ETag", "Response.Headers.ETag + If-None-Match", "etag npm package, res.set('ETag', ...)"],
+            ["Idempotency", "Custom middleware + Redis", "stripe pattern in route handler + ioredis"],
+            ["CDN headers", "Cache-Control: public, s-maxage", "same headers — CDN agnostic"],
+            ["Invalidation", "ICacheEntryExtensions, tags", "redis.del pattern or cache purge API"],
+            ["Conditional PUT", "If-Match + 412 Precondition Failed", "manual header check in handler"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Idempotency keys without TTL — Redis fills forever. Caching personalized responses with public max-age — users see each other's data. ETag from DateTime.UtcNow — changes every second, cache never hits. Storing only 200 responses for idempotency but client retries after 201 — inconsistent replay."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior depth for payment APIs: idempotency scope is per merchant + key (not global UUID collision across tenants). Use at-least-once message delivery (SQS, RabbitMQ) with consumer idempotency — same key store as HTTP. Distributed lock is NOT a substitute for idempotency keys — lock expires, retry still double-charges. ETag strong vs weak: strong ETags change when any byte changes; weak (W/\"...\") for semantically equivalent gzip variants. Cache-Control no-store for PCI responses; s-maxage on public catalog behind Azure Front Door. Prove it: integration test that sends duplicate POST with same key asserts one charge in mock gateway; App Insights tracks 304 rate on GET catalog."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Caching layer tradeoffs",
+          "headers": ["Layer", "Mechanism", "Pitfall"],
+          "rows": [
+            ["Browser Cache-Control", "max-age, private/public", "Caching auth-gated JSON as public"],
+            ["CDN (s-maxage)", "Edge cache for GET", "Query string not in cache key"],
+            ["ETag / 304", "Bandwidth savings", "Wrong ETag → stale data served"],
+            ["Output cache (server)", "In-memory response store", "Not shared across pods without Redis backplane"],
+            ["Idempotency store", "Redis/SQL keyed by client token", "No body hash → wrong replay on payload change"],
+            ["HTTP PUT idempotent", "Replace by id", "Create-if-missing PUT debated — document behavior"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'POST is idempotent if we check duplicate rows' without a client-supplied key — race conditions still double-charge. Recommending distributed locks alone for payment idempotency. Not knowing 304 responses must not include a body. Caching POST responses at CDN — POST is not cacheable by HTTP semantics."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "POST is not idempotent — payment APIs require Idempotency-Key with stored response replay and 409 on body mismatch.",
+    "ETags enable conditional GET (304); Cache-Control directs browser and CDN; output cache is server-side another layer.",
+    "Store idempotency keys with TTL (24–48h), request hash, and serialized response. Test duplicate POST in integration tests.",
+    "60s: Client sends Idempotency-Key on POST. Server checks Redis — hit replays response, body mismatch is 409. ETag on GET — If-None-Match returns 304. Cache-Control public for catalog, private no-store for PII. Locks are not idempotency.",
+    "Follow-up: how does idempotency interact with async message consumers processing the same payment event twice?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we use database unique constraint for idempotency' without client keys gets you rejected — races still occur before commit.",
+    "public Cache-Control on authenticated user profile endpoints leaks data through shared caches.",
+    "Strong answer: 'Idempotency-Key + body hash in Redis with TTL. 409 on mismatch. ETag from RowVersion. 304 for bandwidth. Output cache for hot GETs. Integration test duplicate POST.'"
+  ],
+  "introducedIn": "HTTP/1.1 conditional requests; ASP.NET Core Output Cache in .NET 7",
+  "relatedTopicIds": [
+    "dotnet-02-http-fundamentals",
+    "dotnet-02-http-methods-status-codes",
+    "dotnet-02-rest-principles"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express etag and apicache",
+      "note": "res.set('ETag', hash) and apicache.middleware('5 minutes') mirror ETag and output cache patterns. Stripe's Node SDK sends Idempotency-Key — same header your ASP.NET Core API should accept.",
+      "futureTopicSlug": "javascript/nodejs/caching-headers"
+    },
+    {
+      "language": "typescript",
+      "concept": "Cache-Control in fetch and CDN config",
+      "note": "fetch cache mode and Next.js revalidate headers interact with Cache-Control from your API. Strong typing for idempotency keys (branded string type) prevents accidental reuse across operations.",
+      "futureTopicSlug": "typescript/http/cache-control"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Output caching in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/output"
+    },
+    {
+      "title": "Response caching middleware",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/performance/caching/middleware"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
+}

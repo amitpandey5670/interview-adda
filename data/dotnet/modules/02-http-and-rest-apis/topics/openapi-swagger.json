@@ -1,0 +1,232 @@
+{
+  "id": "dotnet-02-openapi-swagger",
+  "slug": "openapi-swagger",
+  "title": "OpenAPI and Swagger (contract-first APIs)",
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "order": 5,
+  "hook": "OpenAPI (formerly Swagger) describes your HTTP contract as machine-readable JSON — endpoints, schemas, status codes, and auth. ASP.NET Core can generate the document from your code or validate incoming requests against a checked-in spec for contract-first teams.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OpenAPI Specification (OAS) is a YAML or JSON document listing paths, operations, parameters, request bodies, and responses. Swagger UI renders it as interactive docs. Swashbuckle and the built-in Microsoft.AspNetCore.OpenApi package generate specs from attributes and minimal API metadata. Contract-first teams write openapi.yaml first, then generate C# clients or validate implementations in CI. NSwag and Kiota produce typed HttpClient wrappers for consumers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "OpenAPI",
+              "shortForm": "OAS",
+              "longForm": "OpenAPI Specification",
+              "plainDefinition": "A standard format for describing REST HTTP APIs — paths, schemas, security schemes.",
+              "example": "openapi: 3.1.0\\npaths:\\n  /orders: ..."
+            },
+            {
+              "term": "Swagger UI",
+              "longForm": "Swagger UI",
+              "plainDefinition": "A browser tool that renders OpenAPI and lets developers try endpoints with Try it out.",
+              "example": "https://localhost:5001/swagger"
+            },
+            {
+              "term": "Contract-first",
+              "longForm": "Contract-first API design",
+              "plainDefinition": "Write the OpenAPI spec before implementation; code must conform to the contract.",
+              "example": "PR checks diff openapi.yaml against generated output"
+            },
+            {
+              "term": "Schema",
+              "longForm": "JSON Schema in OpenAPI",
+              "plainDefinition": "Defines shape of request/response bodies — types, required fields, enums.",
+              "example": "OrderDto with required id and status properties"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OpenAPI is the handshake between backend, frontend, mobile, and partner teams. It powers client generation, mock servers, and API gateways. Undocumented 4xx responses break generated clients. Senior teams treat the spec as a build artifact — diffed on every PR, published to a portal, and versioned alongside the API."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Code-first vs contract-first",
+          "body": "Most ASP.NET Core teams start code-first (attributes generate the spec) then add CI checks that fail when the generated spec drifts from a golden file. Contract-first shines when multiple services must agree before any code ships."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Expose OpenAPI in development",
+          "items": [
+            {
+              "title": "Add OpenAPI services",
+              "body": "builder.Services.AddOpenApi() in .NET 9+ or AddSwaggerGen for Swashbuckle."
+            },
+            {
+              "title": "Map the document endpoint",
+              "body": "app.MapOpenApi() serves /openapi/v1.json; MapSwaggerUI serves the UI."
+            },
+            {
+              "title": "Annotate endpoints",
+              "body": "WithTags, Produces, ProducesResponseType, and XML comments enrich the spec."
+            },
+            {
+              "title": "Publish in CI",
+              "body": "Export spec to artifacts; frontend runs openapi-generator or Orval."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "OpenAPI document flow",
+            "source": "flowchart LR\n  C[C# endpoints + DTOs] --> G[OpenAPI generator]\n  G --> J[openapi.json]\n  J --> S[Swagger UI]\n  J --> K[Kiota / NSwag client]\n  J --> M[Mock server]\n  J --> CI[CI contract diff]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": ".NET 9+ built-in OpenAPI",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddOpenApi();\n\nvar app = builder.Build();\n\nif (app.Environment.IsDevelopment())\n{\n    app.MapOpenApi();\n    app.UseSwaggerUI(options =>\n        options.SwaggerEndpoint(\"/openapi/v1.json\", \"Orders API v1\"));\n}\n\napp.MapGet(\"/api/health\", () => Results.Ok(new { status = \"healthy\" }))\n   .WithName(\"HealthCheck\")\n   .WithTags(\"Operations\")\n   .Produces<object>(StatusCodes.Status200OK);\n\napp.Run();",
+            "explanation": "MapOpenApi exposes the JSON document. WithName gives the operation an id for link generation. WithTags groups endpoints in Swagger UI — similar to tags in Express swagger-jsdoc."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Document all response codes",
+            "code": "[HttpPost]\n[ProducesResponseType(typeof(OrderDto), StatusCodes.Status201Created)]\n[ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]\n[ProducesResponseType(StatusCodes.Status409Conflict)]\npublic async Task<ActionResult<OrderDto>> Create([FromBody] CreateOrderDto dto)\n{\n    // implementation\n    return CreatedAtAction(nameof(Get), new { id = Guid.NewGuid() }, new OrderDto());\n}\n\n// Minimal API equivalent:\n// .Produces<OrderDto>(201).Produces<ValidationProblemDetails>(400).Produces(409);",
+            "explanation": "Generated clients need known error shapes. Documenting 409 for duplicate keys prevents consumers from only handling 400/500."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Swashbuckle JWT security scheme",
+            "code": "builder.Services.AddSwaggerGen(options =>\n{\n    options.SwaggerDoc(\"v1\", new OpenApiInfo { Title = \"Billing API\", Version = \"v1\" });\n    options.AddSecurityDefinition(\"Bearer\", new OpenApiSecurityScheme\n    {\n        Name = \"Authorization\",\n        Type = SecuritySchemeType.Http,\n        Scheme = \"bearer\",\n        BearerFormat = \"JWT\",\n        In = ParameterLocation.Header\n    });\n    options.AddSecurityRequirement(new OpenApiSecurityRequirement\n    {\n        {\n            new OpenApiSecurityScheme\n            {\n                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = \"Bearer\" }\n            },\n            Array.Empty<string>()\n        }\n    });\n});",
+            "explanation": "Swagger UI shows an Authorize button for JWT. Express equivalent: swagger-jsdoc securityDefinitions with bearerAuth."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "OpenAPI tooling in .NET vs Node",
+          "headers": ["Task", "ASP.NET Core", "Express / Node"],
+          "rows": [
+            ["Generate from code", "AddOpenApi, Swashbuckle", "swagger-jsdoc, tsoa, nestjs/swagger"],
+            ["Try-it UI", "Swagger UI middleware", "swagger-ui-express"],
+            ["Generate client", "NSwag, Kiota", "openapi-generator, Orval"],
+            ["Validate contract", "CI diff golden openapi.json", "express-openapi-validator"],
+            ["Types from spec", "Kiota C# client", "openapi-typescript, Orval hooks"],
+            ["Auth in docs", "AddSecurityDefinition Bearer", "components.securitySchemes in yaml"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Shipping Swagger UI in production without auth — exposes attack surface. Spec missing error responses — frontend discovers 409 at runtime. Using dynamic object or JsonElement in DTOs — schema becomes useless {}. Forgetting to version the OpenAPI document when API version changes."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Contract-first in production: store openapi.yaml in git, run spectral lint rules (no breaking changes without version bump), and use oasdiff in CI. Code-first teams export spec on build and fail if diff is non-empty. For microservices, publish specs to a central registry (Backstage, Azure API Center). Kiota generates minimal APIs clients without Newtonsoft dependency. Prove quality: 100% of public endpoints have ProducesResponseType for documented errors; spectral score gate in pipeline."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "OpenAPI workflow tradeoffs",
+          "headers": ["Approach", "Benefit", "Risk"],
+          "rows": [
+            ["Code-first", "Fast iteration, always in sync with code", "Spec lags if annotations neglected"],
+            ["Contract-first", "Parallel frontend/backend work", "Implementation drift without CI validation"],
+            ["Swashbuckle", "Mature, feature-rich", "Extra package; learn configuration API"],
+            ["Microsoft.AspNetCore.OpenApi", "Built-in, lightweight", "Fewer knobs than Swashbuckle today"],
+            ["Swagger in prod", "Convenient for partners", "Disable or protect with auth in production"],
+            ["Generated clients", "Type-safe consumers", "Regenerate on every spec change"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing OpenAPI (the spec format) with Swagger (the tooling ecosystem). Saying Swagger UI should always run in production unauthenticated. Not documenting security schemes — mobile teams cannot integrate auth from the spec alone."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "OpenAPI is the machine-readable contract; Swagger UI is one renderer; ASP.NET Core generates or validates against it.",
+    "Document success and error status codes with schema types — generated clients depend on it.",
+    "CI should diff the spec on every PR; pair with API versioning for breaking change detection.",
+    "60s: AddOpenApi or Swashbuckle generates openapi.json from endpoints. ProducesResponseType documents errors. Swagger UI for dev. Kiota/NSwag for clients. Contract-first = yaml in git + CI validation. Lock down or disable UI in production.",
+    "Follow-up: how do you prevent breaking OpenAPI changes from reaching main?"
+  ],
+  "commonPitfalls": [
+    "Saying 'Swagger is the API' gets you rejected — OpenAPI is the spec; Swagger is legacy tooling name.",
+    "Undocumented 409/422 responses break frontend error handling generated from the spec.",
+    "Strong answer: 'Spec is a build artifact. Annotate all responses. CI oasdiff. JWT security scheme in OpenAPI. Swagger UI dev-only or auth-protected.'"
+  ],
+  "introducedIn": "OpenAPI 3.x; Microsoft.AspNetCore.OpenApi in .NET 9",
+  "relatedTopicIds": [
+    "dotnet-02-rest-principles",
+    "dotnet-02-api-versioning",
+    "dotnet-02-http-methods-status-codes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "swagger-jsdoc and swagger-ui-express",
+      "note": "Express teams annotate JSDoc comments and mount swagger-ui-express. ASP.NET Core uses attributes and WithTags — same outcome, different source of truth.",
+      "futureTopicSlug": "javascript/nodejs/swagger-openapi"
+    },
+    {
+      "language": "typescript",
+      "concept": "tsoa and NestJS @ApiProperty",
+      "note": "tsoa generates OpenAPI from TypeScript controller decorators — mirrors Swashbuckle from C# controllers. Orval generates React Query hooks from the same spec Kiota uses for C#.",
+      "futureTopicSlug": "typescript/openapi/codegen"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "OpenAPI support in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/openapi/overview"
+    },
+    {
+      "title": "Swashbuckle ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/tutorials/web-api-help-pages-using-swagger"
+    }
+  ],
+  "animationHint": "flow"
+}

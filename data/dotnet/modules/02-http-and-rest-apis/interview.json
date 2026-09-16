@@ -1,0 +1,78 @@
+{
+  "moduleId": "dotnet-02-http-and-rest-apis",
+  "title": "HTTP and REST API interview drills",
+  "items": [
+    {
+      "question": "Walk through what happens when a client sends GET /api/orders/42 to your ASP.NET Core API behind a load balancer.",
+      "answer": "The load balancer forwards TCP (or TLS) to a Kestrel worker. Kestrel parses the request line and headers into HttpRequest on HttpContext. The middleware pipeline runs — authentication, routing, possibly output cache — then the endpoint handler loads order 42. If found, it returns 200 with JSON and sets headers like Content-Type and optionally ETag. If missing, 404 Not Found. The response flows back through middleware and Kestrel writes the HTTP response. HTTP/2 may multiplex this on an existing connection. Correlation IDs from X-Correlation-Id should appear in logs at accept and handler time.",
+      "followUps": [
+        "Where does TLS terminate in your deployment?",
+        "How does HTTP/2 connection reuse affect your load balancer health checks?"
+      ],
+      "sixtySeconds": "LB to Kestrel. Parse into HttpContext. Middleware pipeline. Endpoint returns 200 or 404. Headers and body on wire. Log correlation ID. HTTP/2 multiplexes on one connection."
+    },
+    {
+      "question": "Your API returns 200 OK with { success: false, message: 'Not found' } for missing orders. Why is that a problem?",
+      "answer": "HTTP semantics tell clients and infrastructure how to behave. A 200 means success — HttpClient, Polly, axios, and CDNs will not retry or surface errors correctly. Caching layers may cache the 'not found' body as a successful response. Monitoring dashboards count it as a success, hiding 404 spikes. The fix is Results.NotFound() or 404 with Problem Details including traceId. Reserve 200 for representations that actually exist.",
+      "followUps": [
+        "How does Problem Details (RFC 7807) improve this?",
+        "What status code for an empty collection search — 404 or 200 []?"
+      ],
+      "sixtySeconds": "200 means success. Clients and caches treat it as OK. Use 404 for missing resource. Problem Details for error shape. Empty collection is 200 with empty array."
+    },
+    {
+      "question": "When do you return 401 vs 403 vs 404?",
+      "answer": "401 Unauthorized means authentication failed or is missing — no valid token or expired session. The client should obtain credentials. 403 Forbidden means the caller is authenticated but not allowed to perform this action on this resource — role or policy denied. 404 Not Found means the resource identifier does not exist (or you deliberately hide existence from unauthorized callers — team policy). Returning 404 instead of 403 can obscure resource enumeration but confuses debugging. Document the policy.",
+      "followUps": [
+        "Should a user see 404 for another user's order id?",
+        "How does ASP.NET Core MapControllers apply [Authorize] before the action runs?"
+      ],
+      "sixtySeconds": "401 no valid auth. 403 auth ok but denied. 404 id does not exist. Some teams use 404 to hide existence — document it."
+    },
+    {
+      "question": "Compare URL, header, and query-string API versioning. Which would you pick for a CDN-fronted public catalog API?",
+      "answer": "URL versioning (/api/v2/products) makes the version visible, works cleanly in API gateways, and gives CDNs distinct cache keys per path — best for public cacheable GETs. Header versioning (api-version: 2) keeps URLs stable but is invisible in browser address bars and easy for clients to omit; cache keys must explicitly include the header at the CDN. Query-string versioning (?api-version=2) is quick to prototype but CDNs and proxies handle query strings inconsistently — risky for cached GETs. For a CDN catalog, URL versioning or a distinct subdomain per major version is the safer default.",
+      "followUps": [
+        "How do you deprecate v1 without breaking long-tail traffic?",
+        "How does OpenAPI versioning interact with Asp.Versioning?"
+      ],
+      "sixtySeconds": "URL best for CDN cache keys and visibility. Header clean URLs but easy to forget. Query bad for cached GETs. Deprecate with Sunset header and traffic metrics."
+    },
+    {
+      "question": "A mobile client on a flaky network retries POST /api/payments and charges the customer twice. How do you fix it?",
+      "answer": "POST is not idempotent. Require Idempotency-Key (UUID per logical charge) on every payment POST. On first request, process the charge, persist the result, and store key → response in Redis or SQL with a 24–48 hour TTL. On retry with the same key and same request body hash, return the stored 201 without calling the payment gateway again. If the same key arrives with a different body, return 409 Conflict. Integration tests must send duplicate POSTs and assert one gateway call. This is separate from database unique constraints, which race under concurrent retries.",
+      "followUps": [
+        "Why are distributed locks alone insufficient?",
+        "How does the same pattern apply to SQS message consumers?"
+      ],
+      "sixtySeconds": "Idempotency-Key per charge. Store response in Redis with TTL. Replay on retry. 409 if body differs. Test duplicate POST. Locks are not enough."
+    },
+    {
+      "question": "Explain ETags and Cache-Control on a product catalog GET endpoint.",
+      "answer": "Cache-Control: public, max-age=300 tells browsers and CDNs they may serve the response from cache for five minutes without contacting origin. ETag is an opaque version token — often a hash or RowVersion. When the client has a cached copy, it sends If-None-Match with the ETag; if unchanged, the server returns 304 Not Modified with no body, saving bandwidth. For personalized prices, use private or no-store — never public. Server-side output cache (AddOutputCache) is another layer that reduces database hits across pods when backed by Redis.",
+      "followUps": [
+        "Strong vs weak ETags — when does each matter?",
+        "What goes wrong if you set public max-age on an authenticated user profile?"
+      ],
+      "sixtySeconds": "Cache-Control directs browser and CDN. ETag enables 304. public for catalog, private no-store for PII. Output cache is server-side extra layer."
+    },
+    {
+      "question": "How does OpenAPI fit into your CI pipeline for a team with Angular and mobile clients?",
+      "answer": "Generate or export openapi.json on every build from AddOpenApi or Swashbuckle. Store a golden copy in git or artifact storage. CI runs oasdiff or spectral — fail on breaking changes without a version bump. Publish the spec to a portal; frontend runs Orval or openapi-generator, mobile runs Kiota. Document all ProducesResponseType including 400, 409, 422 so generated clients handle errors. Pair with API versioning so v1 and v2 specs coexist. Swagger UI stays in development or behind auth — not open in production.",
+      "followUps": [
+        "Contract-first vs code-first — when do you switch?",
+        "How do you document JWT bearer auth in the spec?"
+      ],
+      "sixtySeconds": "Spec is build artifact. CI diff blocks breaking changes. Generate clients. Document all error codes. Version the spec. Swagger UI dev only."
+    },
+    {
+      "question": "How would you implement the same REST resource routes in Express vs ASP.NET Core minimal APIs?",
+      "answer": "Express: const router = express.Router(); router.get('/:id', handler); app.use('/api/orders', router) — mirrors MapGroup('/api/orders') with MapGet('/{id}'). JSON body parsing is express.json() vs ReadFromJsonAsync or [FromBody]. Status codes: res.status(201).location(uri).json(body) vs Results.Created(uri, body). Error handling: centralized middleware vs UseExceptionHandler with Problem Details. OpenAPI: swagger-jsdoc annotations vs WithTags and Produces. The HTTP semantics are identical; object models differ (req/res vs HttpContext).",
+      "followUps": [
+        "Where does Express middleware order matter compared to ASP.NET Core?",
+        "How does NestJS compare to both?"
+      ],
+      "sixtySeconds": "Express Router equals MapGroup. express.json equals FromBody. res.status equals Results. Same HTTP semantics, different objects. Middleware order matters in both."
+    }
+  ]
+}
