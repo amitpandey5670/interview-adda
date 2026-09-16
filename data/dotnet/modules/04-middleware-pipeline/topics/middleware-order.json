@@ -1,0 +1,237 @@
+{
+  "id": "dotnet-04-middleware-order",
+  "slug": "middleware-order",
+  "title": "Middleware order (exception handling, routing, auth, endpoints)",
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "order": 2,
+  "hook": "Middleware order is not style — wrong order means exceptions escape unhandled, routing never runs, or authorization sees an empty endpoint. Senior interviews treat this as a must-know checklist.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Middleware order is the sequence of app.Use*, app.Map*, and framework calls in Program.cs that builds the pipeline. Microsoft documents a recommended order: exception handling and HTTPS redirection early; routing before authentication; authentication before authorization; endpoints last. Each rule exists because inner middleware depends on state set by outer middleware — routing must populate endpoint metadata before authorization policies run."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "UseExceptionHandler",
+              "longForm": "UseExceptionHandler",
+              "plainDefinition": "Outer middleware that catches unhandled exceptions from inner pipeline and produces an error response.",
+              "example": "app.UseExceptionHandler(\"/error\");"
+            },
+            {
+              "term": "UseRouting",
+              "longForm": "UseRouting",
+              "plainDefinition": "Marks where routing runs and endpoint is selected; splits pipeline for endpoint-aware middleware.",
+              "example": "app.UseRouting(); app.UseAuthentication(); app.UseAuthorization(); app.MapControllers();"
+            },
+            {
+              "term": "UseAuthentication",
+              "longForm": "UseAuthentication",
+              "plainDefinition": "Reads credentials (cookies, Bearer token) and sets HttpContext.User.",
+              "example": "Must run after UseRouting, before UseAuthorization"
+            },
+            {
+              "term": "UseAuthorization",
+              "longForm": "UseAuthorization",
+              "plainDefinition": "Evaluates [Authorize] and policies against HttpContext.User and endpoint metadata.",
+              "example": "Requires routing + authentication to have run first"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Production APIs fail silently when order is wrong: exception handler registered after MapControllers never catches controller exceptions. Authorization before routing cannot see [Authorize] on the selected endpoint. Authentication after endpoints means controllers run anonymously. Reddit and LeetCode interview threads rank middleware order among the top ASP.NET Core traps — interviewers often ask you to write or fix Program.cs from memory."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "The checklist",
+          "body": "Exception handling → HTTPS/HSTS → static files (if any) → routing → CORS → authentication → authorization → endpoints. Custom middleware that needs the endpoint goes after UseRouting."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Recommended pipeline order",
+          "items": [
+            {
+              "title": "Exception handler outermost",
+              "body": "Wraps the entire pipeline so any inner failure can be converted to Problem Details or a redirect."
+            },
+            {
+              "title": "Routing selects endpoint",
+              "body": "UseRouting matches URL to endpoint and stores Endpoint in HttpContext.Features."
+            },
+            {
+              "title": "Authentication then authorization",
+              "body": "AuthN sets User; AuthZ checks policies against endpoint metadata."
+            },
+            {
+              "title": "Endpoints execute last",
+              "body": "MapControllers / MapGet invoke the handler at the center of the onion."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Standard Web API middleware order",
+            "source": "flowchart TD\n  EH[Exception Handler] --> HTTPS[HTTPS Redirection]\n  HTTPS --> RT[UseRouting]\n  RT --> CORS[CORS if needed]\n  CORS --> AUTHN[UseAuthentication]\n  AUTHN --> AUTHZ[UseAuthorization]\n  AUTHZ --> EP[MapControllers / Minimal APIs]\n  style EH fill:#fdd\n  style RT fill:#dfd\n  style AUTHN fill:#ddf\n  style EP fill:#ffd"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Correct order for a JWT Web API",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Services.AddControllers();\nbuilder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)\n    .AddJwtBearer(/* ... */);\nbuilder.Services.AddAuthorization();\n\nvar app = builder.Build();\n\nif (!app.Environment.IsDevelopment())\n{\n    app.UseExceptionHandler(\"/error\");\n    app.UseHsts();\n}\n\napp.UseHttpsRedirection();\napp.UseRouting();\napp.UseAuthentication();\napp.UseAuthorization();\napp.MapControllers();\napp.Run();",
+            "explanation": "Exception handler is outermost in production. Routing before auth pair. MapControllers is terminal endpoint middleware — nothing that must wrap responses goes after it without Map."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Broken order — auth before routing",
+            "code": "// WRONG — authorization cannot see endpoint metadata\napp.UseAuthentication();\napp.UseAuthorization();\napp.UseRouting(); // too late\napp.MapControllers();\n\n// Symptom: [Authorize] ignored or 404 before 401\n// Fix: UseRouting immediately before auth middleware",
+            "explanation": "Authorization middleware reads Endpoint metadata set by routing. Without routing first, policies may not apply to the intended endpoint."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Exception handler registered too late",
+            "code": "// WRONG\napp.UseRouting();\napp.MapControllers();\napp.UseExceptionHandler(); // never catches controller exceptions\n\n// Controller throw → 500 raw or empty body\n// Fix: UseExceptionHandler before UseRouting",
+            "explanation": "Exception handler must wrap the middleware that throws. Anything registered after MapControllers is outside the branch that runs your endpoints."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Production diagnostic — log 401 vs 404 order",
+            "code": "app.Use(async (context, next) =>\n{\n    await next();\n    var endpoint = context.GetEndpoint()?.DisplayName;\n    var status = context.Response.StatusCode;\n    if (status is 401 or 403 or 404)\n    {\n        var log = context.RequestServices.GetRequiredService<ILoggerFactory>()\n            .CreateLogger(\"AuthOrder\");\n        log.LogWarning(\"{Status} Path={Path} Endpoint={Endpoint}\",\n            status, context.Request.Path, endpoint ?? \"none\");\n    }\n});\n// Register AFTER UseRouting to see endpoint name on auth failures",
+            "explanation": "404 with no endpoint often means routing failed before auth. 401 with endpoint means auth ran but token missing — order debugging from structured logs."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Middleware order in Express vs ASP.NET Core",
+          "headers": ["Concern", "Express", "ASP.NET Core"],
+          "rows": [
+            ["Error handler", "app.use((err, req, res, next) => ...) usually last", "UseExceptionHandler must be first (outermost)"],
+            ["Routing", "app.use('/api', router) before route handlers", "UseRouting before auth; Map* at end"],
+            ["Auth", "passport.initialize() before protected routes", "UseAuthentication before UseAuthorization"],
+            ["Terminal handler", "app.get(...) order matters per path", "Map* creates branch; global Use after Map may not run"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Copying minimal API template but adding UseAuthorization before UseRouting. Putting UseDeveloperExceptionPage in production instead of UseExceptionHandler. Registering CORS after MapControllers so preflight never hits CORS middleware."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: when users report raw 500 HTML instead of JSON Problem Details, check exception handler placement first. Application Insights failed requests with stack traces but no custom error body means handler did not wrap the throw site. Integration tests with WebApplicationFactory should assert Problem Details content type on forced exceptions. For auth order bugs, log GetEndpoint() in a middleware registered after UseRouting — null endpoint on protected routes indicates routing/auth mis-order."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Decision", "When", "Pitfall"],
+          "rows": [
+            ["UseDeveloperExceptionPage", "Development only", "Leaks stack traces in production"],
+            ["IExceptionHandler (.NET 8+)", "Centralized exception mapping", "Still must register handler middleware early"],
+            ["Endpoint-aware middleware", "After UseRouting", "Before routing — no Endpoint feature"],
+            ["MapWhen health checks", "Separate branch", "May skip global auth — intentional for probes"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot recite: exception handler first, routing before auth, auth before endpoints. Saying UseAuthentication and UseAuthorization are interchangeable. Not knowing CORS must run before auth for browser preflight. Claiming order only matters for performance."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Standard order: exception handler → HTTPS → routing → CORS → authentication → authorization → endpoints.",
+    "Routing must run before authorization so [Authorize] and policies bind to the selected endpoint.",
+    "Production tip: log GetEndpoint() on 401/404 — null endpoint means routing failed; 401 with endpoint means token problem.",
+    "60s: Exception handler outermost so it wraps everything that throws. UseRouting before UseAuthentication and UseAuthorization. MapControllers last. Express error middleware is last; ASP.NET exception handler is first — opposite shell position, same onion idea.",
+    "Follow-up: where does UseCors go relative to UseAuthentication for browser clients?"
+  ],
+  "commonPitfalls": [
+    "Saying 'auth order does not matter' gets you rejected — authorization requires routing metadata.",
+    "UseExceptionHandler after MapControllers — controller exceptions bypass the handler.",
+    "Strong answer: 'Exception handler first. Routing before authN/authZ. Endpoints last. CORS before auth for preflight. I verify with WebApplicationFactory Problem Details tests.'"
+  ],
+  "introducedIn": "ASP.NET Core 2.1 endpoint routing; IExceptionHandler in .NET 8",
+  "relatedTopicIds": [
+    "dotnet-04-pipeline-onion-model",
+    "dotnet-04-exception-handling-middleware",
+    "dotnet-04-scoped-services-in-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express error-handling middleware arity (err, req, res, next)",
+      "note": "Express puts error handlers at the end of the chain; ASP.NET puts exception handler at the start as the outer onion layer. Both must wrap the code that throws.",
+      "futureTopicSlug": "javascript/express/error-handling"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS MiddlewareConsumer order",
+      "note": "NestJS configure(consumer.apply(...).forRoutes(...)) explicitly orders middleware before guards and pipes — same dependency as routing-before-auth in ASP.NET Core.",
+      "futureTopicSlug": "typescript/nestjs/guards"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Middleware order (Microsoft Learn)",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/#middleware-order"
+    },
+    {
+      "title": "Authentication and authorization middleware",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/security/authentication/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

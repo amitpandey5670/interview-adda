@@ -1,0 +1,238 @@
+{
+  "id": "dotnet-04-short-circuiting",
+  "slug": "short-circuiting",
+  "title": "Short-circuiting requests (Run, Map, conditional branches)",
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "order": 5,
+  "hook": "Not every request should travel through the entire pipeline. Run, Map, MapWhen, and UseWhen let you branch or terminate early — like calling res.send() in Express without invoking next().",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Short-circuiting stops the pipeline from calling subsequent middleware for a request. app.Run terminates the branch — no _next, the delegate handles the response alone. app.Map mounts a sub-pipeline when the path matches a prefix. MapWhen and UseWhen conditionally branch based on HttpContext. Endpoints (MapGet, MapControllers) are terminal by design. Understanding branches prevents surprises when health checks skip auth or static files bypass API middleware."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Run",
+              "longForm": "Run terminal middleware",
+              "plainDefinition": "Registers a delegate with no next — always short-circuits the current branch.",
+              "example": "app.Run(async context => await context.Response.WriteAsync(\"OK\"));"
+            },
+            {
+              "term": "Map",
+              "longForm": "Map path branch",
+              "plainDefinition": "If request path starts with the given prefix, run a nested pipeline instead of continuing main branch.",
+              "example": "app.Map(\"/health\", health => health.Run(...));"
+            },
+            {
+              "term": "MapWhen",
+              "longForm": "MapWhen conditional branch",
+              "plainDefinition": "Runs a nested pipeline when a predicate on HttpContext is true.",
+              "example": "app.MapWhen(ctx => ctx.Request.Path.StartsWithSegments(\"/admin\"), admin => { ... });"
+            },
+            {
+              "term": "UseWhen",
+              "longForm": "UseWhen conditional middleware",
+              "plainDefinition": "Inserts middleware into current branch only when predicate matches — still has _next to rest of branch.",
+              "example": "app.UseWhen(ctx => ctx.Request.Headers.ContainsKey(\"X-Debug\"), app => app.Use(...));"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Health probes and metrics endpoints must respond fast without JWT validation — Map creates an isolated branch. Admin APIs may need extra middleware without affecting public routes. Misplaced Map can skip security middleware registered only on the main branch. Senior interviews ask how Map interacts with the onion model and whether middleware after MapControllers runs for mapped routes."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Run vs Map vs Use",
+          "body": "Run = terminal, no further middleware in branch. Map = path-based sub-pipeline replaces continuation. Use = always continues to next unless you omit await _next inside."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Branching decision flow",
+          "items": [
+            {
+              "title": "Request enters outer pipeline",
+              "body": "Global middleware (exception handler, HTTPS) runs first on all branches."
+            },
+            {
+              "title": "Map predicate evaluated",
+              "body": "If path matches /health, control transfers to nested pipeline; main branch middleware after Map is skipped."
+            },
+            {
+              "title": "Nested or main branch continues",
+              "body": "UseWhen adds conditional layers; Run ends the branch with a response."
+            },
+            {
+              "title": "Unwind only executed layers",
+              "body": "Post-_next code runs only for middleware that actually invoked _next on this branch."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Main pipeline vs Map branch",
+            "source": "flowchart TD\n  G[Global: Exception / HTTPS] --> M{Map /health?}\n  M -->|yes| H[Health sub-pipeline\\nRun → 200 OK]\n  M -->|no| MAIN[Auth / Routing / API]\n  MAIN --> EP[Endpoints]\n  H -.->|short-circuit| R[Response]\n  EP --> R"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Health check branch without auth",
+            "code": "app.UseRouting();\napp.UseAuthentication();\napp.UseAuthorization();\n\napp.Map(\"/health\", healthApp =>\n{\n    healthApp.Run(async context =>\n    {\n        context.Response.ContentType = \"text/plain\";\n        await context.Response.WriteAsync(\"Healthy\");\n    });\n});\n\napp.MapControllers(); // /api/* still requires auth",
+            "explanation": "Map creates a sibling branch. Health endpoint skips auth middleware registered on main branch after Map — intentional for Kubernetes probes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "UseWhen for debug logging only",
+            "code": "app.UseWhen(\n    context => context.Request.Headers.ContainsKey(\"X-Debug\"),\n    branch => branch.Use(async (context, next) =>\n    {\n        var log = context.RequestServices.GetRequiredService<ILoggerFactory>()\n            .CreateLogger(\"Debug\");\n        log.LogWarning(\"Debug header present for {Path}\", context.Request.Path);\n        await next();\n    }));",
+            "explanation": "UseWhen inserts middleware conditionally but still calls next on the main branch when predicate is false. MapWhen would fork entirely."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Short-circuit inside custom middleware",
+            "code": "app.Use(async (context, next) =>\n{\n    if (context.Request.Path == \"/favicon.ico\")\n    {\n        context.Response.StatusCode = 404;\n        return; // do NOT call next — short-circuit\n    }\n    await next();\n});",
+            "explanation": "Omitting await next prevents inner pipeline from running — same effect as Express not calling next(). Response must be fully written."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Failure mode — Map after global security middleware",
+            "code": "// If UseAuthentication is ONLY on main branch AFTER Map:\napp.Map(\"/internal\", internalApp =>\n{\n    internalApp.MapControllers(); // NO auth middleware in this branch!\n});\n\n// Fix: register auth inside Map branch or use endpoint filters\ninternalApp.UseAuthentication();\ninternalApp.UseAuthorization();",
+            "explanation": "Each Map branch has its own middleware stack. Security must be duplicated or registered before Map splits — common production footgun."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Short-circuiting in Express vs ASP.NET Core",
+          "headers": ["Pattern", "Express", "ASP.NET Core"],
+          "rows": [
+            ["Terminal response", "res.json(); no next()", "return without await _next or Run"],
+            ["Path mount", "app.use('/health', router)", "app.Map(\"/health\", branch => ...)"],
+            ["Conditional", "if (path) ... else next()", "MapWhen / UseWhen"],
+            ["Sub-app", "express.Router()", "Map branch pipeline"],
+            ["Global skip", "Hard — order only", "Map bypasses subsequent main-branch Use"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling await next after response already started — InvalidOperationException. Map health before auth but exposing sensitive data on /health/details without auth. Using Run at end of Program.cs accidentally blocking all routes. MapWhen and forgetting middleware registered only on main branch."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: hit /health and /api/secure with the same trace — compare middleware spans in OpenTelemetry. Health should lack auth span; API should show it. Kubernetes liveness failing with 401 means auth wraps probes — move Map before auth or use MapWhen excluding probe user-agent. dotnet-trace ASP.NET Core hosting events show pipeline branch selection."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["API", "Behavior", "Risk"],
+          "rows": [
+            ["Run", "Terminal — fastest", "Easy to accidentally block all traffic at root"],
+            ["Map", "Clean path isolation", "Duplicate security middleware per branch"],
+            ["MapWhen", "Full fork on predicate", "Harder to reason about global order"],
+            ["UseWhen", "Conditional layer, continues branch", "Predicate runs every request — keep cheap"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing Map skips middleware registered later on main branch. Saying Run and Use are the same. Unable to explain why health checks return 401. Calling next after writing response body."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Run terminates a branch; Map forks by path; MapWhen/UseWhen fork or insert conditionally.",
+    "Mapped branches do not inherit middleware registered after Map on the main pipeline — security must be explicit.",
+    "Production tip: verify probe paths skip auth via integration test; 401 on /health breaks Kubernetes.",
+    "60s: Short-circuit by omitting await _next or using Run. Map creates sub-pipeline — skips later main-branch middleware. Express res.send without next() is equivalent. Health checks often Map before auth.",
+    "Follow-up: how do MapGroup and minimal APIs relate to Map branches?"
+  ],
+  "commonPitfalls": [
+    "Assuming auth on main branch protects Map branch routes gets you rejected — branches are separate stacks.",
+    "await next() after response started — throws InvalidOperationException.",
+    "Strong answer: 'Run is terminal. Map forks path. Middleware after Map on main branch does not run for mapped paths. Duplicate auth in branch or register auth before Map.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 Map/Run; MapGroup in .NET 6+",
+  "relatedTopicIds": [
+    "dotnet-04-pipeline-onion-model",
+    "dotnet-04-middleware-order",
+    "dotnet-04-custom-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express Router mount and next() omission",
+      "note": "app.use('/api', router) resembles Map — requests matching prefix enter sub-stack. Not calling next() in Express equals omitting await _next in ASP.NET Core.",
+      "futureTopicSlug": "javascript/express/router"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS module route prefixes",
+      "note": "NestJS RouterModule.register prefixes controllers like Map. Global middleware in Nest still applies unless excluded — similar to registering auth before Map split.",
+      "futureTopicSlug": "typescript/nestjs/routing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Branch the middleware pipeline with Map",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/#branch-the-middleware-pipeline-with-map"
+    },
+    {
+      "title": "ASP.NET Core health checks",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/health-checks"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

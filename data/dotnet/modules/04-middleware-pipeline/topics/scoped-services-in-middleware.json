@@ -1,0 +1,239 @@
+{
+  "id": "dotnet-04-scoped-services-in-middleware",
+  "slug": "scoped-services-in-middleware",
+  "title": "Scoped services in middleware (constructor vs InvokeAsync)",
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "order": 6,
+  "hook": "Injecting a scoped DbContext into middleware constructor creates a captive dependency — one context for the app lifetime. Resolve scoped services in InvokeAsync or use IMiddleware instead.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Dependency injection (DI) in ASP.NET Core registers services as singleton, scoped, or transient. Middleware classes built with UseMiddleware<T> are constructed once at startup as singletons. If you inject a scoped service like DbContext or a per-request tenant service into the constructor, the container may allow it at startup but you get one instance captured forever — the captive dependency anti-pattern. Correct approach: inject scoped services as InvokeAsync method parameters, use IMiddleware with IMiddlewareFactory, or resolve from HttpContext.RequestServices inside InvokeAsync."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Scoped",
+              "longForm": "Scoped service lifetime",
+              "plainDefinition": "One instance per HTTP request within the request scope.",
+              "example": "builder.Services.AddDbContext<AppDbContext>(); // scoped"
+            },
+            {
+              "term": "Captive dependency",
+              "longForm": "Captive dependency anti-pattern",
+              "plainDefinition": "A longer-lived object holds a reference to a shorter-lived service, extending its lifetime incorrectly.",
+              "example": "Singleton middleware ctor injecting scoped DbContext"
+            },
+            {
+              "term": "IMiddlewareFactory",
+              "longForm": "IMiddlewareFactory",
+              "plainDefinition": "Creates IMiddleware instances per request with correct scoped resolution.",
+              "example": "Built-in when using app.UseMiddleware<MyMiddleware>() with IMiddleware"
+            },
+            {
+              "term": "RequestServices",
+              "longForm": "HttpContext.RequestServices",
+              "plainDefinition": "Per-request IServiceProvider for resolving scoped and transient services.",
+              "example": "context.RequestServices.GetRequiredService<ITenantContext>();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Captive DbContext in middleware causes stale data, thread-safety violations, and memory leaks — Entity Framework Core contexts are not thread-safe and must not outlive the request. Reddit r/dotnet and LeetCode discuss this as a top ASP.NET Core interview question alongside middleware order. Production symptoms: random wrong tenant data, ObjectDisposedException under load, or growing memory from never-disposed contexts."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "The rule",
+          "body": "Singleton middleware constructor: only singleton dependencies. Scoped dependencies: InvokeAsync parameters, IMiddleware, or RequestServices inside InvokeAsync."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Correct scoped resolution per request",
+          "items": [
+            {
+              "title": "Request scope created",
+              "body": "Host creates a scope at the start of each HTTP request."
+            },
+            {
+              "title": "Middleware InvokeAsync called",
+              "body": "Framework resolves method-injected scoped services from the request scope."
+            },
+            {
+              "title": "Service used for one request",
+              "body": "DbContext tracks entities only for this request."
+            },
+            {
+              "title": "Scope disposed",
+              "body": "End of request disposes scoped services including DbContext."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Captive dependency vs InvokeAsync injection",
+            "source": "flowchart TB\n  subgraph wrong[\"WRONG — constructor injection\"]\n    SM[Singleton Middleware] -->|holds forever| SC[Scoped DbContext]\n  end\n  subgraph right[\"CORRECT — InvokeAsync injection\"]\n    REQ[Request Scope] --> MW[Middleware InvokeAsync]\n    REQ --> DB[Scoped DbContext]\n    MW --> DB\n    REQ -->|dispose end request| X[Disposed]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "WRONG — scoped DbContext in constructor",
+            "code": "// ANTI-PATTERN — may compile with ValidateOnBuild disabled\npublic sealed class AuditMiddleware\n{\n    private readonly RequestDelegate _next;\n    private readonly AppDbContext _db; // CAPTIVE — one context for app life\n\n    public AuditMiddleware(RequestDelegate next, AppDbContext db)\n    {\n        _next = next;\n        _db = db;\n    }\n\n    public async Task InvokeAsync(HttpContext context)\n    {\n        _db.AuditLogs.Add(new AuditLog { Path = context.Request.Path });\n        await _db.SaveChangesAsync();\n        await _next(context);\n    }\n}",
+            "explanation": "DbContext injected at startup lives for the application lifetime. Concurrent requests share one context — undefined behavior and exceptions."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "CORRECT — InvokeAsync method injection",
+            "code": "public sealed class AuditMiddleware(RequestDelegate next)\n{\n    public async Task InvokeAsync(HttpContext context, AppDbContext db)\n    {\n        db.AuditLogs.Add(new AuditLog\n        {\n            Path = context.Request.Path,\n            At = DateTimeOffset.UtcNow\n        });\n        await db.SaveChangesAsync();\n        await next(context);\n    }\n}\n\nbuilder.Services.AddDbContext<AppDbContext>();\napp.UseMiddleware<AuditMiddleware>();",
+            "explanation": "AppDbContext resolved from request scope each call. ASP.NET Core activates InvokeAsync parameters from RequestServices automatically."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IMiddleware with scoped service in constructor",
+            "code": "public sealed class TenantMiddleware(AppDbContext db) : IMiddleware\n{\n    public async Task InvokeAsync(HttpContext context, RequestDelegate next)\n    {\n        var tenantId = context.Items[\"TenantId\"] as string;\n        db.TenantFilter = tenantId;\n        await next(context);\n    }\n}\n\nbuilder.Services.AddScoped<TenantMiddleware>();\napp.UseMiddleware<TenantMiddleware>();",
+            "explanation": "IMiddlewareFactory creates middleware per request — scoped constructor injection is safe because the instance is not a singleton."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "ValidateOnBuild catches captive dependencies at startup",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nbuilder.Host.UseDefaultServiceProvider(options =>\n{\n    options.ValidateScopes = true;  // default in Development\n    options.ValidateOnBuild = true;\n});\n\n// Startup fails fast if singleton consumes scoped:\n// InvalidOperationException: Cannot consume scoped service from singleton",
+            "explanation": "Enable ValidateOnBuild in CI — captive middleware constructor injection fails at deploy time instead of under concurrent load in production."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Per-request dependencies in Node vs ASP.NET Core",
+          "headers": ["Aspect", "ASP.NET Core", "Node.js / Express"],
+          "rows": [
+            ["Lifetime model", "Explicit singleton/scoped/transient", "Manual — often single require() singleton"],
+            ["Per-request DB", "Scoped DbContext via InvokeAsync", "req.db = pool.connect() per request or AsyncLocalStorage"],
+            ["Captive risk", "Constructor on singleton middleware", "Module-level let db = connect() shared across requests"],
+            ["Validation", "ValidateOnBuild / ValidateScopes", "No built-in — code review and tests"],
+            ["Factory pattern", "IMiddlewareFactory", "Factory function per request in DI libraries"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Disabling ValidateScopes in production to silence startup errors. Storing resolved scoped service in middleware instance field during InvokeAsync for later requests. Resolving scoped service before request scope exists (background thread). Using BuildServiceProvider in middleware — creates orphan scope."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: concurrent integration tests hammering audit middleware — captive DbContext throws ObjectDisposedException or returns cross-request data. dotnet-counters track EF Core active DbContext count — should match in-flight requests, not grow unbounded. Application Insights exceptions mentioning 'second operation on same context'. Code review grep: middleware constructor parameters — flag any scoped-registered type. IMiddleware slightly increases per-request allocations — negligible vs correct semantics."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Safe for scoped", "Notes"],
+          "rows": [
+            ["InvokeAsync parameter injection", "Yes", "Simplest fix for convention-based middleware"],
+            ["IMiddleware + scoped registration", "Yes", "Scoped deps in ctor OK — instance per request"],
+            ["RequestServices.GetRequiredService in InvokeAsync", "Yes", "Explicit; good for optional resolution"],
+            ["Constructor injection on UseMiddleware class", "No", "Captive dependency unless dependency is singleton"],
+            ["Singleton holding scoped in static field", "Never", "Worst case — leaks across all requests"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Injecting DbContext in middleware constructor without acknowledging captive dependency. Saying 'DI handles it' without explaining singleton middleware lifetime. Not knowing IMiddleware or InvokeAsync injection exists. Unable to mention ValidateOnBuild / ValidateScopes."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Convention-based middleware is singleton — never inject scoped services in constructor (captive dependency).",
+    "Resolve scoped deps via InvokeAsync parameters, IMiddleware, or HttpContext.RequestServices per request.",
+    "Production tip: ValidateOnBuild true in CI; load-test audit middleware; watch EF context count in counters.",
+    "60s: Middleware class is singleton at startup. Scoped DbContext in ctor is captive — one context forever, not thread-safe. Fix: InvokeAsync method injection or IMiddleware per request. ValidateOnBuild catches this at startup.",
+    "Follow-up: how does IHostedService get a scope for background work?"
+  ],
+  "commonPitfalls": [
+    "DbContext in middleware constructor gets you rejected — textbook captive dependency on the #1 middleware interview question.",
+    "Disabling ValidateScopes to ship — hides the bug until production concurrency.",
+    "Strong answer: 'Singleton middleware, scoped only in InvokeAsync or IMiddleware. ValidateOnBuild. EF context must not outlive request. Node compares to per-request pool connect vs module singleton.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0 DI; IMiddleware in 2.0; ValidateOnBuild in generic host",
+  "relatedTopicIds": [
+    "dotnet-04-custom-middleware",
+    "dotnet-04-middleware-order",
+    "dotnet-04-exception-handling-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Module-level database connection singleton",
+      "note": "Node anti-pattern: const db = await connect() at module top level shared by all requests mirrors captive scoped injection. Correct pattern: attach client per request or use AsyncLocalStorage.",
+      "futureTopicSlug": "javascript/node/request-context"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS REQUEST scope providers",
+      "note": "NestJS Scope.REQUEST providers are recreated per request like scoped services. Injecting REQUEST-scoped provider into singleton middleware fails validation — parallel to ASP.NET captive dependency.",
+      "futureTopicSlug": "typescript/nestjs/scopes"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Dependency injection scopes in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection#service-lifetimes"
+    },
+    {
+      "title": "Middleware with per-request dependencies",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write#per-request-middleware-dependencies"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "auth-token"
+}

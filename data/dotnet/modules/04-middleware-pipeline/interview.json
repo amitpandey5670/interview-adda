@@ -1,0 +1,96 @@
+{
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "title": "Middleware pipeline interview drills",
+  "items": [
+    {
+      "question": "Explain the ASP.NET Core middleware onion model and how it compares to Express app.use().",
+      "answer": "Middleware is registered with app.Use* at startup, building a chain of RequestDelegates. Each component runs code before await _next(context), delegates inward, then runs code after _next in reverse registration order — inbound in order, outbound reverse. The endpoint sits at the center. Express middleware follows the same idea: call next() to pass inward, code after next() runs on the way out. One difference interviewers probe: ASP.NET UseExceptionHandler belongs outermost (first registered), while Express error handlers with four parameters typically sit at the end — both wrap throwing code, but the shell position differs.",
+      "followUps": [
+        "What does the X-Trace header look like with three middleware layers?",
+        "Can middleware registered after MapControllers wrap controller execution?"
+      ],
+      "sixtySeconds": "Onion: in-order in, reverse out. await _next delegates inward. Express next() same model. Exception handler outermost in ASP.NET. Endpoint is center."
+    },
+    {
+      "question": "What is the correct middleware order for a JWT-protected Web API and why?",
+      "answer": "Outermost: exception handler (and HSTS/HTTPS in production). Then UseRouting so the endpoint is selected and stored in HttpContext.Features. Then UseAuthentication to populate HttpContext.User from the Bearer token. Then UseAuthorization to evaluate [Authorize] and policies against that endpoint metadata. Finally MapControllers or minimal API endpoints. Routing before auth is required because authorization reads endpoint metadata. Exception handler first ensures controller and middleware throws become Problem Details, not raw 500 HTML.",
+      "followUps": [
+        "Where does UseCors go for browser clients with credentials?",
+        "What symptom appears if UseAuthorization runs before UseRouting?"
+      ],
+      "sixtySeconds": "Exception handler first. Routing before authN and authZ. Endpoints last. AuthZ needs endpoint metadata from routing. CORS before auth for preflight."
+    },
+    {
+      "question": "You injected AppDbContext into custom middleware constructor and it works locally but fails under load. Diagnose.",
+      "answer": "This is the captive dependency anti-pattern. Convention-based middleware is constructed once as a singleton at startup. A scoped DbContext injected in the constructor is captured for the application lifetime — not per request. EF Core contexts are not thread-safe; concurrent requests share one context causing ObjectDisposedException, corrupted change tracker state, or wrong tenant data. Fix: inject AppDbContext as an InvokeAsync method parameter, use IMiddleware (per-request activation), or resolve from HttpContext.RequestServices inside InvokeAsync. Enable ValidateOnBuild and ValidateScopes in CI to fail at startup instead of production.",
+      "followUps": [
+        "How does IMiddlewareFactory change activation lifetime?",
+        "How do you scope DbContext in a BackgroundService?"
+      ],
+      "sixtySeconds": "Middleware singleton, DbContext scoped. Constructor injection captures one context forever — captive dependency. Fix InvokeAsync injection or IMiddleware. ValidateOnBuild catches it."
+    },
+    {
+      "question": "Production returns raw stack traces instead of JSON Problem Details. Where do you look first?",
+      "answer": "First check UseExceptionHandler placement — it must be the outermost middleware, before UseRouting and MapControllers. Handler registered after endpoints never catches controller exceptions. Second, confirm AddProblemDetails and IExceptionHandler are registered in DI (.NET 8 pattern). Third, verify UseDeveloperExceptionPage is not enabled in production. Integration test with WebApplicationFactory: hit a /throw endpoint and assert Content-Type application/problem+json. Application Insights showing exceptions without matching structured error responses indicates handler bypass.",
+      "followUps": [
+        "When would an MVC exception filter still be useful?",
+        "What happens if the exception handler itself throws?"
+      ],
+      "sixtySeconds": "Exception handler outermost. After MapControllers misses controller throws. AddProblemDetails plus IExceptionHandler. Dev page dev-only. WebApplicationFactory proves JSON errors."
+    },
+    {
+      "question": "Kubernetes liveness probe gets 401 on /health. Explain the middleware cause and fix.",
+      "answer": "UseAuthentication and UseAuthorization on the main branch run for all requests that continue past earlier middleware. If /health is mapped via MapControllers with [Authorize], or auth middleware runs before a health branch without exclusion, probes fail authentication. Map creates a separate sub-pipeline: app.Map(\"/health\", branch => branch.Run(...)) before auth middleware, or register a dedicated health branch without JWT. Alternatively MapWhen excluding probe paths. Middleware after Map on the main branch does not execute for mapped paths — use that intentionally for probe endpoints.",
+      "followUps": [
+        "Should health checks hit the database?",
+        "Difference between Map and MapWhen for this scenario?"
+      ],
+      "sixtySeconds": "Probes hit /health without JWT. Auth on main branch returns 401. Map health before auth or separate branch without UseAuthorization. Map skips later main middleware."
+    },
+    {
+      "question": "Write correlation ID middleware that propagates to logs and response headers.",
+      "answer": "Implement a class with RequestDelegate next in constructor. In InvokeAsync, read X-Correlation-ID from request headers or fall back to HttpContext.TraceIdentifier. Use context.Response.OnStarting to set the response header before bytes flush. Wrap await next(context) in an ILogger BeginScope with the correlation ID so all structured logs include it. Register with app.UseMiddleware early after exception handler. Do not store HttpContext in static fields. For outbound HttpClient calls, add the header in a DelegatingHandler reading the same scope or Activity baggage.",
+      "followUps": [
+        "Why use OnStarting instead of setting headers before await next?",
+        "How does OpenTelemetry relate to correlation IDs?"
+      ],
+      "sixtySeconds": "Read or generate ID. OnStarting sets response header. BeginScope on logs. Register early. InvokeAsync only — no scoped ctor injection unless IMiddleware."
+    },
+    {
+      "question": "What is the difference between Run, Map, and UseWhen?",
+      "answer": "Run registers terminal middleware with no _next — it always short-circuits the current branch and must fully write the response. Map(path, branch) forks: if the request path matches the prefix, the nested pipeline runs and middleware registered after Map on the main branch is skipped for that request. UseWhen(predicate, branch) inserts middleware into the current branch only when the predicate is true; when false, the branch middleware is skipped but the rest of the main branch continues. MapWhen forks entirely like Map but on a predicate instead of path prefix.",
+      "followUps": [
+        "Can you call await next after writing the response body?",
+        "How does MapGroup relate to Map?"
+      ],
+      "sixtySeconds": "Run terminal no next. Map path fork skips later main middleware. UseWhen conditional insert still continues branch. MapWhen predicate fork."
+    },
+    {
+      "question": "Why must routing run before authorization middleware?",
+      "answer": "Authorization middleware evaluates policies against the selected endpoint's metadata — [Authorize], IAuthorizeData, required roles, and custom policy attributes attached at compile time. That metadata is attached to the Endpoint object populated by endpoint routing during UseRouting / endpoint middleware. Without routing first, GetEndpoint() is null or stale, so authorization cannot apply the correct policy and you may get unexpected 404s, anonymous access, or wrong 401 ordering. Authentication can technically run before routing for some schemes, but the documented order keeps routing immediately before the auth pair.",
+      "followUps": [
+        "Does minimal API [Authorize] use the same metadata pipeline?",
+        "What is the difference between 401 and 403 in this pipeline?"
+      ],
+      "sixtySeconds": "AuthZ reads endpoint metadata set by routing. No routing means no endpoint — policies fail. Order: UseRouting then UseAuthentication then UseAuthorization."
+    },
+    {
+      "question": "Compare resolving scoped services in InvokeAsync vs IMiddleware vs RequestServices.GetRequiredService.",
+      "answer": "All three resolve from the per-request scope. InvokeAsync method injection is the cleanest for convention-based middleware — ASP.NET activates parameters automatically each request. IMiddleware is instantiated per request by IMiddlewareFactory, allowing scoped constructor injection on the middleware class itself at the cost of one allocation per request. GetRequiredService inside InvokeAsync is explicit and useful for optional or conditional resolution. All are correct; constructor injection on singleton convention-based middleware is wrong. ValidateOnBuild catches invalid singleton-consuming-scoped combinations at startup.",
+      "followUps": [
+        "What is the performance difference between IMiddleware and method injection?",
+        "Can transient services be injected in middleware constructor?"
+      ],
+      "sixtySeconds": "InvokeAsync params — cleanest. IMiddleware — per-request instance, scoped ctor OK. RequestServices — explicit. Never scoped in singleton convention ctor."
+    },
+    {
+      "question": "A candidate says middleware and filters are the same. Correct them for a mixed minimal API and controller app.",
+      "answer": "Middleware runs in the HTTP pipeline for every request on a branch — before routing, authentication, and endpoints. It sees HttpContext directly and is the only place for transport concerns, early termination, and exception handling wrapping everything. MVC action filters and exception filters run inside the controller pipeline after routing and model binding — they never see minimal API endpoints unless you add endpoint filters (.NET 7+). Global exception middleware catches throws from minimal APIs, custom middleware, and controllers; exception filters only catch inside their MVC scope. Use middleware for correlation IDs, tenant resolution, and global errors; filters for action-specific validation or response shaping on controllers.",
+      "followUps": [
+        "What are IEndpointFilter and when replace middleware?",
+        "Can middleware access route parameters before routing?"
+      ],
+      "sixtySeconds": "Middleware is HTTP pipeline — all branch requests. Filters are MVC inside controllers. Minimal APIs skip action filters. Global errors need middleware. Filters for controller-specific logic."
+    }
+  ]
+}

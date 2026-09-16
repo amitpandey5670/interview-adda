@@ -1,0 +1,238 @@
+{
+  "id": "dotnet-04-custom-middleware",
+  "slug": "custom-middleware",
+  "title": "Writing custom middleware (InvokeAsync pattern)",
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "order": 4,
+  "hook": "Custom middleware is a class or lambda with InvokeAsync that receives HttpContext and the next RequestDelegate — the standard extension point for cross-cutting concerns like correlation IDs, tenant resolution, or request logging.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Custom middleware implements cross-cutting logic that runs for many requests. The conventional pattern is a class with constructor injecting RequestDelegate _next and optional singleton services, plus InvokeAsync(HttpContext context) or InvokeAsync(HttpContext, IMyService) for per-request dependencies. Register with app.UseMiddleware<T>() or inline app.Use(async (context, next) => ...)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "InvokeAsync",
+              "longForm": "InvokeAsync method",
+              "plainDefinition": "Entry point the pipeline calls. Must call await _next(context) to continue unless short-circuiting.",
+              "example": "public async Task InvokeAsync(HttpContext context) { await _next(context); }"
+            },
+            {
+              "term": "IMiddleware",
+              "longForm": "IMiddleware interface",
+              "plainDefinition": "Factory-activated middleware resolved per request via IMiddlewareFactory — preferred for scoped constructor injection.",
+              "example": "public class TenantMiddleware : IMiddleware"
+            },
+            {
+              "term": "UseMiddleware",
+              "longForm": "UseMiddleware extension",
+              "plainDefinition": "Registers convention-based middleware class with DI activating constructor parameters.",
+              "example": "app.UseMiddleware<CorrelationIdMiddleware>();"
+            },
+            {
+              "term": "RequestDelegate",
+              "longForm": "RequestDelegate",
+              "plainDefinition": "The next link in the chain passed to middleware constructor or Use lambda.",
+              "example": "private readonly RequestDelegate _next;"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Filters and endpoint code belong to specific routes; middleware runs earlier for all matching pipeline branches. Correlation IDs must be set before logging and outbound HTTP calls. Tenant resolution from subdomain belongs in middleware so DbContext and services see the same tenant for the whole request. Interviewers ask you to implement logging middleware or explain IMiddleware vs convention-based class."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to use middleware vs filter",
+          "body": "Middleware: transport concerns, headers, timing, early auth enrichment. Filters: MVC model binding, validation, action-specific behavior. Minimal APIs have no action filters — middleware or endpoint filters (.NET 7+) apply."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Convention-based middleware lifecycle",
+          "items": [
+            {
+              "title": "Host builds pipeline at startup",
+              "body": "UseMiddleware<T> registers T with a factory that captures _next."
+            },
+            {
+              "title": "Per request: resolve middleware instance",
+              "body": "Convention-based: one instance per app (singleton). IMiddleware: created per request."
+            },
+            {
+              "title": "InvokeAsync runs",
+              "body": "Pre-_next logic, await _next(context), post-_next logic."
+            },
+            {
+              "title": "DI injects InvokeAsync parameters",
+              "body": "Method parameters resolved per request from RequestServices — correct place for scoped services."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Custom middleware in the pipeline",
+            "source": "flowchart LR\n  REQ[Request] --> CM[Custom Middleware\\nInvokeAsync pre]\n  CM --> NEXT[await _next]\n  NEXT --> INNER[Routing / Auth / Endpoint]\n  INNER --> POST[InvokeAsync post]\n  POST --> RES[Response]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Correlation ID middleware — production pattern",
+            "code": "public sealed class CorrelationIdMiddleware(RequestDelegate next)\n{\n    private const string HeaderName = \"X-Correlation-ID\";\n\n    public async Task InvokeAsync(HttpContext context)\n    {\n        var correlationId = context.Request.Headers[HeaderName].FirstOrDefault()\n            ?? context.TraceIdentifier;\n\n        context.Response.OnStarting(() =>\n        {\n            context.Response.Headers[HeaderName] = correlationId;\n            return Task.CompletedTask;\n        });\n\n        using (context.RequestServices.GetRequiredService<ILoggerFactory>()\n            .CreateLogger<CorrelationIdMiddleware>()\n            .BeginScope(new Dictionary<string, object> { [\"CorrelationId\"] = correlationId }))\n        {\n            await next(context);\n        }\n    }\n}\n\napp.UseMiddleware<CorrelationIdMiddleware>();",
+            "explanation": "Reads or generates correlation ID, adds response header on starting, scopes all logs in the request. Register early after exception handler."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "IMiddleware for per-request activation",
+            "code": "public sealed class TenantMiddleware : IMiddleware\n{\n    public async Task InvokeAsync(HttpContext context, RequestDelegate next)\n    {\n        var host = context.Request.Host.Host;\n        var tenant = host.Split('.')[0];\n        context.Items[\"TenantId\"] = tenant;\n        await next(context);\n    }\n}\n\nbuilder.Services.AddScoped<TenantMiddleware>();\napp.UseMiddleware<TenantMiddleware>();",
+            "explanation": "IMiddleware is instantiated per request via IMiddlewareFactory — safe for scoped dependencies in the middleware class itself if needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Extension method for clean Program.cs",
+            "code": "public static class CorrelationIdExtensions\n{\n    public static IApplicationBuilder UseCorrelationId(\n        this IApplicationBuilder app)\n        => app.UseMiddleware<CorrelationIdMiddleware>();\n}\n\n// Program.cs\napp.UseCorrelationId();",
+            "explanation": "Extension methods mirror framework UseAuthentication style — packages ship middleware as one line for consumers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Unit test middleware in isolation",
+            "code": "var context = new DefaultHttpContext();\ncontext.Request.Headers[\"X-Correlation-ID\"] = \"test-123\";\ncontext.Response.Body = new MemoryStream();\n\nvar called = false;\nRequestDelegate next = _ => { called = true; return Task.CompletedTask; };\n\nvar middleware = new CorrelationIdMiddleware(next);\nawait middleware.InvokeAsync(context);\n\nAssert.True(called);\nAssert.Equal(\"test-123\", context.Response.Headers[\"X-Correlation-ID\"]);",
+            "explanation": "Test pre/post behavior without Kestrel by mocking DefaultHttpContext and a flag next delegate — faster than full integration tests for header logic."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Custom middleware patterns",
+          "headers": ["Aspect", "ASP.NET Core", "Express / Fastify"],
+          "rows": [
+            ["Signature", "InvokeAsync(HttpContext, RequestDelegate)", "(req, res, next) => {}"],
+            ["Registration", "app.UseMiddleware<T>()", "app.use(myMiddleware)"],
+            ["Per-request DI", "InvokeAsync method injection or IMiddleware", "req.app.get('db') or cls-hooked AsyncLocalStorage"],
+            ["Response hook", "context.Response.OnStarting", "res.on('finish', ...)"],
+            ["Package pattern", "IApplicationBuilder extension", "Exported function (req,res,next)"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forgetting await next(context) so the pipeline stops. Injecting scoped services in middleware constructor on convention-based class — captive dependency bug. Writing to response body before await next then calling next — double response. Not using OnStarting for headers when endpoint may set status late."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: structured logs should include CorrelationId from middleware scope on every line — grep one ID across API and downstream calls. OpenTelemetry ActivitySource in middleware sets baggage propagated to HttpClient. If p95 latency grows, timing middleware before and after await next isolates endpoint vs post-processing. Memory leaks from middleware holding HttpContext beyond request — never store context in static fields."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Use when", "Avoid when"],
+          "rows": [
+            ["Convention-based class", "Singleton deps only in constructor", "Need scoped service in constructor"],
+            ["IMiddleware", "Scoped middleware class state", "Hot path — factory overhead negligible but measurable"],
+            ["Inline lambda", "Prototypes", "Production cross-cutting — untestable"],
+            ["Endpoint filter", "Single route group behavior", "Global transport concerns"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot write basic InvokeAsync with await _next. Injecting DbContext in middleware constructor without explaining captive dependency. Not knowing IMiddleware exists. Saying middleware and filters are interchangeable for minimal APIs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Custom middleware: constructor takes RequestDelegate _next; InvokeAsync calls await _next(context) unless short-circuiting.",
+    "Inject scoped services via InvokeAsync parameters or IMiddleware — never scoped in singleton constructor.",
+    "Production tip: correlation ID middleware early; scope logs; OnStarting for response headers.",
+    "60s: InvokeAsync pattern with _next. IMiddleware for per-request activation. Method injection for scoped deps. Express app.use is the same onion. Extension method for registration ergonomics.",
+    "Follow-up: difference between convention-based middleware and IMiddleware activation?"
+  ],
+  "commonPitfalls": [
+    "Scoped DbContext in middleware constructor gets you rejected — captive dependency, wrong tenant data.",
+    "Missing await next() silently hangs or returns empty responses.",
+    "Strong answer: 'RequestDelegate in ctor. Scoped deps on InvokeAsync or IMiddleware. Correlation ID via OnStarting. Unit test with DefaultHttpContext.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; IMiddleware in ASP.NET Core 2.0",
+  "relatedTopicIds": [
+    "dotnet-04-pipeline-onion-model",
+    "dotnet-04-scoped-services-in-middleware",
+    "dotnet-04-exception-handling-middleware"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express middleware function signature",
+      "note": "Express middleware is a function closing over nothing — state comes from req. ASP.NET middleware is a class with _next captured at pipeline build; per-request state lives on HttpContext.",
+      "futureTopicSlug": "javascript/express/custom-middleware"
+    },
+    {
+      "language": "typescript",
+      "concept": "Fastify onRequest / preHandler hooks",
+      "note": "Fastify hooks run in declared order like middleware layers. ASP.NET InvokeAsync pre/post around await _next matches onRequest + onResponse hook pair.",
+      "futureTopicSlug": "typescript/fastify/hooks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Write custom ASP.NET Core middleware",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write"
+    },
+    {
+      "title": "IMiddleware factory activation",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/write#per-request-middleware-dependencies"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

@@ -1,0 +1,238 @@
+{
+  "id": "dotnet-04-pipeline-onion-model",
+  "slug": "pipeline-onion-model",
+  "title": "The pipeline onion model (in-order in, reverse out)",
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "order": 1,
+  "hook": "Every Hypertext Transfer Protocol (HTTP) request walks through a chain of middleware like layers of an onion: code before await _next runs on the way in, and code after await _next runs on the way out in reverse order.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The ASP.NET Core middleware pipeline is a linked list of components, each wrapping the next. Each component receives an HttpContext and a RequestDelegate pointing to the rest of the chain. When a component calls await _next(context), control passes inward. When the innermost component finishes, control unwinds outward — exactly like peeling an onion from the outside in, then back out through the same layers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Middleware",
+              "longForm": "Middleware",
+              "plainDefinition": "A component that can inspect or modify an HTTP request on the way in and the response on the way out.",
+              "example": "app.Use(async (context, next) => { await next(); });"
+            },
+            {
+              "term": "RequestDelegate",
+              "longForm": "RequestDelegate",
+              "plainDefinition": "A delegate that processes an HttpContext. The _next parameter in middleware is the next link in the chain.",
+              "example": "public delegate Task RequestDelegate(HttpContext context);"
+            },
+            {
+              "term": "HttpContext",
+              "longForm": "HttpContext",
+              "plainDefinition": "Per-request object holding Request, Response, Items, User, and services scoped to this request.",
+              "example": "context.Request.Path, context.Response.StatusCode"
+            },
+            {
+              "term": "Pipeline",
+              "longForm": "Pipeline",
+              "plainDefinition": "The ordered chain of middleware built when the host starts from app.Use* calls in Program.cs.",
+              "example": "Exception handler → routing → auth → endpoints"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The onion model explains why middleware order is not cosmetic: the first registered component is the outermost shell — it sees every request first and every response last. Logging middleware registered early can time the entire request including endpoint work. Response compression registered late may miss headers set by inner middleware. Understanding in-order in / reverse out is the mental model interviewers expect before you discuss auth placement or exception handling."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "One sentence to remember",
+          "body": "Registration order = outside-to-inside on the way in; unwind order = inside-to-outside on the way out. The endpoint is the center of the onion."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request through three middleware layers",
+          "items": [
+            {
+              "title": "Kestrel hands off HttpContext",
+              "body": "The web server passes the context to the first middleware in the built pipeline."
+            },
+            {
+              "title": "Outer middleware runs pre-_next code",
+              "body": "Each layer executes its before logic, then calls await _next(context) to delegate inward."
+            },
+            {
+              "title": "Innermost layer runs the endpoint",
+              "body": "Routing + endpoint middleware invoke your controller or minimal API delegate at the center."
+            },
+            {
+              "title": "Unwind in reverse",
+              "body": "After _next returns, each middleware runs its after logic in reverse registration order."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Onion model — in-order in, reverse out",
+            "source": "flowchart TB\n  subgraph inbound[\"Inbound — registration order\"]\n    A[Middleware A pre] --> B[Middleware B pre]\n    B --> C[Middleware C pre]\n    C --> E[Endpoint]\n  end\n  subgraph outbound[\"Outbound — reverse order\"]\n    E --> C2[Middleware C post]\n    C2 --> B2[Middleware B post]\n    B2 --> A2[Middleware A post]\n  end\n  E --> C2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Three layers proving reverse unwind",
+            "code": "var builder = WebApplication.CreateBuilder(args);\nvar app = builder.Build();\n\napp.Use(async (context, next) =>\n{\n    context.Response.Headers[\"X-Trace\"] = \"A-in\";\n    await next();\n    context.Response.Headers[\"X-Trace\"] += \",A-out\";\n});\n\napp.Use(async (context, next) =>\n{\n    context.Response.Headers[\"X-Trace\"] += \",B-in\";\n    await next();\n    context.Response.Headers[\"X-Trace\"] += \",B-out\";\n});\n\napp.MapGet(\"/ping\", () => \"pong\");\n\napp.Run();\n// Response header: A-in,B-in,B-out,A-out",
+            "explanation": "Each middleware appends to a header before and after await next(). The outbound order is strictly reverse of inbound — proof of the onion model."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Timing middleware — outer shell sees full request",
+            "code": "app.Use(async (context, next) =>\n{\n    var sw = Stopwatch.StartNew();\n    try\n    {\n        await next();\n    }\n    finally\n    {\n        sw.Stop();\n        context.Response.Headers[\"X-Elapsed-Ms\"] = sw.ElapsedMilliseconds.ToString();\n    }\n});",
+            "explanation": "Stopwatch wraps await next(), so elapsed time includes routing, auth, and endpoint work. Register timing early to measure the whole onion."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "What the host builds at startup",
+            "code": "// Conceptually, app.Use calls build a linked list:\n// RequestDelegate pipeline =\n//   mwA(context => mwB(context => mwC(context => endpoint)));\n//\n// mwA: run pre → call inner → run post\n// No magic thread — single async call stack per request",
+            "explanation": "The pipeline is a composed RequestDelegate chain, not a loop. Each middleware holds a reference to the next delegate captured at startup."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Diagnostic — log pipeline order at startup",
+            "code": "app.Lifetime.ApplicationStarted.Register(() =>\n{\n    var logger = app.Services.GetRequiredService<ILoggerFactory>()\n        .CreateLogger(\"Pipeline\");\n    logger.LogInformation(\"Pipeline built — verify Use* order in Program.cs\");\n});\n// Pair with a test client hitting /ping and inspect X-Trace header order",
+            "explanation": "When production responses look wrong, trace header ordering or structured logs around await next() prove which layer ran when — faster than guessing registration order."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "ASP.NET Core pipeline vs Express middleware chain",
+          "headers": ["Aspect", "ASP.NET Core", "Express (Node.js)"],
+          "rows": [
+            ["Model", "Onion: pre-_next in order, post-_next reverse", "Similar: next() then code after runs on way out"],
+            ["Registration", "app.Use* at startup builds fixed chain", "app.use() at startup; order matters same way"],
+            ["Short-circuit", "Omit await _next or call Run/Map branch", "Omit next() or res.send() ends chain"],
+            ["Per-request state", "HttpContext.Items, scoped DI", "req object mutated on the request"],
+            ["Async", "First-class async RequestDelegate", "Callback or async (req,res,next) supported"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming middleware after the endpoint runs before the endpoint — only pre-_next code runs before. Registering response-modifying middleware after MapControllers so it never wraps endpoint execution. Forgetting that Map* creates a branch with its own sub-pipeline, not a global layer."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: add a temporary X-Trace or OpenTelemetry Activity per middleware layer. Export spans with parent/child links — inbound spans start in registration order, outbound events close in reverse. Application Insights dependency tracking on Kestrel shows total request duration; custom middleware spans reveal which outer layer added latency after the endpoint returned (e.g. compression flushing). dotnet-trace with Microsoft-AspNetCore-Hosting events shows MiddlewareStarting events in pipeline order."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Risk"],
+          "rows": [
+            ["Early outer logging/timing", "Sees full request including errors", "Must not swallow exceptions before exception handler"],
+            ["Late response compression", "Compresses final body", "Misses if short-circuited before compression middleware"],
+            ["Terminal Map branch", "Isolated sub-pipeline", "Easy to forget it skips global middleware registered after Map"],
+            ["Inline lambda middleware", "Fast to prototype", "Hard to unit test; prefer IMiddleware for complex logic"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying middleware runs as a foreach loop each request — it is a pre-built delegate chain. Claiming order does not matter for auth or exception handling. Not knowing that code after await _next runs in reverse order, so a logging middleware registered first logs the complete response status last."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Middleware is an onion: registration order is outside-in inbound, reverse outbound after await _next.",
+    "The endpoint sits at the center; outer middleware can time, log, or transform the full round trip.",
+    "In production, trace headers or OpenTelemetry spans per layer prove order when debugging wrong status codes.",
+    "60s: Pipeline is a linked RequestDelegate chain built at startup. Each middleware runs pre code, awaits next, runs post code. Outbound is reverse registration order. Express app.use works the same way with next().",
+    "Follow-up: how does Map create a branch that bypasses middleware registered after it?"
+  ],
+  "commonPitfalls": [
+    "Saying 'middleware runs in a loop' gets you rejected — it is a composed delegate chain per request.",
+    "Registering timing middleware after MapGet so it never wraps the endpoint.",
+    "Strong answer: 'Onion model — in-order in, reverse out. First Use is outermost. await _next delegates inward; code after _next unwinds like Express next().'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; unified pipeline in Generic Host",
+  "relatedTopicIds": [
+    "dotnet-04-middleware-order",
+    "dotnet-04-custom-middleware",
+    "dotnet-04-short-circuiting"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express app.use middleware chain",
+      "note": "Express (req, res, next) with code after next() mirrors ASP.NET Core await _next. Both are onion stacks; ASP.NET builds the chain at startup as RequestDelegates.",
+      "futureTopicSlug": "javascript/express/middleware"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS middleware and guards order",
+      "note": "NestJS applies middleware, then guards, then interceptors — a layered model similar to ASP.NET Core's pipeline plus filters. Order is configured explicitly like Use* calls.",
+      "futureTopicSlug": "typescript/nestjs/middleware"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "ASP.NET Core middleware",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/middleware/"
+    },
+    {
+      "title": "OpenTelemetry ASP.NET Core instrumentation",
+      "url": "https://learn.microsoft.com/en-us/dotnet/core/diagnostics/observability-with-otel"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

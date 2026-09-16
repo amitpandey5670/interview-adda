@@ -1,0 +1,239 @@
+{
+  "id": "dotnet-04-exception-handling-middleware",
+  "slug": "exception-handling-middleware",
+  "title": "Exception handling middleware (UseExceptionHandler)",
+  "moduleId": "dotnet-04-middleware-pipeline",
+  "order": 3,
+  "hook": "Unhandled exceptions in your Web API should become consistent JSON Problem Details responses — not raw stack traces. The exception handling middleware must wrap the entire pipeline as the outermost onion layer.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Exception handling middleware catches exceptions thrown anywhere inside the pipeline after routing, authentication, or your controller. In development, UseDeveloperExceptionPage shows detailed errors. In production, UseExceptionHandler redirects to an error path or invokes a custom handler that returns RFC 7807 Problem Details — a standard JSON shape with type, title, status, and detail fields."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "UseExceptionHandler",
+              "longForm": "UseExceptionHandler",
+              "plainDefinition": "Middleware that catches unhandled exceptions and runs a separate error pipeline.",
+              "example": "app.UseExceptionHandler(\"/error\");"
+            },
+            {
+              "term": "Problem Details",
+              "shortForm": "Problem Details",
+              "longForm": "RFC 7807 Problem Details for HTTP APIs",
+              "plainDefinition": "Standard JSON error format with type, title, status, detail, and optional extensions.",
+              "example": "application/problem+json"
+            },
+            {
+              "term": "IExceptionHandler",
+              "longForm": "IExceptionHandler interface",
+              "plainDefinition": ".NET 8+ service-based handler registered in DI; TryHandleAsync returns true if handled.",
+              "example": "builder.Services.AddExceptionHandler<GlobalExceptionHandler>();"
+            },
+            {
+              "term": "UseDeveloperExceptionPage",
+              "longForm": "UseDeveloperExceptionPage",
+              "plainDefinition": "Development-only middleware showing exception page with stack trace.",
+              "example": "if (app.Environment.IsDevelopment()) app.UseDeveloperExceptionPage();"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Clients and API gateways expect predictable error JSON. Leaking stack traces violates security baselines. Without outer exception middleware, Kestrel may abort the connection or return HTML. Correlation IDs in Problem Details extensions help trace one failed request across logs and Application Insights. Senior interviews ask how exception handling interacts with middleware order and whether filters replace middleware."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Middleware vs exception filter",
+          "body": "Exception filters run inside MVC pipeline only. Middleware catches exceptions from minimal APIs, middleware, and anything outside controller filters. Use both: middleware for global fallback, filters for controller-specific mapping."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Exception propagation through the onion",
+          "items": [
+            {
+              "title": "Inner middleware or endpoint throws",
+              "body": "Exception bubbles up the async call stack through await _next frames."
+            },
+            {
+              "title": "Outer exception handler catches",
+              "body": "UseExceptionHandler intercepts before Kestrel sees an unhandled fault."
+            },
+            {
+              "title": "Error pipeline runs",
+              "body": "Re-executes pipeline toward /error or invokes IExceptionHandler.TryHandleAsync."
+            },
+            {
+              "title": "Problem Details written",
+              "body": "Response status set, body serialized, connection completed cleanly."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Exception unwind to outer handler",
+            "source": "sequenceDiagram\n  participant Client\n  participant EH as Exception Handler\n  participant Auth\n  participant EP as Endpoint\n  Client->>EH: HTTP request\n  EH->>Auth: await next\n  Auth->>EP: await next\n  EP-->>Auth: throws Exception\n  Auth-->>EH: propagates\n  EH->>EH: handle + Problem Details\n  EH->>Client: 500 application/problem+json"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": ".NET 8 IExceptionHandler with Problem Details",
+            "code": "public sealed class GlobalExceptionHandler(\n    IProblemDetailsService problemDetails,\n    ILogger<GlobalExceptionHandler> logger) : IExceptionHandler\n{\n    public async ValueTask<bool> TryHandleAsync(\n        HttpContext context, Exception exception, CancellationToken cancellationToken)\n    {\n        logger.LogError(exception, \"Unhandled exception {Path}\", context.Request.Path);\n\n        context.Response.StatusCode = StatusCodes.Status500InternalServerError;\n        return await problemDetails.TryWriteAsync(new ProblemDetailsContext\n        {\n            HttpContext = context,\n            ProblemDetails =\n            {\n                Title = \"An unexpected error occurred.\",\n                Detail = context.RequestServices.GetRequiredService<IHostEnvironment>().IsDevelopment() ? exception.Message : null,\n                Extensions = { [\"correlationId\"] = context.TraceIdentifier }\n            },\n            Exception = exception\n        });\n    }\n}\n\n// Program.cs\nbuilder.Services.AddProblemDetails();\nbuilder.Services.AddExceptionHandler<GlobalExceptionHandler>();\napp.UseExceptionHandler();",
+            "explanation": "IExceptionHandler centralizes mapping. ProblemDetailsService writes RFC 7807 JSON. correlationId extension ties logs to client response."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Classic path-based exception handler",
+            "code": "app.UseExceptionHandler(errorApp =>\n{\n    errorApp.Run(async context =>\n    {\n        var feature = context.Features.Get<IExceptionHandlerFeature>();\n        var ex = feature?.Error;\n        context.Response.StatusCode = 500;\n        context.Response.ContentType = \"application/problem+json\";\n        await context.Response.WriteAsJsonAsync(new\n        {\n            title = \"Server error\",\n            status = 500,\n            detail = ex?.Message\n        });\n    });\n});",
+            "explanation": "Inline Run branch short-circuits the error sub-pipeline. IExceptionHandlerFeature exposes the caught exception."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Development vs production split",
+            "code": "if (app.Environment.IsDevelopment())\n{\n    app.UseDeveloperExceptionPage();\n}\nelse\n{\n    app.UseExceptionHandler();\n    app.UseHsts();\n}\n\n// Never both DeveloperExceptionPage and ExceptionHandler as outers fighting",
+            "explanation": "Developer page gives rich debug UI locally. Production uses sanitized Problem Details without stack traces in the body."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "Integration test — prove handler wraps controllers",
+            "code": "[Fact]\npublic async Task Unhandled_exception_returns_problem_details()\n{\n    await using var factory = new WebApplicationFactory<Program>();\n    var client = factory.CreateClient();\n    var response = await client.GetAsync(\"/api/throw\");\n\n    Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);\n    Assert.Equal(\"application/problem+json\",\n        response.Content.Headers.ContentType?.MediaType);\n}",
+            "explanation": "WebApplicationFactory hits the real pipeline order. Failing content-type means UseExceptionHandler registered too late or missing AddProblemDetails."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Global error handling: ASP.NET Core vs Express",
+          "headers": ["Aspect", "ASP.NET Core", "Express"],
+          "rows": [
+            ["Placement", "Outermost UseExceptionHandler", "Error middleware with 4 args at end of chain"],
+            ["Format", "RFC 7807 Problem Details built-in", "Manual res.status().json() shape"],
+            ["Re-execution", "Can re-run pipeline to /error path", "Same request, err passed to handler"],
+            ["Minimal APIs", "Same middleware catches throws", "Same app.use error handler catches throws"],
+            ["Correlation", "HttpContext.TraceIdentifier", "req.id from middleware like pino-http"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Swallowing exceptions in custom middleware without rethrow — downstream never sees failure but state may be corrupt. Registering UseExceptionHandler after MapControllers. Returning exception.Message to clients in production. Forgetting AddProblemDetails when using IProblemDetailsService."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Application Insights tracks exceptions with operation_Id matching TraceIdentifier. Alert on spike in 500 without application/problem+json content type — indicates handler bypass. Use dotnet-counters for exception rate. For double-fault scenarios (handler itself throws), ASP.NET Core falls back to server abort — keep handlers minimal and test them. Polly resilience exceptions may be handled inside HttpClient pipeline, not your API exception middleware — distinguish outbound from inbound."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["IExceptionHandler", "DI, testable, .NET 8 standard", "Must call UseExceptionHandler()"],
+            ["Exception filter", "Controller-specific status codes", "Misses minimal API throws unless duplicated"],
+            ["Problem Details", "Interoperable with gateways", "Clients must parse extensions for domain codes"],
+            ["DeveloperExceptionPage", "Fast local debug", "Catastrophic if enabled in production"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying exception filters alone are enough for a mixed minimal API + controller app. Not knowing exception handler must be first middleware. Unable to describe Problem Details or why stack traces in production are unacceptable. Claiming try/catch in every action is the correct global strategy."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "UseExceptionHandler is outermost middleware — it catches exceptions unwinding from inner layers.",
+    "Problem Details (RFC 7807) is the standard API error body; add correlationId in extensions.",
+    "Production tip: integration-test /throw endpoint for application/problem+json; alert if 500 returns HTML.",
+    "60s: Exception handler wraps the onion. Throws propagate outward to it. IExceptionHandler maps to Problem Details. Filters only cover MVC inside controllers. Register handler before routing. Developer page dev-only.",
+    "Follow-up: what happens if the exception handler itself throws?"
+  ],
+  "commonPitfalls": [
+    "Saying 'I use [HandleError] on every action' gets you rejected — not DRY and misses minimal APIs.",
+    "UseExceptionHandler after MapControllers — unhandled controller exceptions escape.",
+    "Strong answer: 'Outermost UseExceptionHandler. IExceptionHandler + Problem Details. correlationId in extensions. WebApplicationFactory proves JSON errors. Filters for controller-specific mapping only.'"
+  ],
+  "introducedIn": "ASP.NET Core 1.0; IExceptionHandler and IProblemDetailsService in .NET 7/8",
+  "relatedTopicIds": [
+    "dotnet-04-middleware-order",
+    "dotnet-04-custom-middleware",
+    "dotnet-04-pipeline-onion-model"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express centralized error middleware",
+      "note": "Express (err, req, res, next) runs when next(err) is called or async errors reach the framework. ASP.NET exception handler catches unhandled throws similarly but sits at the outer pipeline shell.",
+      "futureTopicSlug": "javascript/express/error-middleware"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS ExceptionFilter",
+      "note": "NestJS @Catch() filters map exceptions to HTTP responses like IExceptionHandler, but Nest applies them at framework layer after guards. ASP.NET splits middleware (global) vs MVC filters (controller scope).",
+      "futureTopicSlug": "typescript/nestjs/exception-filters"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Handle errors in ASP.NET Core",
+      "url": "https://learn.microsoft.com/en-us/aspnet/core/fundamentals/error-handling"
+    },
+    {
+      "title": "IExceptionHandler interface",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.diagnostics.iexceptionhandler"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}
