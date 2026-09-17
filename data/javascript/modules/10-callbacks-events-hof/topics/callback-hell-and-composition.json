@@ -4,128 +4,122 @@
   "title": "Callback hell and composing async before Promises",
   "moduleId": "javascript-10-callbacks-events-hof",
   "order": 4,
-  "hook": "Callback hell and composing async before Promises coordinates non-blocking I/O on a single thread via the event loop. Promises and async/await desugar to microtask chains — ordering mistakes and unhandled rejections are production bugs, not syntax trivia.",
+  "hook": "Nested fs.readFile callbacks formed pyramid-shaped code that was hard to read, hard to error-handle, and hard to parallelize. Named functions, modular steps, and promisify were the bridge before async/await.",
   "sections": [
     {
-      "heading": "What is Callback hell and composing async before Promises?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Callback hell and composing async before Promises** is a run-time JavaScript mechanism enforced by the engine on every execution. Callback hell and composing async before Promises coordinates non-blocking I/O on a single thread via the event loop. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Callback hell** (pyramid of doom) is deep nesting when each async step starts inside the previous callback. Causes: sequential async with callback API, inline anonymous functions, and mixed error handling. **Mitigations before Promises**: split **named functions**, **async.waterfall** (async.js), **promisify** + **Promise.all**, and **generator + co**. Modern code uses **async/await**, but interviews still ask you to refactor nested callbacks."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "callback",
-              "longForm": "Callback hell and composing async before Promises",
-              "plainDefinition": "Central mechanism behind \"Callback hell and composing async before Promises\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "pyramid of doom",
+              "longForm": "pyramid of doom",
+              "plainDefinition": "Rightward indentation from nested callbacks — readability and maintenance cost.",
+              "example": "Three levels of fs.readFile each inside the previous callback."
             },
             {
-              "term": "microtask",
-              "longForm": "microtask queue",
-              "plainDefinition": "High-priority queue drained after current stack — Promise reactions run here.",
-              "example": "queueMicrotask(() => ...)"
+              "term": "continuation-passing style",
+              "longForm": "CPS",
+              "plainDefinition": "Pass next step as callback instead of returning — all Node callbacks are CPS.",
+              "example": "readConfig(path, (err, cfg) => connect(cfg, done));"
             },
             {
-              "term": "macrotask",
-              "longForm": "macrotask",
-              "plainDefinition": "setTimeout, setInterval, I/O callbacks — run after microtasks.",
-              "example": "setTimeout(fn, 0) after Promise.then"
+              "term": "waterfall",
+              "longForm": "async waterfall",
+              "plainDefinition": "Run async tasks sequentially passing result to next — async.js pattern.",
+              "example": "async.waterfall([step1, step2, step3], finalCb);"
+            },
+            {
+              "term": "promisify",
+              "longForm": "promisify",
+              "plainDefinition": "Convert error-first callback API to Promise-returning function.",
+              "example": "const steps = [readA, readB].map(f => promisify(f)); await pipeline(steps);"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Callback hell and composing async before Promises matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Callback hell and composing async before Promises** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Legacy codebases still contain nested callbacks. Understanding composition teaches **why** Promises and async/await won — shared error channel, linear reading order, and Promise.all for parallel steps. C# never had callback hell at scale because Task/async arrived early; JS history makes this a cultural interview topic."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Callback hell and composing async before Promises\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: parallel vs sequential",
+          "body": "Nested callbacks imply sequential execution. If steps are independent, nested structure is wrong — use parallel Promise.all, not deeper nesting."
         }
       ]
     },
     {
-      "heading": "How Callback hell and composing async before Promises works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Refactor pyramid to flat",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where Callback hell and composing async before Promises appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Extract named functions", "body": "Each step becomes function (err, data) => next(err, transform(data))." },
+            { "title": "Centralize error handling", "body": "Single if (err) return done(err) per step or wrapper." },
+            { "title": "Promisify each step", "body": "await step1(); await step2(); linear like sync code." },
+            { "title": "Parallelize independent work", "body": "Promise.all([a(), b()]) instead of nesting." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Callback hell and composing async before Promises flow",
-            "source": "sequenceDiagram\n  participant M as Main thread\n  participant Q as Microtask queue\n  participant T as Macrotask queue\n  M->>M: Callback hell and composing async before Promises\n  M->>Q: Promise.then\n  M->>T: setTimeout\n  Q->>M: drain microtasks\n  T->>M: next macrotask"
+            "title": "Nested callbacks vs async/await",
+            "source": "flowchart LR\n  subgraph Hell[Callback hell]\n    A1[step1 cb] --> A2[step2 cb] --> A3[step3 cb]\n  end\n  subgraph Flat[async/await]\n    B1[await step1] --> B2[await step2] --> B3[await step3]\n  end"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Callback hell and composing async before Promises",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "async/await error path",
-            "code": "async function fetchUser(id) {\n  const res = await fetch(`/api/users/${id}`);\n  if (!res.ok) throw new Error(`HTTP ${res.status}`);\n  return res.json();\n}\n\ntry {\n  const user = await fetchUser('42');\n} catch (err) {\n  console.error('fetch failed', err);\n}",
-            "explanation": "await unwraps Promise; errors become rejections caught by try/catch around async function."
+            "label": "Callback hell (anti-pattern)",
+            "code": "import fs from 'node:fs';\n\nfs.readFile('a.json', 'utf8', (err, aText) => {\n  if (err) return console.error(err);\n  fs.readFile('b.json', 'utf8', (err2, bText) => {\n    if (err2) return console.error(err2);\n    fs.writeFile('out.json', aText + bText, err3 => {\n      if (err3) return console.error(err3);\n      console.log('done');\n    });\n  });\n});",
+            "explanation": "Three levels of nesting — error handling duplicated at each level."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Promise.all versus allSettled",
-            "code": "const ids = ['a', 'b', 'c'];\nconst results = await Promise.allSettled(\n  ids.map((id) => fetch(`/api/${id}`).then((r) => r.json()))\n);\nconst ok = results.filter((r) => r.status === 'fulfilled');\nconst failed = results.filter((r) => r.status === 'rejected');",
-            "explanation": "all fails fast on first rejection; allSettled waits for every input — use for partial success dashboards."
+            "label": "Named functions + promisify refactor",
+            "code": "import { promisify } from 'node:util';\nconst readFile = promisify(fs.readFile);\nconst writeFile = promisify(fs.writeFile);\n\nasync function mergeFiles() {\n  try {\n    const [aText, bText] = await Promise.all([\n      readFile('a.json', 'utf8'),\n      readFile('b.json', 'utf8')\n    ]);\n    await writeFile('out.json', aText + bText);\n    console.log('done');\n  } catch (err) {\n    console.error(err);\n  }\n}",
+            "explanation": "Independent reads parallelized; single try/catch — why async/await replaced pyramids."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "C# Task comparison",
-            "code": "// C# equivalent\nasync Task<User> FetchUserAsync(string id) {\n  using var res = await http.GetAsync($\"/api/users/{id}\");\n  res.EnsureSuccessStatusCode();\n  return await res.Content.ReadFromJsonAsync<User>();\n}",
-            "explanation": "C# Task runs continuations on thread pool; JS Promise uses same-thread microtasks."
+            "label": "C# linear async from the start",
+            "code": "var aText = await File.ReadAllTextAsync(\"a.json\");\nvar bText = await File.ReadAllTextAsync(\"b.json\");\nawait File.WriteAllTextAsync(\"out.json\", aText + bText);",
+            "explanation": "C# async/await since early — no widespread callback pyramid in modern .NET code."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Microtask ordering trap",
-            "code": "console.log('1');\nPromise.resolve().then(() => console.log('2'));\nqueueMicrotask(() => console.log('3'));\nconsole.log('4');\n// 1, 4, 2, 3 — microtasks before next macrotask",
-            "explanation": "Microtasks drain completely before setTimeout — critical for ${title} ordering bugs."
+            "label": "Failure mode: swallowing errors in nested cb",
+            "code": "function load(cb) {\n  fetchData((err, data) => {\n    if (err) console.log(err); // logged but cb never told — caller hangs\n    process(data, cb);\n  });\n}",
+            "explanation": "Must propagate err to outer cb or reject Promise — silent log leaves caller waiting forever."
           }
         }
       ]
@@ -135,44 +129,26 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Callback hell and composing async before Promises across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
-          ],
+          "title": "Async composition evolution",
+          "headers": ["Era", "JavaScript", "C#"],
           "rows": [
-            [
-              "Concurrency model",
-              "Single thread + event loop",
-              "Thread pool + Task",
-              "Promise<T> types"
-            ],
-            [
-              "Error propagation",
-              "throw / Promise reject",
-              "try/catch + Task.Exception",
-              "unknown in catch"
-            ],
-            [
-              "Cancellation",
-              "AbortSignal cooperative",
-              "CancellationToken",
-              "AbortSignal typed"
-            ]
+            ["Early async", "Nested callbacks", "APM Begin/End, ThreadPool"],
+            ["Composition libs", "async.js, Bluebird", "Task.WhenAll, ContinueWith"],
+            ["Modern", "async/await + Promise", "async/await + Task"],
+            ["Error path", "err-first or try/catch", "try/catch on await"],
+            ["Parallel", "Promise.all", "Task.WhenAll"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Callback hell and composing async before Promises",
-          "body": "Treating Callback hell and composing async before Promises as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Nesting when steps are independent. Forgetting to return after err check — fall-through executes success path. Mixing callback and Promise in same function without documenting dual API."
         }
       ]
     },
@@ -181,89 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Callback hell and composing async before Promises** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Migration strategy: promisify leaf APIs, convert bottom-up, add integration tests at each layer. For remaining callback libs, use **Promise** constructor wrapper at boundary only — do not promisify mid-stack twice. Understand **unhandled rejection** replaced unhandled callback errors — still need global handlers."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "title": "Tradeoffs at senior level",
+          "headers": ["Technique", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
-            ]
+            ["Named callback steps", "Legacy maintenance", "Still hard to parallelize"],
+            ["promisify + await", "Incremental rewrite", "Non-standard callback signatures"],
+            ["async/await greenfield", "All new Node code", "Top-level CJS constraints"],
+            ["Reactive streams", "Event-heavy pipelines", "Overhead for simple scripts"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Callback hell and composing async before Promises. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot refactor three-level nest to async/await. Nesting independent fetches instead of Promise.all. Not propagating errors to caller."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Callback hell and composing async before Promises: know definition plus one runnable example.",
-    "Production: validate external input before applying Callback hell and composing async before Promises; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for callback-hell-and-composition.",
-    "60s: Callback hell and composing async before Promises — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Callback hell = nested CPS — duplicated err handling and poor parallelism.",
+    "Fix: named functions, promisify, async/await, Promise.all for independent steps.",
+    "Always propagate errors — log alone leaves callers hanging.",
+    "60s: Pyramid from nested err-first callbacks. Refactor with promisify and await. Parallel with Promise.all not nesting. C# had Task early; JS evolved through Promises.",
+    "Follow-up: refactor waterfall where step2 needs step1 output but step3 is independent."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Callback hell and composing async before Promises as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving callback-hell-and-composition.",
-    "Strong: define Callback hell and composing async before Promises, show a 5-line example, name one pitfall and one C# difference."
+    "Sequential nesting when operations could run in parallel.",
+    "Logging err without calling outer callback or rejecting Promise.",
+    "Strong answer: show before/after refactor, Promise.all, single try/catch, C# contrast."
   ],
   "relatedTopicIds": [
     "javascript-10-callback-patterns",
-    "javascript-10-event-emitter",
-    "javascript-10-dom-events-and-delegation"
+    "javascript-13-async-await-syntax",
+    "javascript-13-promise-states-and-chaining"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Callback hell and composing async before Promises",
-      "note": "Callback hell and composing async before Promises in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/callbacks-events-hof/callback-hell-and-composition"
+      "concept": "Promise-returning async functions",
+      "note": "async function always returns Promise — TypeScript helps enforce await only on Promise-like values during migration from callbacks.",
+      "futureTopicSlug": "typescript/async/async-functions"
     },
     {
       "language": "javascript",
-      "concept": "C# correlation for Callback hell and composing async before Promises",
-      "note": "C# developers: map Callback hell and composing async before Promises to closest CLR concept (Task) and note differences.",
-      "futureTopicSlug": "csharp/modules/callback-hell-and-composition"
+      "concept": "Bluebird and Promise adoption",
+      "note": "Promise libraries bridged callback era to native Promise — historical context for why composition improved.",
+      "futureTopicSlug": "javascript/promises/history"
     }
   ],
   "officialSources": [
-    {
-      "title": "Event loop",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop"
-    },
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "Node.js — Don't block the event loop", "url": "https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop" },
+    { "title": "MDN — Promise", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise" }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "rabbitmq"
+  "animationHint": "flow"
 }
