@@ -40,7 +40,9 @@ function needsDeepening(topic) {
   const text = JSON.stringify(topic);
   return (
     isShallow(topic) ||
-    /exhausted retries|createClient\(cfg|Central mechanism behind/.test(text)
+    /exhausted retries|createClient\(cfg|Central mechanism behind|This section defines terms before code/.test(
+      text,
+    )
   );
 }
 

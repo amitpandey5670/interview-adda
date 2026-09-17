@@ -4,14 +4,14 @@
   "title": "Branded and opaque types for domain safety",
   "moduleId": "typescript-15-advanced-type-patterns",
   "order": 1,
-  "hook": "TypeScript is structurally typed — two string-typed values are interchangeable even when one is a UserId and the other is an OrderId. Branded types add a phantom compile-time tag so you cannot pass a raw string where a branded UserId is required.",
+  "hook": "**Branded types** add compile-time tags so `UserId` and `OrderId` are both strings at runtime but not interchangeable. Zero runtime cost — C# has nominal types natively.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "A **branded type** (nominal typing simulation) intersects a base type with a unique phantom property: `type UserId = string & { readonly __brand: 'UserId' }`. Values are still plain strings at runtime — the brand exists only for the type checker. **Opaque types** (via `declare const __brand: unique symbol`) hide the underlying representation — consumers cannot construct the type without a factory function. Use brands for **domain primitives**: UserId, Email, Cents, JWT — preventing swapped-argument bugs."
+          "text": "Brand: `type UserId = string & { readonly [__brand]: unique symbol }`. Factory validates then casts. **Opaque** hides structure — only factory constructs. Brands erase on emit — validation must be in factory."
         },
         {
           "type": "glossary",
@@ -19,27 +19,27 @@
           "entries": [
             {
               "term": "brand",
-              "longForm": "type brand",
-              "plainDefinition": "Phantom property making structurally identical types incompatible at compile time.",
-              "example": "string & { __brand: 'UserId' }"
+              "longForm": "branded type",
+              "plainDefinition": "Phantom tag on primitive.",
+              "example": "string & { __brand: \"UserId\" }"
             },
             {
-              "term": "opaque type",
-              "longForm": "opaque type",
-              "plainDefinition": "Branded type where constructor is not exported — only factory can create values.",
-              "example": "declare const Tag: unique symbol; type Opaque = string & { [Tag]: true }"
+              "term": "opaque",
+              "longForm": "hidden structure",
+              "plainDefinition": "Consumers cannot see internals.",
+              "example": "Opaque<string, \"Token\">"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "TS compares shape, not name — brands add fake shape for safety.",
-              "example": "Two string aliases interchangeable without brand"
+              "term": "nominal",
+              "longForm": "nominal typing",
+              "plainDefinition": "TS structural — brands simulate nominal.",
+              "example": "UserId ≠ OrderId"
             },
             {
-              "term": "factory function",
-              "longForm": "brand factory",
-              "plainDefinition": "Validates and casts raw input to branded type — single creation point.",
-              "example": "function UserId(raw: string): UserId"
+              "term": "phantom",
+              "longForm": "compile-time only",
+              "plainDefinition": "Brand never at runtime.",
+              "example": "erased on emit"
             }
           ]
         }
@@ -50,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "`deleteUser(orderId)` compiles when both are strings — production disaster. Brands catch it at compile time. C# uses distinct record wrappers or strong-typed IDs (e.g. `record UserId(string Value)`) with real nominal types at runtime. TypeScript brands are zero-cost — no runtime wrapper unless you add validation in the factory. Reddit senior threads pair brands with Zod `.brand()` for runtime + compile-time safety."
+          "text": "Swap user/order IDs causes data bugs — brands catch compile-time. Currency cents vs dollars. UUID vs string."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Brand at validation boundary",
-          "body": "Create UserId only in parseUserId() after regex/UUID check — never cast with as UserId at call sites."
+          "title": "Interview trap: brand at runtime",
+          "body": "Runtime still plain string — factory must validate."
         }
       ]
     },
@@ -65,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Branded type workflow",
+          "title": "Mental model",
           "items": [
             {
-              "title": "Define brand alias",
-              "body": "type UserId = string & { readonly __brand: unique symbol }"
+              "title": "define brand",
+              "body": "string & unique symbol"
             },
             {
-              "title": "Factory validates",
-              "body": "function parseUserId(raw: string): UserId | null"
+              "title": "factory",
+              "body": "validate + cast"
             },
             {
               "title": "API uses brand",
-              "body": "function fetchUser(id: UserId): Promise<User>"
+              "body": "loadUser(id: UserId)"
             },
             {
-              "title": "Call site must parse",
-              "body": "fetchUser(parseUserId(input)!) — raw string rejected"
+              "title": "ban export cast",
+              "body": "as UserId only in factory"
             }
           ]
         },
@@ -89,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Branded type flow",
-            "source": "flowchart LR\n  RAW[raw string] --> F[parseUserId factory]\n  F -->|valid| UID[UserId brand]\n  F -->|invalid| E[null / error]\n  UID --> API[fetchUser(id: UserId)]\n  RAW -.->|blocked| API"
+            "title": "Branded safety",
+            "source": "flowchart LR\n  RAW[string] --> FACT[UserId()]\n  FACT --> API[loadUser]\n  RAW -.->|blocked| API"
           }
         }
       ]
@@ -102,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Branded UserId and OrderId — prevent swap",
-            "code": "declare const UserIdBrand: unique symbol;\ndeclare const OrderIdBrand: unique symbol;\n\ntype UserId = string & { readonly [UserIdBrand]: true };\ntype OrderId = string & { readonly [OrderIdBrand]: true };\n\nfunction parseUserId(raw: string): UserId | null {\n  return /^usr_[a-z0-9]+$/.test(raw) ? (raw as UserId) : null;\n}\n\nfunction deleteUser(id: UserId): Promise<void> {\n  return fetch(`/api/users/${id}`, { method: 'DELETE' }).then(() => {});\n}\n\nconst orderId = 'ord_abc' as OrderId;\n// deleteUser(orderId); // Error: OrderId not assignable to UserId",
-            "explanation": "Lines 1–5: unique symbol brands — distinct despite both string. Line 7: factory is only cast site. Line 15: compile error prevents order/user swap."
+            "label": "UserId vs OrderId",
+            "code": "declare const __u: unique symbol;\ndeclare const __o: unique symbol;\ntype UserId = string & { readonly [__u]: never };\ntype OrderId = string & { readonly [__o]: never };\nfunction UserId(v: string): UserId { if (!/^usr_/.test(v)) throw new Error(); return v as UserId; }\nfunction loadUser(id: UserId) {}\nloadUser(\"ord_1\" as OrderId); // error",
+            "explanation": "Distinct brands prevent swap."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Opaque type — hide constructor",
-            "code": "declare const EmailTag: unique symbol;\nexport type Email = string & { readonly [EmailTag]: true };\n\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\nexport function Email(raw: string): Email | null {\n  const normalized = raw.trim().toLowerCase();\n  return EMAIL_RE.test(normalized) ? (normalized as Email) : null;\n}\n\n// Consumers cannot do: const e = 'a@b.com' as Email without importing cast",
-            "explanation": "Line 2: Email type exported but tag is module-private pattern. Line 7: only Email() creates values — opaque API."
+            "label": "Cents branded",
+            "code": "type Cents = number & { readonly __c: unique symbol };\nfunction Cents(n: number): Cents { if (!Number.isInteger(n)) throw new Error(); return n as Cents; }\nfunction add(a: Cents, b: Cents) { return Cents(a + b); }",
+            "explanation": "Integer cents only."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production — JWT subject as branded type",
-            "code": "type Subject = string & { readonly __brand: 'JwtSubject' };\n\nfunction parseSubject(payload: unknown): Subject | null {\n  if (typeof payload !== 'object' || payload === null) return null;\n  const sub = (payload as { sub?: unknown }).sub;\n  return typeof sub === 'string' && sub.length > 0 ? (sub as Subject) : null;\n}\n\nasync function loadSession(subject: Subject) {\n  const cached = await redis.get(`session:${subject}`);\n  return cached ? JSON.parse(cached) : fetch(`/api/session/${subject}`);\n}",
-            "explanation": "Line 1: brand documents JWT sub is not arbitrary string. Line 11: redis key and API path require parsed Subject — not raw user input string."
+            "label": "Opaque helper",
+            "code": "type Opaque<T, Tag extends string> = T & { readonly __opaque: Tag };\ntype Token = Opaque<string, \"Token\">;\nfunction createToken(s: string): Token { if (s.length < 32) throw new Error(); return s as Token; }",
+            "explanation": "Reusable opaque pattern."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode — as cast bypasses brand",
-            "code": "type UserId = string & { __brand: 'UserId' };\nconst id = 'not-validated' as UserId;\ndeleteUser(id); // compiles — brand defeated\n// Fix: no exported cast; only parseUserId returns UserId",
-            "explanation": "Line 2: as UserId anywhere defeats purpose — lint rule or opaque module prevents direct cast."
+            "label": "Failure: cast bypass",
+            "code": "const id = \"hack\" as UserId; loadUser(id); // compiles unsafely",
+            "explanation": "as UserId without factory defeats brand."
           }
         }
       ]
@@ -141,13 +141,26 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Nominal safety options",
-          "headers": ["Approach", "TypeScript brand", "JavaScript", "C#"],
+          "title": "Branded and opaque types for domain safety across languages",
+          "headers": [
+            "Aspect",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
           "rows": [
-            ["Runtime cost", "Zero (phantom)", "N/A", "Wrapper record has cost"],
-            ["Enforcement", "Compile time", "Convention only", "Compile + runtime type"],
-            ["Validation", "Factory function", "Manual if", "Constructor validates"],
-            ["Zod .brand()", "Runtime + TS brand", "Zod only", "FluentValidation"]
+            [
+              "",
+              "Branded",
+              "Wrapper class",
+              "C# nominal"
+            ],
+            [
+              "Runtime",
+              "zero",
+              "object alloc",
+              "zero"
+            ]
           ]
         }
       ]
@@ -158,14 +171,8 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Branding without validation",
-          "body": "as UserId everywhere is a lie — brand only helps when creation is centralized."
-        },
-        {
-          "type": "callout",
-          "variant": "warning",
-          "title": "Serializable brands",
-          "body": "JSON.stringify drops phantom fields — brands survive only in TS source, not over wire. Re-parse at boundary."
+          "title": "Pitfalls to avoid",
+          "body": "export as Brand casts. over-brand every string."
         }
       ]
     },
@@ -174,74 +181,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Alternatives: wrapper class `class UserId { constructor(private readonly value: string) {} }` — nominal at runtime with allocation cost. Zod `z.string().uuid().brand<'UserId'>()` unifies runtime + type. Compare to C# `readonly record struct UserId(string Value)`. Opaque type pattern from type-fest. Senior trap: brands do not survive JSON.parse — re-brand after validation."
+          "text": "zod .brand(). Use for IDs, currency, units. C# record struct has runtime wrapper."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": ["Pattern", "Pros", "Cons"],
+          "headers": [
+            "Approach",
+            "When it wins",
+            "When it fails"
+          ],
           "rows": [
-            ["Phantom brand", "Zero runtime cost", "Cast escape hatch"],
-            ["Opaque module", "Encapsulated factory", "Boilerplate"],
-            ["Wrapper class", "Real nominal", "Allocation, serialization"],
-            ["Plain string + lint", "Simple", "No compile safety"]
+            [
+              "brand",
+              "zero cost",
+              "factory discipline"
+            ],
+            [
+              "class wrapper",
+              "instanceof",
+              "alloc"
+            ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Saying brands exist at runtime. Cannot explain structural vs nominal. as UserId without factory. Not re-parsing after JSON."
+          "body": "Brands at runtime. Cast around factory."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Brands add phantom tag: string & { __brand: 'X' } — compile-time only.",
-    "Factory function validates then casts — single creation point.",
-    "Prevents swapped string arguments — UserId vs OrderId.",
-    "60s: Structural typing lets any string substitute. Brand blocks without factory. Zero runtime cost. Re-parse after JSON. C# uses record wrapper for real nominal.",
-    "Follow-up: Zod brand or opaque unique symbol pattern."
+    "Brand compile-time zero cost.",
+    "Factory validates.",
+    "UserId≠OrderId.",
+    "60s: phantom tag. factory only. erases. C# nominal native.",
+    "Follow-up: zod brand."
   ],
   "commonPitfalls": [
-    "Weak: as UserId at every call site — no safety.",
-    "Weak: brand survives JSON — it does not.",
-    "Strong: 'unique symbol brand, opaque factory, validate at boundary. Zod brand for runtime+compile.'"
+    "Weak: as UserId no validation.",
+    "Weak: brand everything.",
+    "Strong: \"phantom tag. factory entry. zero runtime.\""
   ],
   "relatedTopicIds": [
-    "javascript-09-nominal-vs-structural",
-    "typescript-11-narrowing-at-api-boundaries",
-    "typescript-15-advanced-patterns-vs-csharp",
-    "javascript-09-branding-and-symbols"
+    "typescript-15-recursive-types",
+    "typescript-15-builder-pattern-typing",
+    "typescript-02-any-unknown-never"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Symbol branding at runtime",
-      "note": "JavaScript Symbol properties can tag objects at runtime — TS brands are compile-time only but solve the same swapped-argument problem.",
-      "futureTopicSlug": "javascript/patterns/branding-and-symbols"
+      "concept": "plain strings",
+      "note": "JS no brands.",
+      "futureTopicSlug": "javascript/09-structural-typing-patterns/branding-and-symbols"
     },
     {
       "language": "typescript",
-      "concept": "Structural typing",
-      "note": "Brands are the standard workaround for structural typing limits — two string types otherwise interchangeable.",
-      "futureTopicSlug": "typescript/patterns/nominal-vs-structural"
+      "concept": "nominal",
+      "note": "C# Id struct.",
+      "futureTopicSlug": "csharp/types/nominal-typing"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook — Type manipulation",
-      "url": "https://www.typescriptlang.org/docs/handbook/2/types-from-types.html"
-    },
-    {
-      "title": "type-fest — Opaque",
-      "url": "https://github.com/sindresorhus/type-fest/blob/main/source/opaque.d.ts"
-    },
-    {
-      "title": "Zod — brand",
-      "url": "https://zod.dev/?id=brand"
+      "title": "Basarat nominal typing",
+      "url": "https://basarat.gitbook.io/typescript/main-1/nominaltyping"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "auth-token"
+  "animationHint": "compare"
 }

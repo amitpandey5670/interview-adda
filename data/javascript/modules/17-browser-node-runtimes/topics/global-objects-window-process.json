@@ -4,78 +4,78 @@
   "title": "window, globalThis, process, and environment globals",
   "moduleId": "javascript-17-browser-node-runtimes",
   "order": 1,
-  "hook": "window, globalThis, process, and environment globals differs between browser and Node.js hosts. globalThis, fetch, Buffer, and timer ordering are environment facts, not language spec trivia.",
+  "hook": "ECMAScript defines globalThis as the universal global reference — but browsers add window and DOM APIs while Node adds process, Buffer, and module. Isomorphic code must branch or polyfill carefully.",
   "sections": [
     {
-      "heading": "What is window, globalThis, process, and environment globals?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**window, globalThis, process, and environment globals** is a run-time JavaScript mechanism enforced by the engine on every execution. window, globalThis, process, and environment globals differs between browser and Node. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**globalThis**: standardized global object in any realm (browser, Node, Worker). **window**: browser global with DOM APIs. **global**: legacy Node alias. **process**: Node process info — `env`, `argv`, `exit`, signal handlers. **import.meta**: ESM metadata (`url`, `env` in Vite). **fetch** exists in both modern Node and browsers."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "global",
-              "longForm": "window, globalThis, process, and environment globals",
-              "plainDefinition": "Core JavaScript mechanism for window, globalthis, process, and environment globals.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "globalThis",
+              "longForm": "globalThis",
+              "plainDefinition": "Cross-environment global object reference.",
+              "example": "globalThis.setTimeout(fn, 0)"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "process.env",
+              "longForm": "process.env",
+              "plainDefinition": "Node environment variables object.",
+              "example": "process.env.REDIS_URL"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "realm",
+              "longForm": "JavaScript realm",
+              "plainDefinition": "Separate global + intrinsics (window, Worker, Node).",
+              "example": "Each iframe has own realm"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why window, globalThis, process, and environment globals matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **window, globalThis, process, and environment globals** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Libraries checking `typeof window !== \"undefined\"` to pick implementation — wrong check breaks in SSR. Leaking `process.env` secrets into client bundle when bundler inlines env vars. Workers use `self` not `window`."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"window, globalThis, process, and environment globals\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Vite import.meta.env",
+          "body": "Only VITE_ prefixed vars exposed to client — never DATABASE_URL in browser bundle."
         }
       ]
     },
     {
-      "heading": "How window, globalThis, process, and environment globals works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Detect environment",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where window, globalThis, process, and environment globals appears — syntax, API call, or type annotation."
+              "title": "globalThis",
+              "body": "Universal baseline — timers, console."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "typeof window",
+              "body": "Browser main thread check."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "process.versions.node",
+              "body": "Node-specific branch."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "import.meta.url",
+              "body": "File path in ESM — both hosts."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "window, globalThis, process, and environment globals flow",
-            "source": "flowchart TD\n  A[window, globalThis, process, and environment globals] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Global objects by host",
+            "source": "flowchart TD\n  GT[globalThis] --> W[window + DOM]\n  GT --> N[global/process Node]\n  GT --> S[self Worker]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: window, globalThis, process, and environment globals",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "globalThis",
-            "code": "const fetchFn = globalThis.fetch;\nconst isNode = typeof process !== 'undefined' && process.versions?.node;",
-            "explanation": "Cross-environment global — prefer over window or global alone."
+            "label": "Isomorphic entry",
+            "code": "const isBrowser = typeof window !== \"undefined\" && typeof window.document !== \"undefined\";\nconst storage = isBrowser ? window.localStorage : createMemoryStorage();\n\nexport function getToken() {\n  return storage.getItem(\"token\");\n}",
+            "explanation": "SSR-safe browser check. Node gets in-memory fallback."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "fetch stream",
-            "code": "const res = await fetch('/api/export.csv');\nconst reader = res.body.getReader();\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n  processChunk(value);\n}",
-            "explanation": "Process incrementally — avoid loading multi-GB bodies into memory."
+            "label": "Node process env + signals",
+            "code": "const port = Number(process.env.PORT) || 3000;\n\nprocess.on(\"SIGTERM\", async () => {\n  await redis.quit();\n  process.exit(0);\n});",
+            "explanation": "Config from env. Graceful shutdown hook — no browser equivalent."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Node fs/promises",
-            "code": "import { readFile } from 'node:fs/promises';\nconst raw = await readFile('data.bin');\nconst text = raw.toString('utf8');",
-            "explanation": "Buffer is Node-specific — not in browser without polyfill."
+            "label": "globalThis polyfill pattern",
+            "code": "const g = globalThis;\ng.MyAppConfig = g.MyAppConfig ?? { apiBase: \"/api\" };",
+            "explanation": "Attach cross-env singleton without assuming window vs global."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Timer ordering in Node",
-            "code": "setTimeout(() => console.log('timeout'), 0);\nPromise.resolve().then(() => console.log('microtask'));\nprocess.nextTick(() => console.log('nextTick'));",
-            "explanation": "nextTick before microtasks in Node — differs from browser."
+            "label": "Failure — leak secret to client",
+            "code": "const apiKey = import.meta.env.DATABASE_URL; // should NOT be in client bundle",
+            "explanation": "Server secrets only in Node process.env without VITE_ prefix."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "window, globalThis, process, and environment globals across languages",
+          "title": "Globals",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "API",
+            "Browser",
+            "Node"
           ],
           "rows": [
             [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
+              "DOM",
+              "window.document",
+              "undefined"
             ],
             [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
+              "Env vars",
+              "import.meta.env (bundler)",
+              "process.env"
             ],
             [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
+              "Exit",
+              "close tab",
+              "process.exit"
+            ],
+            [
+              "C# analog",
+              "N/A",
+              "Environment.GetEnvironmentVariable"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for window, globalThis, process, and environment globals",
-          "body": "Treating window, globalThis, process, and environment globals as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Assuming window in Node SSR. Exposing all env to client bundle. Using global instead of globalThis in Workers."
         }
       ]
     },
@@ -181,85 +182,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **window, globalThis, process, and environment globals** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Deno has Deno.env; Bun has Bun.env. Test isomorphic utils in vitest node and jsdom. Angular platform-browser vs platform-server split."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Pattern",
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "typeof window",
+              "Simple",
+              "Worker false negative"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "Dependency injection",
+              "Testable",
+              "Boilerplate"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "globalThis",
+              "Universal",
+              "Pollution risk"
+            ],
+            [
+              "Separate entry points",
+              "Clear",
+              "Duplicate code"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to window, globalThis, process, and environment globals. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Uses window in Node. Puts secrets in VITE_ vars. Cannot name process SIGTERM handler."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "window, globalThis, process, and environment globals: know definition plus one runnable example.",
-    "Production: validate external input before applying window, globalThis, process, and environment globals; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for global-objects-window-process.",
-    "60s: window, globalThis, process, and environment globals — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "globalThis works everywhere; window is browser-only.",
+    "process.env Node; import.meta.env bundler client subset.",
+    "SSR: no window — branch storage and DOM.",
+    "60s: globalThis universal. window DOM browser. process Node env signals. Workers self. Never leak server env to client bundle.",
+    "Follow-up: graceful shutdown Node vs browser tab close?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses window, globalThis, process, and environment globals as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving global-objects-window-process.",
-    "Strong: define window, globalThis, process, and environment globals, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: localStorage in SSR without guard.",
+    "Weak: DATABASE_URL in client import.meta.env.",
+    "Strong: globalThis + environment branch + VITE_ only client."
   ],
   "relatedTopicIds": [
+    "javascript-17-node-fs-and-buffers",
     "javascript-17-fetch-streams-and-web-apis",
-    "javascript-17-timers-and-nexttick",
-    "javascript-17-node-fs-and-buffers"
+    "javascript-01-engines-and-v8"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "window, globalThis, process, and environment globals",
-      "note": "window, globalThis, process, and environment globals in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/browser-node-runtimes/global-objects-window-process"
+      "concept": "lib dom vs node",
+      "note": "tsconfig lib dom vs @types/node — pick per project.",
+      "futureTopicSlug": "typescript/project-config/lib"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for window, globalThis, process, and environment globals",
-      "note": "C# developers: map window, globalThis, process, and environment globals to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/global-objects-window-process"
+      "language": "typescript",
+      "concept": "Environment",
+      "note": "C# comparison: Environment.GetEnvironmentVariable.",
+      "futureTopicSlug": "csharp/configuration/environment-variables"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — globalThis",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/globalThis"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Node.js — process",
+      "url": "https://nodejs.org/api/process.html"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "redis-cache"
+  "animationHint": "compare"
 }

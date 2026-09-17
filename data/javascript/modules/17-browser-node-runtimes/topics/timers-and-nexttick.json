@@ -4,78 +4,78 @@
   "title": "setTimeout, setImmediate, queueMicrotask, and process.nextTick",
   "moduleId": "javascript-17-browser-node-runtimes",
   "order": 3,
-  "hook": "setTimeout, setImmediate, queueMicrotask, and process.nextTick coordinates non-blocking I/O on a single thread via the event loop. Promises and async/await desugar to microtask chains — ordering mistakes and unhandled rejections are production bugs, not syntax trivia.",
+  "hook": "Not all async scheduling is equal: process.nextTick runs before Promise microtasks in Node, setTimeout is a macrotask, and queueMicrotask is explicit microtask — mixing them wrong breaks test ordering and deferral assumptions.",
   "sections": [
     {
-      "heading": "What is setTimeout, setImmediate, queueMicrotask, and process.nextTick?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**setTimeout, setImmediate, queueMicrotask, and process.nextTick** is a run-time JavaScript mechanism enforced by the engine on every execution. setTimeout, setImmediate, queueMicrotask, and process. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**setTimeout(fn, ms)**: macrotask (timer phase in Node). **setImmediate(fn)**: macrotask after I/O callbacks (Node). **queueMicrotask(fn)**: microtask queue — same as Promise.then. **process.nextTick(fn)**: Node-only, runs **before** other microtasks — highest priority after sync code."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "timers",
-              "longForm": "setTimeout, setImmediate, queueMicrotask, and process.nextTick",
-              "plainDefinition": "Core JavaScript mechanism for settimeout, setimmediate, queuemicrotask, and process.nexttick.",
-              "example": "Runnable examples in the code walkthrough below."
-            },
-            {
-              "term": "microtask",
-              "longForm": "microtask queue",
-              "plainDefinition": "High-priority queue drained after current stack — Promise reactions run here.",
-              "example": "queueMicrotask(() => ...)"
-            },
-            {
               "term": "macrotask",
-              "longForm": "macrotask",
-              "plainDefinition": "setTimeout, setInterval, I/O callbacks — run after microtasks.",
-              "example": "setTimeout(fn, 0) after Promise.then"
+              "longForm": "macrotask (timer)",
+              "plainDefinition": "Task queue item — one per loop turn after microtasks.",
+              "example": "setTimeout callback"
+            },
+            {
+              "term": "nextTick",
+              "longForm": "process.nextTick",
+              "plainDefinition": "Node microtask queue with higher priority than Promise.",
+              "example": "process.nextTick(() => cb())"
+            },
+            {
+              "term": "queueMicrotask",
+              "longForm": "queueMicrotask",
+              "plainDefinition": "Explicit enqueue to microtask queue.",
+              "example": "queueMicrotask(() => flush())"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why setTimeout, setImmediate, queueMicrotask, and process.nextTick matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **setTimeout, setImmediate, queueMicrotask, and process.nextTick** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Legacy Node code uses nextTick to defer — starves I/O if recursive. Tests assuming setTimeout(0) before Promise.then fail in Node. Deferring Redis callback with wrong queue causes race with await continuation."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"setTimeout, setImmediate, queueMicrotask, and process.nextTick\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Prefer queueMicrotask",
+          "body": "In cross-platform code use queueMicrotask not nextTick — works in browser and Node."
         }
       ]
     },
     {
-      "heading": "How setTimeout, setImmediate, queueMicrotask, and process.nextTick works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Node scheduling order",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where setTimeout, setImmediate, queueMicrotask, and process.nextTick appears — syntax, API call, or type annotation."
+              "title": "Sync code",
+              "body": "Current stack completes."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "nextTick queue",
+              "body": "Drain all process.nextTick callbacks."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Microtasks",
+              "body": "Promise reactions, queueMicrotask."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Macrotasks",
+              "body": "setImmediate, setTimeout, I/O."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "setTimeout, setImmediate, queueMicrotask, and process.nextTick flow",
-            "source": "sequenceDiagram\n  participant M as Main thread\n  participant Q as Microtask queue\n  participant T as Macrotask queue\n  M->>M: setTimeout, setImmediate, queueMicrotask, and process.nextTick\n  M->>Q: Promise.then\n  M->>T: setTimeout\n  Q->>M: drain microtasks\n  T->>M: next macrotask"
+            "title": "Node scheduling priority",
+            "source": "sequenceDiagram\n  participant Sync\n  participant NextTick\n  participant Micro\n  participant Macro\n  Sync->>NextTick: drain\n  NextTick->>Micro: drain\n  Micro->>Macro: one timer"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: setTimeout, setImmediate, queueMicrotask, and process.nextTick",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "async/await error path",
-            "code": "async function fetchUser(id) {\n  const res = await fetch(`/api/users/${id}`);\n  if (!res.ok) throw new Error(`HTTP ${res.status}`);\n  return res.json();\n}\n\ntry {\n  const user = await fetchUser('42');\n} catch (err) {\n  console.error('fetch failed', err);\n}",
-            "explanation": "await unwraps Promise; errors become rejections caught by try/catch around async function."
+            "label": "nextTick vs Promise (Node)",
+            "code": "Promise.resolve().then(() => console.log(\"promise\"));\nprocess.nextTick(() => console.log(\"nextTick\"));\nconsole.log(\"sync\");\n// sync, nextTick, promise",
+            "explanation": "nextTick precedes Promise microtasks in Node."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Promise.all versus allSettled",
-            "code": "const ids = ['a', 'b', 'c'];\nconst results = await Promise.allSettled(\n  ids.map((id) => fetch(`/api/${id}`).then((r) => r.json()))\n);\nconst ok = results.filter((r) => r.status === 'fulfilled');\nconst failed = results.filter((r) => r.status === 'rejected');",
-            "explanation": "all fails fast on first rejection; allSettled waits for every input — use for partial success dashboards."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# Task comparison",
-            "code": "// C# equivalent\nasync Task<User> FetchUserAsync(string id) {\n  using var res = await http.GetAsync($\"/api/users/{id}\");\n  res.EnsureSuccessStatusCode();\n  return await res.Content.ReadFromJsonAsync<User>();\n}",
-            "explanation": "C# Task runs continuations on thread pool; JS Promise uses same-thread microtasks."
+            "label": "setImmediate vs setTimeout",
+            "code": "setTimeout(() => console.log(\"timeout\"), 0);\nsetImmediate(() => console.log(\"immediate\"));\n// In Node: timeout then immediate (typical)",
+            "explanation": "setImmediate not in browser — feature detect."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Microtask ordering trap",
-            "code": "console.log('1');\nPromise.resolve().then(() => console.log('2'));\nqueueMicrotask(() => console.log('3'));\nconsole.log('4');\n// 1, 4, 2, 3 — microtasks before next macrotask",
-            "explanation": "Microtasks drain completely before setTimeout — critical for ${title} ordering bugs."
+            "label": "Defer without nextTick abuse",
+            "code": "function emitAfterCurrentTick(data) {\n  queueMicrotask(() => emitter.emit(\"data\", data));\n}",
+            "explanation": "queueMicrotask portable — avoids nextTick I/O starvation pattern."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — recursive nextTick",
+            "code": "function spin() { process.nextTick(spin); }\nspin(); // starves I/O",
+            "explanation": "Infinite nextTick prevents event loop from processing network."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "setTimeout, setImmediate, queueMicrotask, and process.nextTick across languages",
+          "title": "Schedulers",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "API",
+            "Queue",
+            "Host"
           ],
           "rows": [
             [
-              "Concurrency model",
-              "Single thread + event loop",
-              "Thread pool + Task",
-              "Promise<T> types"
+              "nextTick",
+              "Pre-microtask",
+              "Node only"
             ],
             [
-              "Error propagation",
-              "throw / Promise reject",
-              "try/catch + Task.Exception",
-              "unknown in catch"
+              "queueMicrotask",
+              "Microtask",
+              "Universal"
             ],
             [
-              "Cancellation",
-              "AbortSignal cooperative",
-              "CancellationToken",
-              "AbortSignal typed"
+              "setTimeout",
+              "Macrotask",
+              "Universal"
+            ],
+            [
+              "setImmediate",
+              "Macrotask after I/O",
+              "Node"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for setTimeout, setImmediate, queueMicrotask, and process.nextTick",
-          "body": "Treating setTimeout, setImmediate, queueMicrotask, and process.nextTick as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "nextTick in browser code. Recursive nextTick. Assuming setTimeout(0) before Promise in all hosts."
         }
       ]
     },
@@ -181,89 +182,89 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **setTimeout, setImmediate, queueMicrotask, and process.nextTick** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Link to javascript-13-microtasks-vs-macrotasks for browser detail. libuv phases: timers, pending, idle, poll, check, close."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Defer with",
+            "Priority",
+            "Risk"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "nextTick",
+              "Highest Node",
+              "Starve I/O"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "queueMicrotask",
+              "Standard micro",
+              "Safe defer"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "setTimeout 0",
+              "Macrotask",
+              "Minimum delay clamp"
+            ],
+            [
+              "setImmediate",
+              "After poll",
+              "Node only"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to setTimeout, setImmediate, queueMicrotask, and process.nextTick. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Uses nextTick in browser. Cannot order nextTick vs Promise. Recursive nextTick unaware."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "setTimeout, setImmediate, queueMicrotask, and process.nextTick: know definition plus one runnable example.",
-    "Production: validate external input before applying setTimeout, setImmediate, queueMicrotask, and process.nextTick; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for timers-and-nexttick.",
-    "60s: setTimeout, setImmediate, queueMicrotask, and process.nextTick — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Node: nextTick before Promise microtasks.",
+    "queueMicrotask cross-platform microtask.",
+    "setTimeout/setImmediate macrotasks.",
+    "60s: Sync, nextTick drain, microtasks drain, one macrotask. Browser lacks nextTick. queueMicrotask portable. Recursive nextTick starves I/O.",
+    "Follow-up: log order nextTick vs Promise vs setTimeout 0?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses setTimeout, setImmediate, queueMicrotask, and process.nextTick as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving timers-and-nexttick.",
-    "Strong: define setTimeout, setImmediate, queueMicrotask, and process.nextTick, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: nextTick in isomorphic library.",
+    "Weak: recursive nextTick deferral.",
+    "Strong: queueMicrotask + cite Node ordering + macrotask defer."
   ],
   "relatedTopicIds": [
-    "javascript-17-global-objects-window-process",
-    "javascript-17-fetch-streams-and-web-apis",
-    "javascript-17-node-fs-and-buffers"
+    "javascript-13-microtasks-vs-macrotasks",
+    "javascript-13-async-await-syntax",
+    "javascript-01-event-loop-overview"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "setTimeout, setImmediate, queueMicrotask, and process.nextTick",
-      "note": "setTimeout, setImmediate, queueMicrotask, and process.nextTick in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/browser-node-runtimes/timers-and-nexttick"
+      "concept": "Timer types",
+      "note": "ReturnType<typeof setTimeout> differs browser vs Node.",
+      "futureTopicSlug": "typescript/dom/timer-types"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for setTimeout, setImmediate, queueMicrotask, and process.nextTick",
-      "note": "C# developers: map setTimeout, setImmediate, queueMicrotask, and process.nextTick to closest CLR concept (Task) and note differences.",
-      "futureTopicSlug": "csharp/modules/timers-and-nexttick"
+      "language": "typescript",
+      "concept": "SynchronizationContext",
+      "note": "C# comparison: Post to context — different from microtask queues.",
+      "futureTopicSlug": "csharp/async-await/synchronization-context"
     }
   ],
   "officialSources": [
     {
-      "title": "Event loop",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop"
+      "title": "Node.js — Timers and nextTick",
+      "url": "https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick"
     },
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — queueMicrotask",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/queueMicrotask"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "auth-token"
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
 }
