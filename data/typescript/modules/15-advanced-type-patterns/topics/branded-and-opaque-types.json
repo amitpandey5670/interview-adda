@@ -4,30 +4,42 @@
   "title": "Branded and opaque types for domain safety",
   "moduleId": "typescript-15-advanced-type-patterns",
   "order": 1,
-  "hook": "Branded and opaque types for domain safety shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "TypeScript is structurally typed — two string-typed values are interchangeable even when one is a UserId and the other is an OrderId. Branded types add a phantom compile-time tag so you cannot pass a raw string where a branded UserId is required.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Branded and opaque types for domain safety is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A **branded type** (nominal typing simulation) intersects a base type with a unique phantom property: `type UserId = string & { readonly __brand: 'UserId' }`. Values are still plain strings at runtime — the brand exists only for the type checker. **Opaque types** (via `declare const __brand: unique symbol`) hide the underlying representation — consumers cannot construct the type without a factory function. Use brands for **domain primitives**: UserId, Email, Cents, JWT — preventing swapped-argument bugs."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "branded",
-              "longForm": "Branded and opaque types for domain safety",
-              "plainDefinition": "The central idea behind \"Branded and opaque types for domain safety\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "brand",
+              "longForm": "type brand",
+              "plainDefinition": "Phantom property making structurally identical types incompatible at compile time.",
+              "example": "string & { __brand: 'UserId' }"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "opaque type",
+              "longForm": "opaque type",
+              "plainDefinition": "Branded type where constructor is not exported — only factory can create values.",
+              "example": "declare const Tag: unique symbol; type Opaque = string & { [Tag]: true }"
+            },
+            {
+              "term": "structural typing",
+              "longForm": "structural typing",
+              "plainDefinition": "TS compares shape, not name — brands add fake shape for safety.",
+              "example": "Two string aliases interchangeable without brand"
+            },
+            {
+              "term": "factory function",
+              "longForm": "brand factory",
+              "plainDefinition": "Validates and casts raw input to branded type — single creation point.",
+              "example": "function UserId(raw: string): UserId"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Branded and opaque types for domain safety beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "`deleteUser(orderId)` compiles when both are strings — production disaster. Brands catch it at compile time. C# uses distinct record wrappers or strong-typed IDs (e.g. `record UserId(string Value)`) with real nominal types at runtime. TypeScript brands are zero-cost — no runtime wrapper unless you add validation in the factory. Reddit senior threads pair brands with Zod `.brand()` for runtime + compile-time safety."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Branded and opaque types for domain safety\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Brand at validation boundary",
+          "body": "Create UserId only in parseUserId() after regex/UUID check — never cast with as UserId at call sites."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Branded type workflow",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Branded and opaque types for domain safety appears in real code — a function, type annotation, or runtime API."
+              "title": "Define brand alias",
+              "body": "type UserId = string & { readonly __brand: unique symbol }"
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Factory validates",
+              "body": "function parseUserId(raw: string): UserId | null"
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "API uses brand",
+              "body": "function fetchUser(id: UserId): Promise<User>"
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Call site must parse",
+              "body": "fetchUser(parseUserId(input)!) — raw string rejected"
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Branded and opaque types for domain safety flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Branded type flow",
+            "source": "flowchart LR\n  RAW[raw string] --> F[parseUserId factory]\n  F -->|valid| UID[UserId brand]\n  F -->|invalid| E[null / error]\n  UID --> API[fetchUser(id: UserId)]\n  RAW -.->|blocked| API"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Branded and opaque types for domain safety",
-            "code": "// Branded and opaque types for domain safety\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'branded-and-opaque-types',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Branded and opaque types for domain safety. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "Branded UserId and OrderId — prevent swap",
+            "code": "declare const UserIdBrand: unique symbol;\ndeclare const OrderIdBrand: unique symbol;\n\ntype UserId = string & { readonly [UserIdBrand]: true };\ntype OrderId = string & { readonly [OrderIdBrand]: true };\n\nfunction parseUserId(raw: string): UserId | null {\n  return /^usr_[a-z0-9]+$/.test(raw) ? (raw as UserId) : null;\n}\n\nfunction deleteUser(id: UserId): Promise<void> {\n  return fetch(`/api/users/${id}`, { method: 'DELETE' }).then(() => {});\n}\n\nconst orderId = 'ord_abc' as OrderId;\n// deleteUser(orderId); // Error: OrderId not assignable to UserId",
+            "explanation": "Lines 1–5: unique symbol brands — distinct despite both string. Line 7: factory is only cast site. Line 15: compile error prevents order/user swap."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Opaque type — hide constructor",
+            "code": "declare const EmailTag: unique symbol;\nexport type Email = string & { readonly [EmailTag]: true };\n\nconst EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\nexport function Email(raw: string): Email | null {\n  const normalized = raw.trim().toLowerCase();\n  return EMAIL_RE.test(normalized) ? (normalized as Email) : null;\n}\n\n// Consumers cannot do: const e = 'a@b.com' as Email without importing cast",
+            "explanation": "Line 2: Email type exported but tag is module-private pattern. Line 7: only Email() creates values — opaque API."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Production — JWT subject as branded type",
+            "code": "type Subject = string & { readonly __brand: 'JwtSubject' };\n\nfunction parseSubject(payload: unknown): Subject | null {\n  if (typeof payload !== 'object' || payload === null) return null;\n  const sub = (payload as { sub?: unknown }).sub;\n  return typeof sub === 'string' && sub.length > 0 ? (sub as Subject) : null;\n}\n\nasync function loadSession(subject: Subject) {\n  const cached = await redis.get(`session:${subject}`);\n  return cached ? JSON.parse(cached) : fetch(`/api/session/${subject}`);\n}",
+            "explanation": "Line 1: brand documents JWT sub is not arbitrary string. Line 11: redis key and API path require parsed Subject — not raw user input string."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — as cast bypasses brand",
+            "code": "type UserId = string & { __brand: 'UserId' };\nconst id = 'not-validated' as UserId;\ndeleteUser(id); // compiles — brand defeated\n// Fix: no exported cast; only parseUserId returns UserId",
+            "explanation": "Line 2: as UserId anywhere defeats purpose — lint rule or opaque module prevents direct cast."
           }
         }
       ]
@@ -129,29 +141,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Branded and opaque types for domain safety across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Nominal safety options",
+          "headers": ["Approach", "TypeScript brand", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Runtime cost", "Zero (phantom)", "N/A", "Wrapper record has cost"],
+            ["Enforcement", "Compile time", "Convention only", "Compile + runtime type"],
+            ["Validation", "Factory function", "Manual if", "Constructor validates"],
+            ["Zod .brand()", "Runtime + TS brand", "Zod only", "FluentValidation"]
           ]
         }
       ]
@@ -162,8 +158,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Branded and opaque types for domain safety as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Branding without validation",
+          "body": "as UserId everywhere is a lie — brand only helps when creation is centralized."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Serializable brands",
+          "body": "JSON.stringify drops phantom fields — brands survive only in TS source, not over wire. Re-parse at boundary."
         }
       ]
     },
@@ -172,83 +174,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Branded and opaque types for domain safety, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "Alternatives: wrapper class `class UserId { constructor(private readonly value: string) {} }` — nominal at runtime with allocation cost. Zod `z.string().uuid().brand<'UserId'>()` unifies runtime + type. Compare to C# `readonly record struct UserId(string Value)`. Opaque type pattern from type-fest. Senior trap: brands do not survive JSON.parse — re-brand after validation."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Pattern", "Pros", "Cons"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Phantom brand", "Zero runtime cost", "Cast escape hatch"],
+            ["Opaque module", "Encapsulated factory", "Boilerplate"],
+            ["Wrapper class", "Real nominal", "Allocation, serialization"],
+            ["Plain string + lint", "Simple", "No compile safety"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Branded and opaque types for domain safety just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
+          "body": "Saying brands exist at runtime. Cannot explain structural vs nominal. as UserId without factory. Not re-parsing after JSON."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Branded and opaque types for domain safety: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for branded-and-opaque-types.",
-    "Production: validate external input before applying Branded and opaque types for domain safety; log failures with context.",
-    "60s: Branded and opaque types for domain safety — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Brands add phantom tag: string & { __brand: 'X' } — compile-time only.",
+    "Factory function validates then casts — single creation point.",
+    "Prevents swapped string arguments — UserId vs OrderId.",
+    "60s: Structural typing lets any string substitute. Brand blocks without factory. Zero runtime cost. Re-parse after JSON. C# uses record wrapper for real nominal.",
+    "Follow-up: Zod brand or opaque unique symbol pattern."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Branded and opaque types for domain safety is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Branded and opaque types for domain safety, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: as UserId at every call site — no safety.",
+    "Weak: brand survives JSON — it does not.",
+    "Strong: 'unique symbol brand, opaque factory, validate at boundary. Zod brand for runtime+compile.'"
   ],
   "relatedTopicIds": [
-    "typescript-15-recursive-types",
-    "typescript-15-builder-pattern-typing",
-    "typescript-15-type-level-programming-limits"
+    "javascript-09-nominal-vs-structural",
+    "typescript-11-narrowing-at-api-boundaries",
+    "typescript-15-advanced-patterns-vs-csharp",
+    "javascript-09-branding-and-symbols"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Branded and opaque types for domain safety",
-      "note": "Compare Branded and opaque types for domain safety in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/advanced-type-patterns/branded-and-opaque-types"
+      "concept": "Symbol branding at runtime",
+      "note": "JavaScript Symbol properties can tag objects at runtime — TS brands are compile-time only but solve the same swapped-argument problem.",
+      "futureTopicSlug": "javascript/patterns/branding-and-symbols"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Branded and opaque types for domain safety to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/15/branded-and-opaque-types"
+      "concept": "Structural typing",
+      "note": "Brands are the standard workaround for structural typing limits — two string types otherwise interchangeable.",
+      "futureTopicSlug": "typescript/patterns/nominal-vs-structural"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript handbook — Type manipulation",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/types-from-types.html"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "type-fest — Opaque",
+      "url": "https://github.com/sindresorhus/type-fest/blob/main/source/opaque.d.ts"
+    },
+    {
+      "title": "Zod — brand",
+      "url": "https://zod.dev/?id=brand"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
 }

@@ -4,30 +4,42 @@
   "title": "Awaited<T> and unwrapping nested promises",
   "moduleId": "typescript-13-async-types",
   "order": 2,
-  "hook": "Awaited<T> and unwrapping nested promises shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "Awaited<T> recursively unwraps Promise layers and thenable shapes at the type level — built with conditional types and infer. It types generic helpers that await unknown async values without nested manual unwrapping.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Awaited<T> and unwrapping nested promises is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Awaited<T>** (TypeScript 4.5+) resolves to the type you would get after `await`ing **T**. For `Promise<string>`, Awaited is `string`. For `Promise<Promise<number>>`, it recurses to `number`. For non-Promise **T**, Awaited is **T** unchanged. Implementation in lib.es5 uses **conditional types** and **infer** on the thenable signature — same pattern you implement in senior interviews."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "awaited",
-              "longForm": "Awaited<T> and unwrapping nested promises",
-              "plainDefinition": "The central idea behind \"Awaited<T> and unwrapping nested promises\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "Awaited",
+              "longForm": "Awaited utility type",
+              "plainDefinition": "Recursively unwraps Promise-like types to the fulfilled value type.",
+              "example": "Awaited<Promise<User>> → User"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "thenable",
+              "longForm": "thenable object",
+              "plainDefinition": "Object with then(onFulfilled) — Awaited matches this shape, not only Promise.",
+              "example": "Thenable<T> interface in lib.es2015.promise"
+            },
+            {
+              "term": "recursive conditional",
+              "longForm": "recursive conditional type",
+              "plainDefinition": "Conditional type that refers to itself in the true branch for nested unwrapping.",
+              "example": "MyAwaited<V> recurses on inferred fulfillment type"
+            },
+            {
+              "term": "async return inference",
+              "longForm": "async function return type",
+              "plainDefinition": "async fn returning T is typed Promise<T> — Awaited reverses the wrap.",
+              "example": "Awaited<ReturnType<typeof fn>>"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Awaited<T> and unwrapping nested promises beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Generic utilities like `async function map<T, R>(items: T[], fn: (t: T) => R)` need `Awaited<R>` when `fn` returns `Promise<User> | User`. Without Awaited, result arrays type as mixed Promise and sync values. Fetch wrappers returning `Promise<Response>` vs parsed JSON benefit from `Awaited<ReturnType<typeof client.getUser>>`. Pairs with JavaScript Promise microtask behavior — types describe what await yields, not scheduling."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Awaited<T> and unwrapping nested promises\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Awaited vs unwrap manual",
+          "body": "Before 4.5, developers chained conditional types manually — Awaited is now the standard library answer."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Awaited resolution",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Awaited<T> and unwrapping nested promises appears in real code — a function, type annotation, or runtime API."
+              "title": "null | undefined",
+              "body": "Awaited preserves null and undefined without unwrapping."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Thenable check",
+              "body": "T extends object & { then(onfulfilled: infer F): unknown }"
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "infer fulfillment parameter",
+              "body": "F extends (value: infer V) => unknown ? Awaited<V> : never"
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Not thenable",
+              "body": "Return T as-is."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Awaited<T> and unwrapping nested promises flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Awaited recursion",
+            "source": "flowchart TD\n  T[Type T] --> N{null or undefined?}\n  N -->|yes| T\n  N -->|no| P{Thenable?}\n  P -->|yes| I[infer V recurse Awaited V]\n  P -->|no| T"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Awaited<T> and unwrapping nested promises",
-            "code": "// Awaited<T> and unwrapping nested promises\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'awaited-and-async-utility',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Awaited<T> and unwrapping nested promises. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "Awaited basics and nested Promise",
+            "code": "type A = Awaited<Promise<string>>; // string\ntype B = Awaited<Promise<Promise<number>>>; // number\ntype C = Awaited<string>; // string — not a Promise, unchanged\ntype D = Awaited<null>; // null",
+            "explanation": "Line 1: single unwrap. Line 2: recursive unwrap. Line 3: sync type passes through. Line 4: null preserved per spec."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Implement MyAwaited — interview version",
+            "code": "type MyAwaited<T> = T extends null | undefined\n  ? T\n  : T extends object & { then(onfulfilled: infer F, ...args: infer _): unknown }\n    ? F extends (value: infer V, ...args: infer _) => unknown\n      ? MyAwaited<V>\n      : never\n    : T;\n\ntype Deep = MyAwaited<Promise<Promise<{ id: string }>>>;\n// { id: string }",
+            "explanation": "Lines 1–7: mirrors lib.es5 Awaited structure. Line 9: double Promise unwraps to inner object type."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Production — generic async map with Awaited",
+            "code": "async function mapAsync<T, R>(\n  items: T[],\n  fn: (item: T) => R | Promise<R>\n): Promise<Awaited<R>[]> {\n  return Promise.all(items.map(item => fn(item))) as Promise<Awaited<R>[]>;\n}\n\nasync function loadUsers(ids: string[]) {\n  return mapAsync(ids, id => fetch(`/api/users/${id}`).then(r => r.json()));\n}\n// Return type: Promise<User[]>",
+            "explanation": "Line 4: Awaited<R> unwraps whether fn returns User or Promise<User>. Line 9: Promise.all still needed at runtime — Awaited is compile-time only."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Awaited with ReturnType on fetch client",
+            "code": "const api = {\n  async getSession(id: string) {\n    const res = await fetch(`/api/session/${id}`);\n    return res.json() as Promise<Session>;\n  }\n};\n\ntype SessionResult = Awaited<ReturnType<typeof api.getSession>>;\n// Session",
+            "explanation": "Line 8: ReturnType is Promise<Session> (async method). Line 9: Awaited yields Session for consumers typing cache values."
           }
         }
       ]
@@ -129,29 +141,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Awaited<T> and unwrapping nested promises across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Async type unwrapping",
+          "headers": ["Concept", "TypeScript Awaited", "JavaScript await", "C# Task<T>"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Unwrap layers", "Recursive type", "Runtime recursive", "Task.Result / await once"],
+            ["Non-Promise", "Returns T", "Returns value", "Returns value"],
+            ["Implementation", "conditional + infer", "PromiseResolve", "TaskAwaiter"],
+            ["Scheduling", "N/A — types only", "Microtasks", "Thread pool"]
           ]
         }
       ]
@@ -162,8 +158,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Awaited<T> and unwrapping nested promises as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Awaited does not run await",
+          "body": "Types erase — you still need await or .then at runtime to unwrap Promises."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Loose thenable false positives",
+          "body": "Objects with then() that are not real Promises may match Awaited pattern — rare in practice."
         }
       ]
     },
@@ -172,83 +174,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Awaited<T> and unwrapping nested promises, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "Interview: implement Awaited from scratch, explain null branch, thenable infer, recursion. Combine Awaited<ReturnType<typeof fn>> for generic middleware typing Redis/fetch clients. Compare to C# Task<T> unwrapping — no recursive Task<Task<T>> idiom in C#. Link to JavaScript Promise implementation and microtask scheduling — types describe result shape only."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Utility", "When", "Pitfall"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Awaited<R> in generic fn", "fn may sync or async return", "Over-complex R union"],
+            ["ReturnType + Awaited", "Extract async method result", "any in chain"],
+            ["Manual Promise<T>", "Simple cases", "Nested Promise not unwrapped"],
+            ["Runtime await", "Actual unwrapping", "Required always"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Awaited<T> and unwrapping nested promises just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
+          "body": "Cannot implement MyAwaited. Saying Awaited runs at runtime. Confusing with Promise.resolve typing only one level."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Awaited<T> and unwrapping nested promises: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for awaited-and-async-utility.",
-    "Production: validate external input before applying Awaited<T> and unwrapping nested promises; log failures with context.",
-    "60s: Awaited<T> and unwrapping nested promises — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Awaited<T> recursively unwraps Promise/thenable to fulfilled type.",
+    "Built from conditional types + infer on then callback parameter.",
+    "Preserves null/undefined; passes through non-Promise T.",
+    "60s: Awaited unwraps nested Promise at type level. infer on then(onfulfilled: infer F). Use with ReturnType on async functions. Runtime still needs await.",
+    "Follow-up: implement Awaited in interview without looking at lib.d.ts."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Awaited<T> and unwrapping nested promises is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Awaited<T> and unwrapping nested promises, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: Awaited replaces await — types only.",
+    "Weak: single-level Promise<T> manual only — misses nested.",
+    "Strong: 'Recursive conditional + infer V. mapAsync uses Awaited<R>. Pair with ReturnType on fetch client.'"
   ],
   "relatedTopicIds": [
+    "typescript-12-infer-keyword",
     "typescript-13-promise-and-async-return-types",
-    "typescript-13-async-iterable-types",
-    "typescript-13-abort-signal-typing"
+    "typescript-13-async-types-vs-csharp-task",
+    "typescript-10-parameters-returntype"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Awaited<T> and unwrapping nested promises",
-      "note": "Compare Awaited<T> and unwrapping nested promises in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/async-types/awaited-and-async-utility"
+      "concept": "await and Promise resolution",
+      "note": "JavaScript await recursively unwraps thenables at runtime — Awaited models that behavior at compile time for generics.",
+      "futureTopicSlug": "javascript/async/async-await-syntax"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Awaited<T> and unwrapping nested promises to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/13/awaited-and-async-utility"
+      "concept": "infer keyword",
+      "note": "Awaited is the canonical production example of recursive infer in conditional types.",
+      "futureTopicSlug": "typescript/types/infer-keyword"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript 4.5 — Awaited type",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-5.html#the-awaited-type"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript handbook — Conditional types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html"
+    },
+    {
+      "title": "MDN — await",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/await"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
 }

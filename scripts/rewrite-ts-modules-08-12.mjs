@@ -1,0 +1,184 @@
+#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = join(process.cwd(), 'data/typescript/modules');
+
+function topic(base) {
+  return JSON.stringify(base, null, 2) + '\n';
+}
+
+const topics = {
+  '08-collections-and-typed-data/topics/array-and-tuple-types.json': {
+    id: 'typescript-08-array-and-tuple-types',
+    slug: 'array-and-tuple-types',
+    title: 'Array types, tuple types, and readonly tuples',
+    moduleId: 'typescript-08-collections-and-typed-data',
+    order: 1,
+    hook: 'T[] and Array<T> describe homogeneous lists; tuples fix length and per-index types — [string, number] is not the same as (string | number)[]. Readonly tuples protect config shapes without freezing the runtime array.',
+    sections: [
+      {
+        heading: 'What is this?',
+        blocks: [
+          {
+            type: 'prose',
+            text: 'An **array type** `T[]` (or `Array<T>`) means every element is assignable to `T`. A **tuple type** fixes **arity** and **position**: `type Point = [number, number]` accepts exactly two numbers — a third element is a compile error. **Readonly tuples** (`readonly [string, number]`) block reassignment of indices at compile time. At run time, both are plain JavaScript arrays; TypeScript only enforces shape during checking. **Variadic tuples** (`...[string, ...number[]]`) model functions like `concat`.'
+          },
+          {
+            type: 'glossary',
+            title: 'Key terms',
+            entries: [
+              { term: 'array type', longForm: 'array type T[]', plainDefinition: 'Homogeneous collection — every index has the same element type.', example: 'const ids: string[] = ["a", "b"];' },
+              { term: 'tuple', longForm: 'tuple type', plainDefinition: 'Fixed-length array with typed positions — arity is part of the type.', example: 'type RGB = [number, number, number];' },
+              { term: 'readonly tuple', longForm: 'readonly tuple', plainDefinition: 'Tuple whose elements cannot be reassigned via index (compile-time only).', example: 'const pair: readonly [string, number] = ["x", 1];' },
+              { term: 'variadic tuple', longForm: 'variadic tuple spread', plainDefinition: 'Tuple with rest element describing tail types.', example: 'type HeadTail = [string, ...number[]];' }
+            ]
+          }
+        ]
+      },
+      {
+        heading: 'Why does it matter?',
+        blocks: [
+          {
+            type: 'prose',
+            text: 'React hooks return tuples: `const [state, setState] = useState(0)` — `[T, Dispatch<SetStateAction<T>>]`. Database drivers return `[rows, fields]`. CSV parsers use `[headers, ...rows]`. Using `any[]` loses position safety; using `(string|number)[]` allows wrong lengths. C# has `ValueTuple<T1,T2>` with named fields; TypeScript tuples are structural and erase at emit. Senior interviews ask when tuple beats interface (ordered pairs, small fixed arity) and when `as const` + tuple inference beats manual annotation.'
+          },
+          { type: 'callout', variant: 'tip', title: 'Tuple vs interface', body: 'Two fields with stable names → interface. Ordered pair from an API (coordinates, key-value pair from Object.entries) → tuple.' }
+        ]
+      },
+      {
+        heading: 'How it works step by step',
+        blocks: [
+          {
+            type: 'steps',
+            title: 'Choosing array vs tuple',
+            items: [
+              { title: 'Homogeneous list', body: 'Use T[] when length varies and position has no meaning.' },
+              { title: 'Fixed arity', body: 'Use [T1, T2] when index 0 and 1 mean different things.' },
+              { title: 'Optional tail elements', body: 'Use optional tuple members: [string, number?] for one or two elements.' },
+              { title: 'Readonly for config', body: 'readonly [...] on theme tokens and route tables prevents accidental mutation.' }
+            ]
+          },
+          {
+            type: 'diagram',
+            diagram: {
+              type: 'mermaid',
+              title: 'Array vs tuple assignability',
+              source: 'flowchart TD\n  A["string[] — any length"] --> B["(string | number)[] — widened union"]\n  T["[string, number] — length 2"] --> U["Index 0: string, Index 1: number"]\n  T -.->|not assignable| A'
+            }
+          }
+        ]
+      },
+      {
+        heading: 'Code walkthrough',
+        blocks: [
+          {
+            type: 'snippet',
+            snippet: {
+              language: 'typescript',
+              label: 'Tuple arity enforcement',
+              code: 'type HttpResult = [status: number, body: string];\n\nfunction parseResponse(raw: string): HttpResult {\n  const status = Number(raw.slice(0, 3));\n  const body = raw.slice(4);\n  return [status, body];\n}\n\nconst [code, text] = parseResponse("200 OK");\n// const bad: HttpResult = [200, "ok", "extra"]; // error — length 3',
+              explanation: 'Line 1: labeled tuple elements (TS 4.0+) document positions. Line 8: destructuring preserves types per index. Extra elements fail the tuple type.'
+            }
+          },
+          {
+            type: 'snippet',
+            snippet: {
+              language: 'typescript',
+              label: 'readonly tuple for config',
+              code: 'const ROUTES: readonly [string, string, string] = [\n  "/home",\n  "/settings",\n  "/logout",\n];\n\n// ROUTES[0] = "/admin"; // compile error\n// ROUTES.push("/admin"); // compile error on readonly array',
+              explanation: 'readonly applies to the tuple type — prevents index assignment and mutating methods. Run-time array is still mutable if you bypass the type (cast).'
+            }
+          },
+          {
+            type: 'snippet',
+            snippet: {
+              language: 'typescript',
+              label: 'useState-style tuple inference',
+              code: 'function usePair<T>(initial: T): [T, (next: T) => void] {\n  let value = initial;\n  const set = (next: T) => { value = next; };\n  return [value, set];\n}\n\nconst [count, setCount] = usePair(0);\nsetCount(count + 1);',
+              explanation: 'Return type is a tuple — destructuring infers count as number and setCount as (next: number) => void. A plain array return would widen to (number | Function)[]'
+            }
+          },
+          {
+            type: 'snippet',
+            snippet: {
+              language: 'typescript',
+              label: 'Failure mode — tuple assigned to array',
+              code: 'type Pair = [string, number];\nconst pair: Pair = ["id", 42];\nconst arr: (string | number)[] = pair; // OK — tuple is assignable to wider array\narr.push(true); // no error — arr is now polluted at runtime\n// pair is still [string, number] in TS view but shared reference mutates',
+              explanation: 'Tuples are assignable to arrays with union element types — mutating through the array reference breaks tuple assumptions at runtime. Prefer readonly tuples for shared config.'
+            }
+          }
+        ]
+      },
+      {
+        heading: 'Compare with JavaScript and C#',
+        blocks: [
+          {
+            type: 'comparisonTable',
+            title: 'Collections typing across languages',
+            headers: ['Concept', 'TypeScript', 'JavaScript', 'C#'],
+            rows: [
+              ['Homogeneous list', 'T[] / Array<T>', 'Array (untyped)', 'List<T>, T[]'],
+              ['Fixed arity pair', '[T1, T2]', 'Array (no length check)', 'ValueTuple<T1,T2>'],
+              ['Immutability', 'readonly (compile-time)', 'Object.freeze (shallow)', 'ImmutableArray<T> / readonly struct'],
+              ['Run-time enforcement', 'None — types erase', 'None by default', 'CLR enforces on generics']
+            ]
+          }
+        ]
+      },
+      {
+        heading: 'Common mistakes',
+        blocks: [
+          { type: 'callout', variant: 'warning', title: 'Confusing tuple with union array', body: '(string | number)[] allows any length and any mix. [string, number] requires exactly two elements in that order.' },
+          { type: 'callout', variant: 'warning', title: 'Optional rest without readonly', body: 'Mutable tuple passed where array expected — downstream push() corrupts assumed length.' }
+        ]
+      },
+      {
+        heading: 'Senior interview depth',
+        blocks: [
+          {
+            type: 'prose',
+            text: 'Tuple inference powers React hooks, Zod tuple schemas, and typed `Object.entries`. **Labeled tuple elements** improve error messages without runtime cost. **const type parameters** (TS 5.0+) preserve literal tuple types in generic functions. For API design, return tuples for 2–3 correlated values; switch to object when field names matter for callers. Readonly is shallow — nested objects inside tuples remain mutable unless recursively readonly.'
+          },
+          {
+            type: 'comparisonTable',
+            title: 'Tradeoffs at senior level',
+            headers: ['Pattern', 'Wins', 'Fails'],
+            rows: [
+              ['Tuple return', 'Lightweight destructuring, hook patterns', 'Named fields unclear beyond 3 elements'],
+              ['Interface return', 'Self-documenting fields', 'More boilerplate for pairs'],
+              ['readonly tuple', 'Config safety', 'No deep freeze — nested objects mutable'],
+              ['as const + typeof', 'Inferred literal tuples', 'Widens when passed to unconstrained generic']
+            ]
+          },
+          { type: 'callout', variant: 'warning', title: 'What gets you rejected in interviews', body: 'Saying tuples exist at runtime. Cannot explain tuple vs array assignability. Not knowing readonly is compile-time only.' }
+        ]
+      }
+    ],
+    interviewTakeaways: [
+      'T[] = homogeneous variable length; [T1,T2] = fixed arity with positional meaning.',
+      'readonly tuples block index assignment — not a deep freeze.',
+      'Tuples assign to wider arrays — shared mutation is a runtime trap.',
+      '60s: Arrays for lists. Tuples for pairs like useState, HTTP [status, body], coordinates. readonly for config. Types erase — validate at boundaries.',
+      'Follow-up: labeled tuples, variadic spreads, const type parameters.'
+    ],
+    commonPitfalls: [
+      'Weak: "tuple is just syntax for array" — rejected; arity and position matter.',
+      'Using (string|number)[] when [string, number] is required.',
+      'Strong: "Tuple fixes length and per-index types. readonly prevents reassignment. Runtime is plain Array — enforce shape at boundaries."'
+    ],
+    relatedTopicIds: ['typescript-08-readonly-collections', 'typescript-08-satisfies-operator', 'typescript-08-typed-array-methods'],
+    jsTsCorrelations: [
+      { language: 'javascript', concept: 'Array destructuring', note: 'JS destructuring works on any array; TypeScript tuples add compile-time arity and index types to destructuring patterns.', futureTopicSlug: 'javascript/collections/arrays' },
+      { language: 'typescript', concept: 'ValueTuple', note: 'C# ValueTuple<T1,T2> has named fields at runtime; TS tuples are structural, erase on emit, and use position or labels only in the type checker.', futureTopicSlug: 'csharp/collections/value-tuple' }
+    ],
+    officialSources: [{ title: 'TypeScript handbook — Tuple Types', url: 'https://www.typescriptlang.org/docs/handbook/2/objects.html#tuple-types' }],
+    animationHint: 'compare'
+  }
+};
+
+// Write first topic as test - we'll add all topics in the script
+for (const [relPath, data] of Object.entries(topics)) {
+  writeFileSync(join(root, relPath), topic(data));
+}
+console.log(`Wrote ${Object.keys(topics).length} topics`);

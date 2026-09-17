@@ -4,30 +4,42 @@
   "title": "Promises versus C# Task and ValueTask",
   "moduleId": "javascript-13-promises-async-event-loop",
   "order": 9,
-  "hook": "Promises versus C# Task and ValueTask shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "Promise and Task share the await mental model — start work, pause, resume when done. The scheduler underneath differs: JS Promise continuations are microtasks on one thread; C# Task continuations run on thread-pool threads and may hop threads unless SynchronizationContext marshals back.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Promises versus C# Task and ValueTask is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A JavaScript **Promise** is a thenable object: pending, fulfilled, or rejected. A C# **Task** represents an async operation: running, ran to completion, faulted, or canceled. **await** in both languages pauses the current function until the operation completes. **Promise.all** maps to **Task.WhenAll** for concurrent waits. **AbortController** with **AbortSignal** is the practical JS analog of **CancellationToken** — cooperative, not preemptive. C# adds **ValueTask** for sync-complete hot paths; JavaScript always allocates a Promise from async functions."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "promises",
-              "longForm": "Promises versus C# Task and ValueTask",
-              "plainDefinition": "The central idea behind \"Promises versus C# Task and ValueTask\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "Promise",
+              "longForm": "JavaScript Promise",
+              "plainDefinition": "Built-in async result object with microtask-scheduled continuations.",
+              "example": "const data = await fetch(url).then(r => r.json());"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "Task",
+              "longForm": "C# Task",
+              "plainDefinition": ".NET reference type for async work with thread-pool continuations.",
+              "example": "var data = await httpClient.GetStringAsync(url);"
+            },
+            {
+              "term": "ValueTask",
+              "longForm": "C# ValueTask",
+              "plainDefinition": "Struct that avoids Task allocation when result is already available — no JS equivalent.",
+              "example": "async ValueTask<string?> GetFromCacheAsync(string key)"
+            },
+            {
+              "term": "AbortSignal",
+              "longForm": "AbortSignal",
+              "plainDefinition": "Cooperative cancellation flag passed to fetch and other APIs.",
+              "example": "fetch(url, { signal: controller.signal })"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Promises versus C# Task and ValueTask beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Coming from C#, saying 'Task is just a Promise' misses the execution engine. A long CPU loop in a JS async function still blocks the single thread. In C#, other pool threads continue while one thread is busy — but blocking that thread with Task.Result still causes pool starvation in ASP.NET Core. JS has no ConfigureAwait — DOM access is safe on Promise continuations because they always run on the main thread. C# UI code needs SynchronizationContext or await without blocking."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Promises versus C# Task and ValueTask\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Interview trap: async means parallel",
+          "body": "await A then await B is sequential. Starting both then Promise.all / Task.WhenAll is concurrent wait — not parallel CPU unless you add Workers or Task.Run."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Mapping concepts",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Promises versus C# Task and ValueTask appears in real code — a function, type annotation, or runtime API."
+              "title": "Start async work",
+              "body": "JS: const p = fetch(url). C#: var t = httpClient.GetAsync(url)."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Compose with await",
+              "body": "Both pause the function and resume on completion — different schedulers."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Combine independent work",
+              "body": "JS: Promise.all([a, b]). C#: Task.WhenAll(a, b)."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Cancel",
+              "body": "JS: controller.abort(). C#: cts.Cancel() on linked CancellationToken."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Promises versus C# Task and ValueTask flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Promise vs Task scheduling",
+            "source": "flowchart LR\n  subgraph JS[JavaScript]\n    P[Promise resolves] --> M[Microtask queue]\n    M --> S[Same JS thread]\n  end\n  subgraph NET[C# .NET]\n    T[Task completes] --> C[Continuation scheduled]\n    C --> TP[Thread pool or SynchronizationContext]\n  end"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Promises versus C# Task and ValueTask",
-            "code": "// Promises versus C# Task and ValueTask\nconst example = {\n  topic: 'promises-vs-csharp-task',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Promises versus C# Task and ValueTask. Line 6: observe output — in JS, shape is checked only when you access properties."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "Concurrent Redis + fetch — Promise.all",
+            "code": "async function loadSession(sessionId, signal) {\n  const [redisData, introspectData] = await Promise.all([\n    redis.get(`session:${sessionId}`),\n    fetch(`/oauth/introspect/${sessionId}`, { signal }).then(r => r.text())\n  ]);\n  return redisData ?? introspectData;\n}",
+            "explanation": "Line 2: WhenAll equivalent — both I/O in flight, one microtask drain when both settle. Line 4: nullish coalesce picks first truthy session source."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "C# equivalent — Task.WhenAll",
+            "code": "public async Task<string> LoadSessionAsync(\n    string sessionId, CancellationToken cancellationToken)\n{\n    var redisTask = _redis.GetDatabase().StringGetAsync(sessionId);\n    var introspectTask = _http.GetStringAsync(\n        $\"/oauth/introspect/{sessionId}\", cancellationToken);\n\n    await Task.WhenAll(redisTask, introspectTask);\n    return redisTask.Result.ToString() ?? introspectTask.Result;\n}",
+            "explanation": "Lines 7–8: concurrent wait. Continuations may hop threads — unlike JS microtasks on one thread. Prefer await each result instead of .Result in production."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Cancellation — AbortController vs CancellationToken",
+            "code": "const controller = new AbortController();\nconst timeout = setTimeout(() => controller.abort(), 30_000);\n\ntry {\n  const res = await fetch('/api/report', { signal: controller.signal });\n  return await res.json();\n} catch (err) {\n  if (err.name === 'AbortError') return null;\n  throw err;\n} finally {\n  clearTimeout(timeout);\n}",
+            "explanation": "Line 1–2: cooperative cancel after 30s — mirrors CancellationTokenSource.CancelAfter. Line 8: AbortError is expected cancel path, not a server 500."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Microtask ordering vs C# thread hop",
+            "code": "console.log('1');\nPromise.resolve().then(() => console.log('2 microtask'));\nsetTimeout(() => console.log('3 macrotask'), 0);\nconsole.log('4');\n// 1, 4, 2, 3 — C# has no equivalent single-thread microtask drain",
+            "explanation": "JS Promise callbacks always same thread via microtasks. C# Task continuation Thread.CurrentThread.ManagedThreadId may differ after await."
           }
         }
       ]
@@ -129,29 +141,15 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Promises versus C# Task and ValueTask across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Promise vs Task feature matrix",
+          "headers": ["Feature", "JavaScript Promise", "C# Task"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Combine parallel waits", "Promise.all", "Task.WhenAll"],
+            ["First to complete", "Promise.race", "Task.WhenAny"],
+            ["Cancellation", "AbortSignal per API", "CancellationToken built-in"],
+            ["Sync-complete optimization", "None — always Promise", "ValueTask struct"],
+            ["Thread model", "Single JS thread + microtasks", "Thread pool + optional context"],
+            ["TypeScript", "Promise<T> erases at runtime", "Task<T> survives in IL"]
           ]
         }
       ]
@@ -162,8 +160,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Promises versus C# Task and ValueTask as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Equating worker_threads with async/await",
+          "body": "Worker threads are a separate JS thread — like Task.Run in C#. async/await alone does not parallelize CPU."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using Task.Result after WhenAll in C# from JS mindset",
+          "body": "In JS, awaiting resolved Promises is natural. In C#, .Result blocks and can deadlock UI — await each task instead."
         }
       ]
     },
@@ -172,83 +176,76 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Promises versus C# Task and ValueTask, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "How to prove it in production: thread-affine resources matter. JS Promise continuation on main thread — safe for DOM. C# continuation on random pool thread — marshal to UI with SynchronizationContext. Under high I/O concurrency, C# scales across cores for independent continuations; JS serializes microtasks until Workers added. TypeScript Promise<T> is compile-time only — runtime is identical to JS."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Concept", "JavaScript", "C# Task"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Scheduler", "Microtask queue, single thread", "Thread pool, optional context"],
+            ["Parallel CPU", "Worker threads", "Task.Run / Parallel"],
+            ["Combine waits", "Promise.all", "Task.WhenAll"],
+            ["First to finish", "Promise.race", "Task.WhenAny"],
+            ["Cancellation", "AbortSignal", "CancellationToken"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Promises versus C# Task and ValueTask just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Saying Task is just a Promise without scheduler difference. Claiming C# await uses microtask queue. Equating worker_threads with async/await. Not knowing Promise.all and WhenAll overlap waits but do not parallelize CPU on one sequential chain."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Promises versus C# Task and ValueTask: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for promises-vs-csharp-task.",
-    "Production: validate external input before applying Promises versus C# Task and ValueTask; log failures with context.",
-    "60s: Promises versus C# Task and ValueTask — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Promise and Task share programmer model — differ in scheduling: microtasks vs pool threads.",
+    "Promise.all ≈ Task.WhenAll; AbortController ≈ CancellationToken.",
+    "JS continuations stay on main thread — C# may hop unless context captured.",
+    "60s: Same await syntax, different engines. JS microtasks one thread. C# pool threads. WhenAll equals Promise.all. AbortSignal equals CancellationToken. ValueTask has no JS equivalent.",
+    "Follow-up: why can C# scale I/O concurrency differently than single-threaded Node for CPU-light workloads?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"Promises versus C# Task and ValueTask is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Promises versus C# Task and ValueTask, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: 'Task is just a Promise' — missing scheduler.",
+    "Weak: claiming C# await uses microtasks.",
+    "Strong: 'Same model, different scheduler. Microtasks vs pool. WhenAll equals Promise.all. Neither parallelizes CPU without Workers/Task.Run.'"
   ],
   "relatedTopicIds": [
     "javascript-13-why-async-javascript",
-    "javascript-13-promise-states-and-chaining",
-    "javascript-13-promise-combinators"
+    "javascript-13-microtasks-vs-macrotasks",
+    "javascript-13-promise-combinators",
+    "javascript-13-abort-controller-cancellation",
+    "csharp-13-promises-vs-tasks"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Promises versus C# Task and ValueTask",
-      "note": "Compare Promises versus C# Task and ValueTask in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/promises-async-event-loop/promises-vs-csharp-task"
+      "concept": "Promise<T> versus Task<T>",
+      "note": "TypeScript Promise<T> annotates JS Promise at compile time. Task<T> is a real CLR type with status and cancellation.",
+      "futureTopicSlug": "typescript/async/async-types-vs-csharp-task"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Promises versus C# Task and ValueTask to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/13/promises-vs-csharp-task"
+      "language": "javascript",
+      "concept": "Microtask queue",
+      "note": "Promise.then and await continuations always microtasks on the JS thread — map against Task continuations on any pool thread.",
+      "futureTopicSlug": "javascript/async/microtasks-vs-macrotasks"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Promise",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Microsoft — Task-based async",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/asynchronous-programming/"
+    },
+    {
+      "title": "MDN — AbortController",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/AbortController"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "compare",
+  "scenarioTag": "auth-token"
 }

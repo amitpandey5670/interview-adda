@@ -3,76 +3,76 @@
   "title": "Promises, async/await, and the event loop interview drills",
   "items": [
     {
-      "question": "In production javascript, how would you explain Why async JavaScript exists (I/O without blocking the thread) to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at Why async JavaScript exists (I/O without blocking the thread). Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "Predict the output: console.log(1); setTimeout(() => console.log(2), 0); Promise.resolve().then(() => console.log(3)); console.log(4);",
+      "answer": "1, 4, 3, 2. Synchronous 1 and 4 run first. The call stack empties. All microtasks drain — Promise.then logs 3. Then one macrotask runs — setTimeout logs 2. This is the core event-loop ordering puzzle.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "Where does async/await fit in this ordering?",
+        "How is this different from C# Task continuations?"
       ],
-      "sixtySeconds": "Why async JavaScript exists (I/O without blocking the thread): mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "Sync first. Microtasks drain completely. Then one macrotask. Promise.then is microtask. setTimeout is macrotask."
     },
     {
-      "question": "In production javascript, how would you explain Promise states, then/catch/finally, and chaining to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at Promise states, then/catch/finally, and chaining. Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "Implement a minimal Promise with then and microtask scheduling.",
+      "answer": "State: pending, fulfilled, rejected. resolve/reject once. Store handlers array. then returns new Promise. On settle, queueMicrotask to run handlers. Handler return adopts child Promise. Throw rejects child. Must not call handlers synchronously.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "What is thenable assimilation?",
+        "How would you add catch?"
       ],
-      "sixtySeconds": "Promise states, then/catch/finally, and chaining: mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "State machine. Subscribers. queueMicrotask. then returns new Promise. resolve once. promisify pattern for callbacks."
     },
     {
-      "question": "In production javascript, how would you explain Promise.all, race, any, and allSettled to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at Promise.all, race, any, and allSettled. Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "When do you use Promise.all vs Promise.allSettled in production?",
+      "answer": "Promise.all when every result is required and one failure should fail the whole operation — dashboard loading profile, permissions, and notifications together. allSettled when partial success is acceptable — bulk health checks across microservices where you report which failed. all rejects fail-fast; allSettled never rejects the wrapper.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "What happens to in-flight requests when all rejects?",
+        "How do you add a timeout?"
       ],
-      "sixtySeconds": "Promise.all, race, any, and allSettled: mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "all equals fail-fast parallel wait. allSettled for degraded mode. race for timeout with AbortSignal on loser."
     },
     {
-      "question": "In production javascript, how would you explain async/await syntax and error handling to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at async/await syntax and error handling. Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "Your Node service does await Promise.all(tenThousandIds.map(id => fetch(...))). What breaks?",
+      "answer": "Unbounded concurrency opens thousands of sockets — EMFILE, upstream 429 rate limits, memory pressure. Fix with mapPool or semaphore capping in-flight work to 10–50. Still single-threaded JS but limits parallel I/O. Pair with AbortSignal on process shutdown.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "Does the pool use multiple threads?",
+        "What is the C# equivalent?"
       ],
-      "sixtySeconds": "async/await syntax and error handling: mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "Promise.all unbounded. mapPool N workers shared index. Not multithreaded. SemaphoreSlim in C#. Abort on shutdown."
     },
     {
-      "question": "In production javascript, how would you explain Microtasks versus macrotasks (event loop ordering) to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at Microtasks versus macrotasks (event loop ordering). Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "A candidate says Task is just a JavaScript Promise. Respond.",
+      "answer": "Same programmer model — await, compose, cancel — different scheduler. JS Promise continuations are microtasks on one thread. C# Task continuations run on thread-pool threads and may hop threads. Promise.all maps to Task.WhenAll for concurrent waits, not CPU parallelism. JS has no ValueTask. AbortController is the practical CancellationToken analog.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "Why is DOM access safe after await in JS?",
+        "What is ConfigureAwait in C#?"
       ],
-      "sixtySeconds": "Microtasks versus macrotasks (event loop ordering): mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "Same syntax different engine. Microtasks one thread. Pool threads in C#. WhenAll equals all. AbortSignal equals token."
     },
     {
-      "question": "In production javascript, how would you explain Implementing a Promise/A+ subset from scratch to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at Implementing a Promise/A+ subset from scratch. Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "How do you cancel an in-flight fetch when the user types the next search character?",
+      "answer": "AbortController per search: abort previous controller before starting new fetch. Pass signal to fetch. Catch AbortError and ignore — expected race. Debounce input to reduce calls. Do not rely on Promise.race alone without aborting the losing fetch.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "Does abort free the socket immediately?",
+        "How does this compare to CancellationToken?"
       ],
-      "sixtySeconds": "Implementing a Promise/A+ subset from scratch: mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "New AbortController per request. abort previous. signal on fetch. Ignore AbortError. Debounce keystrokes."
     },
     {
-      "question": "In production javascript, how would you explain AbortController, signals, and cooperative cancellation to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at AbortController, signals, and cooperative cancellation. Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "Explain async/await desugaring to Promises and microtasks.",
+      "answer": "async function wraps return value in Promise. await expr means wait for Promise.resolve(expr) and resume via microtask when settled. Code after await in the same function runs as microtask callback, not macrotask. Errors become rejected Promise caught by try/catch around await.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "Is await parallel to setTimeout(0)?",
+        "What about await in a .then callback?"
       ],
-      "sixtySeconds": "AbortController, signals, and cooperative cancellation: mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "async returns Promise. await schedules microtask continuation. Not a macrotask. try/catch catches reject."
     },
     {
-      "question": "In production javascript, how would you explain Concurrency-limited async mapping (pool pattern) to a junior engineer debugging a related bug?",
-      "answer": "Start with the mechanism: what the engine does at Concurrency-limited async mapping (pool pattern). Give a 5-line example, name one pitfall (validation, async ordering, or null), and one tradeoff versus the shortcut. Mention how you would prove the fix with a test or DevTools.",
+      "question": "Load session from Redis cache or OAuth introspect endpoint concurrently — sketch the code.",
+      "answer": "const [redisData, intro] = await Promise.all([redis.get(sessionId), fetch(introspectUrl, { signal }).then(r => r.text())]); return redisData ?? intro; Mirrors Task.WhenAll in C#. Shared AbortSignal cancels both on timeout. Neither parallelizes CPU — overlaps I/O waits on one thread.",
       "followUps": [
-        "What breaks if you skip validation at the boundary?",
-        "How does this differ in C#?"
+        "Why nullish coalesce here?",
+        "When would you sequential await instead?"
       ],
-      "sixtySeconds": "Concurrency-limited async mapping (pool pattern): mechanism + example + pitfall + comparison — avoid hand-waving."
+      "sixtySeconds": "Promise.all for parallel I/O. Shared AbortSignal. WhenAll in C#. Sequential if second depends on first."
     }
   ]
 }

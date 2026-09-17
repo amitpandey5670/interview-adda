@@ -4,30 +4,42 @@
   "title": "The TypeScript compile pipeline (tsc, emit, source maps)",
   "moduleId": "typescript-01-what-is-typescript",
   "order": 2,
-  "hook": "The TypeScript compile pipeline (tsc, emit, source maps) shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "TypeScript source passes through the compiler (tsc) for type checking, then emits plain JavaScript and optional source maps. Unlike C# which compiles to Intermediate Language (IL) with type metadata, almost all TypeScript types erase before the engine runs.",
   "sections": [
     {
-      "heading": "What is this?",
+      "heading": "What is the compile pipeline?",
       "blocks": [
         {
           "type": "prose",
-          "text": "The TypeScript compile pipeline (tsc, emit, source maps) is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "The **TypeScript compile pipeline** has two jobs: (1) **type checking** — report errors without changing behavior, and (2) **emit** — output JavaScript (and optionally `.d.ts` declaration files and **source maps**). The `tsc` CLI orchestrates both. **Bundlers** (esbuild, Vite, webpack) often skip emit and use `tsc --noEmit` for CI typecheck only. Types are **erasable** — interfaces and generics vanish; only values, functions, and classes (as constructors) survive at run time."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "compile",
-              "longForm": "The TypeScript compile pipeline (tsc, emit, source maps)",
-              "plainDefinition": "The central idea behind \"The TypeScript compile pipeline (tsc, emit, source maps)\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "tsc",
+              "longForm": "TypeScript compiler (tsc)",
+              "plainDefinition": "CLI that type-checks and emits JavaScript from .ts/.tsx files.",
+              "example": "npx tsc --noEmit"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "emit",
+              "longForm": "emit (compiler output)",
+              "plainDefinition": "Generated JavaScript files written to outDir. Types are stripped during emit.",
+              "example": "\"outDir\": \"dist\""
+            },
+            {
+              "term": "source map",
+              "longForm": "source map (.map)",
+              "plainDefinition": "Maps emitted JS lines back to original TypeScript for debugging in DevTools.",
+              "example": "\"sourceMap\": true"
+            },
+            {
+              "term": "declaration file",
+              "longForm": "declaration file (.d.ts)",
+              "plainDefinition": "Type-only description of JS API surface for consumers.",
+              "example": "\"declaration\": true"
             }
           ]
         }
@@ -38,38 +50,42 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand The TypeScript compile pipeline (tsc, emit, source maps) beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Interviewers probe whether you know **tsc only checks, bundlers transform**. Misunderstanding leads to shipping unchecked code (Vite without `tsc` in CI), broken stack traces (no source maps), or expecting run-time type enforcement (impossible without a validator). C# Roslyn emits IL **with** type metadata the CLR reads — TypeScript never does."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"The TypeScript compile pipeline (tsc, emit, source maps)\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Production split",
+          "body": "Dev: bundler for speed. CI: `tsc --noEmit` or `tsc -b` for project references. Never assume the bundler caught every type error."
         }
       ]
     },
     {
-      "heading": "How it works step by step",
+      "heading": "Pipeline step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "From .ts to running code",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where The TypeScript compile pipeline (tsc, emit, source maps) appears in real code — a function, type annotation, or runtime API."
+              "title": "Parse",
+              "body": "TypeScript parser builds an AST from .ts/.tsx."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Bind and check",
+              "body": "Symbol resolution, type inference, strict flags applied — errors reported here."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Transform",
+              "body": "Downlevel syntax (optional chaining, decorators) per target lib."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Emit",
+              "body": "Write .js, .d.ts, .map to outDir — types erased."
+            },
+            {
+              "title": "Run",
+              "body": "Node or browser executes plain JavaScript — no type layer."
             }
           ]
         },
@@ -77,8 +93,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "The TypeScript compile pipeline (tsc, emit, source maps) flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "TypeScript compile pipeline",
+            "source": "flowchart LR\n  TS[\".ts source\"] --> PARSE[Parse AST]\n  PARSE --> CHECK[Type check]\n  CHECK -->|errors| FAIL[CI fails]\n  CHECK --> TRANS[Transform]\n  TRANS --> EMIT[\".js + .map + .d.ts\"]\n  EMIT --> RUN[V8 / browser]"
           }
         }
       ]
@@ -90,27 +106,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic The TypeScript compile pipeline (tsc, emit, source maps)",
-            "code": "// The TypeScript compile pipeline (tsc, emit, source maps)\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'compile-pipeline-and-tsc',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to The TypeScript compile pipeline (tsc, emit, source maps). Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "What survives emit",
+            "code": "interface User { id: string; name: string; }\n\nfunction greet(u: User): string {\n  return `Hello, ${u.name}`;\n}\n\nconst ada: User = { id: \"1\", name: \"Ada\" };\nconsole.log(greet(ada));",
+            "explanation": "Lines 1–3: interface and type annotations exist only for the checker. Emitted JS is plain functions and objects — no User tag at run time."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "tsc commands in CI",
+            "code": "# Typecheck only (no emit) — common in Vite/React CI\nnpx tsc --noEmit\n\n# Build with declarations for a library\nnpx tsc --declaration --outDir dist\n\n# Project references (monorepo)\nnpx tsc -b packages/*",
+            "explanation": "Line 2: catches type errors without writing files. Line 5: emits .d.ts for npm consumers. Line 8: incremental build across referenced tsconfigs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "tsconfig emit options",
+            "code": "{\n  \"compilerOptions\": {\n    \"target\": \"ES2022\",\n    \"module\": \"NodeNext\",\n    \"outDir\": \"dist\",\n    \"sourceMap\": true,\n    \"declaration\": true,\n    \"declarationMap\": true\n  }\n}",
+            "explanation": "sourceMap: DevTools maps stack traces to .ts. declaration + declarationMap: jump-to-definition in consuming editors."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Failure mode — bundler without tsc",
+            "code": "// vite build succeeds even if this has type errors\n// unless you run tsc --noEmit in CI\nfunction broken(x: string): number {\n  return x.length;\n}",
+            "explanation": "esbuild/swc strip types without full checking. Always run tsc in CI for production repos."
           }
         }
       ]
@@ -120,28 +145,43 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "The TypeScript compile pipeline (tsc, emit, source maps) across languages",
+          "title": "Compile pipelines across stacks",
           "headers": [
-            "Aspect",
+            "Stage",
             "TypeScript",
-            "JavaScript / C#"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
+              "Source",
+              ".ts / .tsx",
+              ".js / .mjs",
+              ".cs"
             ],
             [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
+              "Checker",
+              "tsc (optional in dev)",
+              "None (or ESLint)",
+              "Roslyn"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
+              "Output",
+              "Erased JS + optional .d.ts",
+              "Same file",
+              "IL + metadata"
+            ],
+            [
+              "Run-time types",
+              "None",
+              "Dynamic",
+              "CLR enforced"
+            ],
+            [
+              "Debug maps",
+              "sourceMap",
+              "Rare",
+              "PDB"
             ]
           ]
         }
@@ -153,45 +193,53 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating The TypeScript compile pipeline (tsc, emit, source maps) as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Assuming emit validates at run time",
+          "body": "Emitted JS has zero type info. JSON.parse still returns untyped data — add validators at boundaries."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "The TypeScript compile pipeline (tsc, emit, source maps): know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for compile-pipeline-and-tsc.",
-    "Production: validate external input before applying The TypeScript compile pipeline (tsc, emit, source maps); log failures with context.",
-    "60s: The TypeScript compile pipeline (tsc, emit, source maps) — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "tsc type-checks then emits erased JavaScript — types do not exist at run time.",
+    "CI should run tsc --noEmit even when Vite/webpack bundles.",
+    "sourceMap links runtime errors back to .ts lines in DevTools.",
+    "60s: Parse → check → transform → emit. Types erase. C# keeps IL metadata; TS does not. Bundlers are not a substitute for tsc in CI.",
+    "Follow-up: when do you emit .d.ts vs use project references?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"The TypeScript compile pipeline (tsc, emit, source maps) is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define The TypeScript compile pipeline (tsc, emit, source maps), show a 5-line example, name one pitfall and one C# difference."
+    "Weak: tsc adds types to JavaScript at runtime — types erase completely.",
+    "Weak: relying on Vite alone for type safety — need tsc --noEmit in CI.",
+    "Strong: Two-phase: checker catches bugs, emit strips types. Source maps for debug. C# IL retains metadata; TS is compile-time only."
   ],
   "relatedTopicIds": [
-    "typescript-01-typescript-vs-javascript-csharp",
     "typescript-01-tsconfig-and-project-setup",
-    "typescript-01-erasable-types-and-runtime"
+    "typescript-01-erasable-types-and-runtime",
+    "typescript-01-typescript-vs-javascript-csharp",
+    "typescript-17-ci-typecheck-pipelines"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "The TypeScript compile pipeline (tsc, emit, source maps)",
-      "note": "Foundation link to javascript track for compile-pipeline-and-tsc.",
-      "futureTopicSlug": "javascript/what-is-typescript/compile-pipeline-and-tsc"
+      "concept": "no compile step",
+      "note": "Plain JS runs directly — TypeScript adds a compile phase that disappears before V8 executes.",
+      "futureTopicSlug": "javascript/what-is-typescript/no-compile-step"
+    },
+    {
+      "language": "typescript",
+      "concept": "erasable types",
+      "note": "Unlike C# IL metadata, emitted JS has no interface tags — same as JS at runtime.",
+      "futureTopicSlug": "typescript/what-is-typescript/erasable-types-and-runtime"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript — tsc CLI",
+      "url": "https://www.typescriptlang.org/docs/handbook/compiler-options.html"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript — Project References",
+      "url": "https://www.typescriptlang.org/docs/handbook/project-references.html"
     }
-  ]
+  ],
+  "animationHint": "flow"
 }

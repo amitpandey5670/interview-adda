@@ -4,30 +4,42 @@
   "title": "Error, TypeError, and custom errors",
   "moduleId": "javascript-06-errors-and-debugging",
   "order": 1,
-  "hook": "Error, TypeError, and custom errors shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "JavaScript signals failure by throwing values — almost always Error objects with message and stack. Built-in subclasses classify bugs (TypeError, ReferenceError), and custom errors carry domain context for APIs and logs.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Error, TypeError, and custom errors is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**throw** stops normal execution and unwinds the call stack until a matching **catch** or the runtime reports an uncaught exception. The idiomatic thrown value is an **Error** instance: `.message` for humans, `.stack` for frames, `.name` for the constructor (e.g. TypeError). **Error.cause** (ES2022) chains a root failure like C# InnerException. You can throw any value (`throw \"oops\"`), but only Error gives reliable stacks in production."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "error",
-              "longForm": "Error, TypeError, and custom errors",
-              "plainDefinition": "The central idea behind \"Error, TypeError, and custom errors\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "Error",
+              "longForm": "Error constructor",
+              "plainDefinition": "Base built-in error type with message and stack.",
+              "example": "throw new Error(\"config missing\");"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "TypeError",
+              "longForm": "TypeError",
+              "plainDefinition": "Operation on wrong type — undefined is not a function, etc.",
+              "example": "null.foo // TypeError"
+            },
+            {
+              "term": "ReferenceError",
+              "longForm": "ReferenceError",
+              "plainDefinition": "Invalid identifier reference — undeclared variable or TDZ.",
+              "example": "console.log(notDefined);"
+            },
+            {
+              "term": "Error.cause",
+              "longForm": "error cause chain",
+              "plainDefinition": "Optional chained error passed as { cause } in constructor options.",
+              "example": "new Error(\"wrap\", { cause: err });"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Error, TypeError, and custom errors beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "API layers map HTTP status to typed errors (NotFoundError, ValidationError). Logging pipelines rely on `.stack` and structured `.name`. Throwing strings loses stack frames. C# requires Exception-derived types for idiomatic catch filters; JavaScript uses **instanceof** branches inside a single catch."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Error, TypeError, and custom errors\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Always throw Error",
+          "body": "throw new Error(msg) — not throw msg. For domain errors, subclass Error and set this.name in constructor."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "From throw to handler",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Error, TypeError, and custom errors appears in real code — a function, type annotation, or runtime API."
+              "title": "Evaluate throw expression",
+              "body": "Any value can be thrown; Error recommended."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Unwind stack",
+              "body": "Each frame pops until catch found or top-level uncaught."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "catch receives value",
+              "body": "Branch with err instanceof TypeError, custom classes, or err.code."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Log and rethrow",
+              "body": "Add context then throw new Error(\"...\", { cause: err }) for observability."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Error, TypeError, and custom errors flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Error propagation",
+            "source": "flowchart TD\n  T[throw new HttpError] --> U[Unwind stack]\n  U --> C{catch?}\n  C -->|yes| I[instanceof check]\n  C -->|no| X[uncaughtException / console]\n  I --> H[handle or rethrow with cause]\n  H --> L[log err.stack]"
           }
         }
       ]
@@ -90,27 +102,27 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Error, TypeError, and custom errors",
-            "code": "// Error, TypeError, and custom errors\nconst example = {\n  topic: 'error-types-and-throwing',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Error, TypeError, and custom errors. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Built-in error types",
+            "code": "function divide(a, b) {\n  if (typeof a !== \"number\") throw new TypeError(\"a must be number\");\n  if (b === 0) throw new RangeError(\"division by zero\");\n  return a / b;\n}\n\ntry {\n  divide(\"1\", 2);\n} catch (err) {\n  console.log(err.name, err.message); // TypeError ...\n  console.log(err.stack);\n}",
+            "explanation": "TypeError for wrong type; RangeError for numeric domain violation. stack helps locate call site."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "Custom error subclass",
+            "code": "class HttpError extends Error {\n  constructor(status, message, options) {\n    super(message, options);\n    this.name = \"HttpError\";\n    this.status = status;\n  }\n}\n\nasync function fetchUser(id) {\n  const res = await fetch(`/api/users/${id}`);\n  if (res.status === 404) throw new HttpError(404, `user ${id} not found`);\n  if (!res.ok) throw new HttpError(res.status, await res.text());\n  return res.json();\n}",
+            "explanation": "Subclass sets name for logs and monitoring. status property enables catch routing without string parsing."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "language": "javascript",
+            "label": "Error.cause chains",
+            "code": "async function loadConfig(path) {\n  try {\n    return JSON.parse(await readFile(path));\n  } catch (err) {\n    throw new Error(`Failed to load ${path}`, { cause: err });\n  }\n}\n\ntry {\n  await loadConfig(\"/etc/app.json\");\n} catch (err) {\n  console.log(err.message);\n  console.log(err.cause); // original SyntaxError or ENOENT\n}",
+            "explanation": "Outer error adds context; cause preserves root failure for debugging — mirrors InnerException."
           }
         }
       ]
@@ -120,28 +132,43 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Error, TypeError, and custom errors across languages",
+          "title": "Errors across languages",
           "headers": [
             "Aspect",
             "JavaScript",
-            "C# / TypeScript"
+            "C#",
+            "TypeScript"
           ],
           "rows": [
             [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
+              "Throw type",
+              "Any value; Error idiomatic",
+              "Exception hierarchy",
+              "Same as JS at run time"
             ],
             [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
+              "Typed catch",
+              "instanceof in one catch",
+              "catch (IOException ex)",
+              "No typed catch — erased"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
+              "Chaining",
+              "Error.cause",
+              "InnerException",
+              "Same as JS"
+            ],
+            [
+              "Stack",
+              "err.stack string",
+              "Exception.StackTrace",
+              "Same as JS"
+            ],
+            [
+              "Custom type",
+              "class extends Error",
+              "class : Exception",
+              "class extends Error + types"
             ]
           ]
         }
@@ -154,44 +181,55 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating Error, TypeError, and custom errors as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "throw \"string\" without stack. Forgetting to set name on custom errors. Catching and swallowing without log. Using generic Error when status/code enables recovery. Not preserving cause when rethrowing."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Error, TypeError, and custom errors: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for error-types-and-throwing.",
-    "Production: validate external input before applying Error, TypeError, and custom errors; log failures with context.",
-    "60s: Error, TypeError, and custom errors — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Throw Error objects — message, name, stack; avoid bare strings.",
+    "TypeError, ReferenceError, RangeError classify common failure modes.",
+    "Subclass Error for domain types; use instanceof in catch.",
+    "Error.cause chains root failures like InnerException.",
+    "60s: throw Error not string. Built-in subclasses. Custom class with name. cause for wrap. instanceof not typed catch."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Error, TypeError, and custom errors is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Error, TypeError, and custom errors, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: \"throw works like return with a string.\" Strong: \"throw unwinds stack; Error gives stack trace; strings lose frames.\"",
+    "Weak: \"catch (TypeError e) in JS.\" Strong: \"Single catch; if (err instanceof TypeError) { ... } — TS has no typed catch.\"",
+    "Strong: \"Show HttpError with status + cause chain for API layer — production pattern.\""
   ],
   "relatedTopicIds": [
     "javascript-06-try-catch-finally",
-    "javascript-06-unhandled-rejections",
+    "javascript-06-errors-vs-csharp-exceptions",
     "javascript-06-stack-traces-and-debugging"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Error, TypeError, and custom errors",
-      "note": "Foundation link to typescript track for error-types-and-throwing.",
-      "futureTopicSlug": "typescript/errors-and-debugging/error-types-and-throwing"
+      "concept": "Error subclasses",
+      "note": "TypeScript types custom errors with class extends Error; use type guards (instanceof) after catch (err: unknown).",
+      "futureTopicSlug": "typescript/narrowing/unknown-catch"
+    },
+    {
+      "language": "typescript",
+      "concept": "Exception hierarchy",
+      "note": "C# catch filters use when on typed exceptions; JavaScript emulates with instanceof and err.code properties.",
+      "futureTopicSlug": "csharp/exceptions/filters"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Error",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — throw",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/throw"
+    },
+    {
+      "title": "javascript.info — Error handling",
+      "url": "https://javascript.info/error-handling"
     }
-  ]
+  ],
+  "animationHint": "flow"
 }

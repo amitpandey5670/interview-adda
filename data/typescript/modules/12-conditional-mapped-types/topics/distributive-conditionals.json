@@ -4,14 +4,14 @@
   "title": "Distributive conditional types and pitfalls",
   "moduleId": "typescript-12-conditional-mapped-types",
   "order": 5,
-  "hook": "Distributive conditional types and pitfalls shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "When T in T extends U ? X : Y is a naked type parameter that is a union, the conditional distributes — it runs once per union member and unions the results. That power builds Exclude and Extract; the pitfall is surprise when you meant to test the whole union at once.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Distributive conditional types and pitfalls is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A **distributive conditional type** applies when **T** is a **naked type parameter** (not wrapped in tuple or object) and **T** resolves to a **union**. The compiler rewrites `T extends U ? X : Y` where `T = A | B` into `(A extends U ? X : Y) | (B extends U ? X : Y)`. **Exclude** and **Extract** rely on this. To **disable** distribution, wrap **T** as **`[T]`** in both sides: `[T] extends [U] ? X : Y` tests the union as a whole."
         },
         {
           "type": "glossary",
@@ -19,15 +19,27 @@
           "entries": [
             {
               "term": "distributive",
-              "longForm": "Distributive conditional types and pitfalls",
-              "plainDefinition": "The central idea behind \"Distributive conditional types and pitfalls\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "longForm": "distributive conditional type",
+              "plainDefinition": "Conditional over union parameter becomes union of per-member conditionals.",
+              "example": "T extends string ? A : B over string|number → A|B"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "naked type parameter",
+              "longForm": "naked type parameter",
+              "plainDefinition": "Bare T in conditional — not T & {}, not [T], not keyof T.",
+              "example": "Only naked T distributes"
+            },
+            {
+              "term": "non-distributive",
+              "longForm": "non-distributive conditional",
+              "plainDefinition": "Tuple wrap [T] extends [U] prevents per-member split.",
+              "example": "[string|number] extends [string] ? A : B → B"
+            },
+            {
+              "term": "union of results",
+              "longForm": "union of conditional results",
+              "plainDefinition": "Output is | of each branch result — may be wider than expected.",
+              "example": "never | string → string"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Distributive conditional types and pitfalls beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Senior Reddit threads flag distributivity as the #1 conditional-type gotcha. `ToArray<T> = T extends any ? T[] : never` over `string | number` becomes `string[] | number[]` not `(string | number)[]`. Utility types Exclude/Extract filter union members — impossible without distribution. Mis-wrapping T causes subtle generic library bugs in event maps and API routers."
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Distributive conditional types and pitfalls\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "variant": "remember",
+          "title": "T extends any still distributes",
+          "body": "T extends any ? X : Y distributes over union members — any on the right of extends is the trick for 'map over union'."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Distribution evaluation",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Distributive conditional types and pitfalls appears in real code — a function, type annotation, or runtime API."
+              "title": "Instantiate T",
+              "body": "T = string | number"
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Check naked parameter",
+              "body": "Bare T in conditional — distribution applies."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Split union",
+              "body": "Evaluate (string extends U ? X : Y) | (number extends U ? X : Y)"
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Union results",
+              "body": "Combine branch outputs with |"
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Distributive conditional types and pitfalls flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Distributive vs non-distributive",
+            "source": "flowchart TD\n  U[string | number] --> D{Distributive T extends string?}\n  D --> S[str branch]\n  D --> N[other branch]\n  S --> R1[str | other]\n  U --> ND[NonDist T extends string?]\n  ND --> R2[other only]"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Distributive conditional types and pitfalls",
-            "code": "// Distributive conditional types and pitfalls\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'distributive-conditionals',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Distributive conditional types and pitfalls. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "Distribution demo — ToArray pitfall",
+            "code": "type ToArrayDist<T> = T extends any ? T[] : never;\ntype R1 = ToArrayDist<string | number>;\n// string[] | number[] — distributed\n\ntype ToArrayNonDist<T> = [T] extends [any] ? T[] : never;\ntype R2 = ToArrayNonDist<string | number>;\n// (string | number)[] — whole union wrapped",
+            "explanation": "Line 1: T extends any triggers distribution per member. Line 5: [T] extends [any] treats union as single type — homogenous array."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Exclude — distribution filters union members",
+            "code": "type MyExclude<T, U> = T extends U ? never : T;\n\ntype All = 'GET' | 'POST' | 'DELETE';\ntype ReadOnly = MyExclude<All, 'DELETE'>;\n// 'GET' | 'POST'\n\n// Step: 'GET' extends 'DELETE'? never : 'GET' | ...",
+            "explanation": "Line 1: each union member tested independently. Line 4: DELETE filtered out — distributive filter pattern."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Production — route handler map",
+            "code": "type Routes = {\n  '/users': { method: 'GET'; res: User[] };\n  '/users/:id': { method: 'GET'; res: User };\n  '/users/:id': { method: 'DELETE'; res: void };\n};\n\ntype MethodFor<Path extends keyof Routes, M> =\n  Routes[Path] extends { method: M } ? M : never;\n\ntype GetPaths<P extends keyof Routes> = P extends any\n  ? MethodFor<P, 'GET'> extends never ? never : P\n  : never;\n// distributive filter over paths",
+            "explanation": "Line 9: P extends any distributes over each path key — keeps paths where GET method exists."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — expected homogenous array",
+            "code": "type Pair<T> = T extends any ? [T, T] : never;\ntype Bad = Pair<string | number>;\n// [string, string] | [number, number] — not [string|number, string|number]",
+            "explanation": "Line 2: distribution pairs each member with itself — use [T] wrap if you need heterogeneous union in tuple."
           }
         }
       ]
@@ -129,29 +141,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Distributive conditional types and pitfalls across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Union handling",
+          "headers": ["Concept", "TS distributive conditional", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Union map", "Distribute conditional", "map/filter runtime", "No type-level map"],
+            ["Disable distribute", "[T] extends [U]", "N/A", "N/A"],
+            ["Exclude members", "T extends U ? never : T", "filter at runtime", "No built-in"],
+            ["Runtime", "Erased", "Union is runtime tag or shape", "Union types limited"]
           ]
         }
       ]
@@ -162,8 +158,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Distributive conditional types and pitfalls as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Surprise union of arrays",
+          "body": "ToArray<T> without [T] wrap gives string[] | number[] — often not what API generic intended."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Distribution with intersection",
+          "body": "T & {} is not naked — distribution disabled — subtle change when refactoring generics."
         }
       ]
     },
@@ -172,83 +174,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Distributive conditional types and pitfalls, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "Explain why Exclude works — distribution + never absorbs members. Implement UnionToIntersection trick (contravariant infer) as advanced follow-up. Read TS handbook distributive section. Production: filter union of event names with conditional never pattern. When compiler slows, simplify nested distributive maps — module 18 complexity budget."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Need", "Pattern", "Wrap"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Filter union members", "T extends U ? never : T", "Naked T"],
+            ["Homogenous array of union", "[T] extends [any] ? T[] : never", "[T] wrap"],
+            ["Map each member", "T extends any ? F<T> : never", "Naked T"],
+            ["Test whole union", "[T] extends [U]", "[T] both sides"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Distributive conditional types and pitfalls just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
+          "body": "Cannot explain Exclude via distribution. Surprised by string[] | number[]. No fix with [T] wrap. Saying distribution happens at runtime."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Distributive conditional types and pitfalls: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for distributive-conditionals.",
-    "Production: validate external input before applying Distributive conditional types and pitfalls; log failures with context.",
-    "60s: Distributive conditional types and pitfalls — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Naked union type parameter distributes conditional over each member.",
+    "Exclude/Extract are distributive filters — never removes matching members.",
+    "[T] extends [U] disables distribution — test whole union.",
+    "60s: T extends U ? X : Y on T = A|B becomes (A branch)|(B branch). Exclude uses never. [T] wrap for homogenous tuple/array. Compile-time only.",
+    "Follow-up: UnionToIntersection or implement Extract."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Distributive conditional types and pitfalls is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Distributive conditional types and pitfalls, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: surprised by string[] | number[] from ToArray",
+    "Weak: no [T] wrap when whole union needed",
+    "Strong: 'Naked T distributes. Exclude is filter. [T] disables. T extends any maps over union.'"
   ],
   "relatedTopicIds": [
     "typescript-12-conditional-types-basics",
     "typescript-12-infer-keyword",
-    "typescript-12-mapped-types"
+    "typescript-10-record-exclude-extract",
+    "typescript-03-union-types"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Distributive conditional types and pitfalls",
-      "note": "Compare Distributive conditional types and pitfalls in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/conditional-mapped-types/distributive-conditionals"
+      "concept": "Array filter on union values",
+      "note": "Distributive Exclude is the type-level analog of runtime filter removing union members — same intent, compile time.",
+      "futureTopicSlug": "javascript/arrays/map-filter-reduce"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Distributive conditional types and pitfalls to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/12/distributive-conditionals"
+      "concept": "Union types",
+      "note": "Distribution only applies when conditional type parameter is a union — foundation from module 03.",
+      "futureTopicSlug": "typescript/types/union-types"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript handbook — Distributive conditional types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html#distributive-conditional-types"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript 2.8 — Conditional types",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-2-8.html#conditional-types-in-distributive-conditional-types"
+    },
+    {
+      "title": "TypeScript playground — distributive demo",
+      "url": "https://www.typescriptlang.org/play"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

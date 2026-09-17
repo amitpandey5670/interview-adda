@@ -4,30 +4,42 @@
   "title": "Concurrency-limited async mapping (pool pattern)",
   "moduleId": "javascript-13-promises-async-event-loop",
   "order": 8,
-  "hook": "Concurrency-limited async mapping (pool pattern) shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "Promise.all on ten thousand URLs opens ten thousand sockets and melts your API. The pool pattern caps concurrent in-flight work — a senior Node.js and LeetCode pattern that pairs with Redis pipelines, fetch batches, and backpressure.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Concurrency-limited async mapping (pool pattern) is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Concurrency-limited async map** processes an array of items with at most **N** asynchronous operations in flight at once. Unlike **Promise.all** which starts everything immediately, a **pool** (or **semaphore**) queues work until a slot frees. Implementations use a worker loop, a counter, or a queue of pending tasks. This is not multi-threading — still one JS thread — but limits open HTTP connections, Redis commands, and file descriptors."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "async",
-              "longForm": "Concurrency-limited async mapping (pool pattern)",
-              "plainDefinition": "The central idea behind \"Concurrency-limited async mapping (pool pattern)\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "pool pattern",
+              "longForm": "async pool pattern",
+              "plainDefinition": "Fixed number of concurrent async workers pulling from a shared queue.",
+              "example": "5 parallel fetch workers processing 1000 URLs."
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "backpressure",
+              "longForm": "backpressure",
+              "plainDefinition": "Slowing producers when consumers are overwhelmed — pool size enforces backpressure.",
+              "example": "Queue depth grows if pool too small; errors spike if pool too large."
+            },
+            {
+              "term": "semaphore",
+              "longForm": "async semaphore",
+              "plainDefinition": "Counter limiting concurrent acquisitions — acquire before work, release after.",
+              "example": "await semaphore.acquire(); try { ... } finally { semaphore.release(); }"
+            },
+            {
+              "term": "in-flight",
+              "longForm": "in-flight operations",
+              "plainDefinition": "Async operations started but not yet settled.",
+              "example": "At most 10 fetch promises active simultaneously."
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Concurrency-limited async mapping (pool pattern) beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Bulk reindex jobs, CSV import with per-row API calls, and image thumbnail generation all need bounded concurrency. Unbounded Promise.all causes EMFILE (too many open files), Redis connection timeouts, and API rate-limit 429 storms. C# uses **SemaphoreSlim** with async WaitAsync — same idea, different primitive. Node 18+ has `p-limit` on npm; interviews want you to implement from scratch."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Concurrency-limited async mapping (pool pattern)\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Pool size tuning",
+          "body": "Start with CPU-bound vs I/O-bound: I/O pools often 5–50 depending on upstream limits. Profile p99 latency and error rate — not a universal constant."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Pool worker loop",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Concurrency-limited async mapping (pool pattern) appears in real code — a function, type annotation, or runtime API."
+              "title": "Create pool of N workers",
+              "body": "Each worker is an async loop pulling next index from shared cursor."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Worker acquires item",
+              "body": "Atomically increment index or shift queue — in single-thread JS, no race."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "await async work",
+              "body": "fetch, redis.get, etc. — slot occupied until settle."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Store result, repeat",
+              "body": "When all items processed, return results array."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Concurrency-limited async mapping (pool pattern) flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Pool with concurrency 3",
+            "source": "flowchart LR\n  Q[Queue 1000 items] --> W1[Worker 1]\n  Q --> W2[Worker 2]\n  Q --> W3[Worker 3]\n  W1 --> R[Results array]\n  W2 --> R\n  W3 --> R"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Concurrency-limited async mapping (pool pattern)",
-            "code": "// Concurrency-limited async mapping (pool pattern)\nconst example = {\n  topic: 'async-concurrency-limits',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Concurrency-limited async mapping (pool pattern). Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "mapPool — concurrency-limited async map",
+            "code": "async function mapPool(items, concurrency, fn) {\n  const results = new Array(items.length);\n  let nextIndex = 0;\n\n  async function worker() {\n    while (true) {\n      const i = nextIndex++;\n      if (i >= items.length) return;\n      results[i] = await fn(items[i], i);\n    }\n  }\n\n  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());\n  await Promise.all(workers);\n  return results;\n}",
+            "explanation": "Line 7: nextIndex++ assigns unique item per worker — single-thread safe. Line 14: N worker loops run concurrently — at most N awaits in flight. Line 15: Promise.all waits for all workers to exhaust queue."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "Production — bounded fetch with AbortSignal",
+            "code": "const controller = new AbortController();\nconst ids = await redis.sMembers('pending:user-ids');\n\nconst profiles = await mapPool(ids, 10, async (id) => {\n  const res = await fetch(`/api/users/${id}`, { signal: controller.signal });\n  if (!res.ok) throw new Error(`user ${id}: ${res.status}`);\n  return res.json();\n});\n\nawait redis.set('profiles:batch', JSON.stringify(profiles));",
+            "explanation": "Line 1: shared signal cancels all in-flight on shutdown. Line 4: pool of 10 — 10k users processed in waves, not one socket storm."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Semaphore variant — acquire/release",
+            "code": "function createSemaphore(max) {\n  let active = 0;\n  const queue = [];\n  const acquire = () => new Promise((resolve) => {\n    const tryAcquire = () => {\n      if (active < max) { active++; resolve(() => { active--; queue.shift()?.(); }); }\n      else queue.push(tryAcquire);\n    };\n    tryAcquire();\n  });\n  return { acquire };\n}",
+            "explanation": "Line 6: resolve returns release function. Line 8: waiters queued when at capacity — same backpressure semantics as pool."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — unbounded Promise.all",
+            "code": "// 50_000 URLs — do not do this\nawait Promise.all(urls.map(url => fetch(url)));\n// EMFILE, rate limits, Redis maxclients, GC pressure",
+            "explanation": "Line 2: every fetch starts at once — OS and upstream limits break. Replace with mapPool(urls, 20, url => fetch(url))."
           }
         }
       ]
@@ -129,29 +141,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Concurrency-limited async mapping (pool pattern) across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Bounded concurrency",
+          "headers": ["JavaScript", "C#", "Notes"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["mapPool pattern", "SemaphoreSlim + Task.WhenAll", "Same cap on in-flight work"],
+            ["Parallel.ForEachAsync", "Built-in .NET 6+", "JS needs manual pool"],
+            ["p-limit (npm)", "Polly bulkhead", "Library solutions"],
+            ["TypeScript", "Generic mapPool<T, R>", "Type fn parameter and return"]
           ]
         }
       ]
@@ -162,8 +158,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Concurrency-limited async mapping (pool pattern) as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Confusing pool with Worker threads",
+          "body": "Pool limits concurrent async I/O on one thread. CPU-bound work needs worker_threads or breaking into chunks — pool does not use multiple cores."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "No error strategy",
+          "body": "One rejected fn fails Promise.all(workers) — decide fail-fast vs collect errors like allSettled per item."
         }
       ]
     },
@@ -172,83 +174,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Concurrency-limited async mapping (pool pattern), write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "Follow-ups: preserve result order (index assignment), handle early abort via AbortSignal, or dynamic pool size based on 429 Retry-After. In streaming pipelines, use async generators with manual buffer cap. Compare to Node readable stream highWaterMark. C# Parallel.ForEachAsync has MaxDegreeOfParallelism — cite it when interviewer knows .NET."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Size", "Effect", "Risk"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Too low", "Underutilizes I/O latency budget", "Slow batch jobs"],
+            ["Too high", "429, EMFILE, memory", "Upstream outage"],
+            ["Dynamic", "Adapt to Retry-After", "Complexity"],
+            ["Sequential (1)", "Safest", "Slowest"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Concurrency-limited async mapping (pool pattern) just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Only knowing Promise.all. Saying pool uses multiple JS threads. Cannot implement worker loop. No mention of rate limits or file descriptor limits."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Concurrency-limited async mapping (pool pattern): know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for async-concurrency-limits.",
-    "Production: validate external input before applying Concurrency-limited async mapping (pool pattern); log failures with context.",
-    "60s: Concurrency-limited async mapping (pool pattern) — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Promise.all is unbounded — pool caps in-flight async work on one thread.",
+    "Worker loop + shared index or semaphore acquire/release.",
+    "Production: pair with AbortSignal, Redis batch keys, fetch rate limits.",
+    "60s: mapPool with N workers pulling from queue. Not multithreaded — limits sockets. C# SemaphoreSlim.WaitAsync same idea. Never Promise.all 10k URLs.",
+    "Follow-up: preserve order, handle per-item errors, or implement semaphore."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Concurrency-limited async mapping (pool pattern) is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Concurrency-limited async mapping (pool pattern), show a 5-line example, name one pitfall and one C# difference."
+    "Weak: Promise.all for bulk — unbounded concurrency.",
+    "Weak: pool for CPU-heavy work — need Workers.",
+    "Strong: 'N async workers, shared index, await per item. AbortSignal on shutdown. Match pool to upstream limits.'"
   ],
   "relatedTopicIds": [
-    "javascript-13-why-async-javascript",
-    "javascript-13-promise-states-and-chaining",
-    "javascript-13-promise-combinators"
+    "javascript-13-promise-combinators",
+    "javascript-13-promises-vs-csharp-task",
+    "javascript-15-worker-pools-and-patterns",
+    "javascript-17-fetch-streams-and-web-apis"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Concurrency-limited async mapping (pool pattern)",
-      "note": "Compare Concurrency-limited async mapping (pool pattern) in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/promises-async-event-loop/async-concurrency-limits"
+      "concept": "Generic pool typing",
+      "note": "async function mapPool<T, R>(items: T[], concurrency: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]>",
+      "futureTopicSlug": "typescript/async/promise-and-async-return-types"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Concurrency-limited async mapping (pool pattern) to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/13/async-concurrency-limits"
+      "language": "javascript",
+      "concept": "Promise.all combinator",
+      "note": "Pool uses Promise.all on worker array — not on every item — combining both patterns.",
+      "futureTopicSlug": "javascript/async/promise-combinators"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "Node.js — Don't block the event loop",
+      "url": "https://nodejs.org/en/learn/asynchronous-work/dont-block-the-event-loop"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "p-limit package",
+      "url": "https://www.npmjs.com/package/p-limit"
+    },
+    {
+      "title": "Microsoft — Parallel.ForEachAsync",
+      "url": "https://learn.microsoft.com/en-us/dotnet/api/system.threading.tasks.parallel.foreachasync"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
 }

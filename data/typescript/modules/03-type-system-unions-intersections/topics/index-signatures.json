@@ -4,30 +4,36 @@
   "title": "Index signatures and Record<K, V>",
   "moduleId": "typescript-03-type-system-unions-intersections",
   "order": 7,
-  "hook": "Index signatures and Record<K, V> shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "An index signature types dynamic string keys on an object — like a dictionary of HTTP headers or translation strings. Record<K, V> is the built-in shorthand, but noUncheckedIndexedAccess changes whether lookups are T or T | undefined.",
   "sections": [
     {
-      "heading": "What is this?",
+      "heading": "What are index signatures?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Index signatures and Record<K, V> is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "An **index signature** declares that an object accepts arbitrary keys of a given type mapping to a value type: `{ [key: string]: number }`. **`Record<K, V>`** is sugar for `{ [P in K]: V }` — a mapped type over keys. At **run time** JavaScript objects are still plain hashes — no key validation. **`noUncheckedIndexedAccess`** makes `obj[key]` return `V | undefined` because the key might not exist. Contrast C# `Dictionary<string, T>` which throws on missing keys unless you use `TryGetValue`."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "index",
-              "longForm": "Index signatures and Record<K, V>",
-              "plainDefinition": "The central idea behind \"Index signatures and Record<K, V>\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "index signature",
+              "longForm": "index signature [key: string]: T",
+              "plainDefinition": "Types all string (or number/symbol) keys on an object to the same value type.",
+              "example": "headers: { [name: string]: string }"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "Record",
+              "longForm": "Record<K, V>",
+              "plainDefinition": "Built-in mapped type for key-value dictionaries with known key union.",
+              "example": "Record<Status, string>"
+            },
+            {
+              "term": "noUncheckedIndexedAccess",
+              "longForm": "noUncheckedIndexedAccess",
+              "plainDefinition": "Compiler flag: indexed access adds undefined to the result type.",
+              "example": "scores[id] // number | undefined"
             }
           ]
         }
@@ -38,13 +44,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Index signatures and Record<K, V> beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "API configs, i18n maps, and Redux-style action lookup tables all use dynamic keys. Using `any` or untyped objects loses safety — index signatures document the contract. Senior interviews ask when to prefer **discriminated unions** over stringly-typed Records. C# developers reach for Dictionary — TypeScript Records are compile-time only."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Index signatures and Record<K, V>\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Prefer known keys when possible",
+          "body": "Record<\"pending\" | \"done\", Handler> is safer than Record<string, Handler> — exhaustiveness checking applies."
         }
       ]
     },
@@ -53,23 +59,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Choosing the right dictionary type",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Index signatures and Record<K, V> appears in real code — a function, type annotation, or runtime API."
+              "title": "Fixed key set",
+              "body": "Use Record<UnionOfKeys, V> or mapped type — compiler enforces all keys."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Open-ended keys",
+              "body": "Use index signature [key: string]: V — any string key allowed."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Mixed fixed + dynamic",
+              "body": "Known props + index signature — excess property rules apply to literals."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Safe lookup",
+              "body": "With noUncheckedIndexedAccess, guard: if (key in obj) { ... }"
             }
           ]
         },
@@ -77,8 +83,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Index signatures and Record<K, V> flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Index signature vs Record",
+            "source": "flowchart TD\n  NEED[Need dictionary type] --> FIXED{Known key union?}\n  FIXED -->|yes| REC[Record K V]\n  FIXED -->|no| IDX[\"[key: string]: V\"]\n  REC --> EXH[Exhaustiveness on K]\n  IDX --> OPEN[Any string key]"
           }
         }
       ]
@@ -90,27 +96,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Index signatures and Record<K, V>",
-            "code": "// Index signatures and Record<K, V>\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'index-signatures',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Index signatures and Record<K, V>. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "Index signature basics",
+            "code": "type HttpHeaders = { [header: string]: string };\n\nfunction setHeader(headers: HttpHeaders, name: string, value: string) {\n  headers[name.toLowerCase()] = value;\n}\n\nconst h: HttpHeaders = {};\nsetHeader(h, \"Content-Type\", \"application/json\");",
+            "explanation": "Line 1: any string key maps to string value. Line 4: dynamic assignment is type-safe. Runtime: plain object — no key validation."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
+            "label": "Record with union keys",
+            "code": "type Status = \"pending\" | \"done\" | \"failed\";\n\nconst labels: Record<Status, string> = {\n  pending: \"Waiting\",\n  done: \"Complete\",\n  failed: \"Error\",\n};\n\nfunction label(s: Status): string {\n  return labels[s];\n}",
+            "explanation": "Line 3: Record requires every Status key — missing one is a compile error. Safer than Record<string, string>."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "language": "typescript",
+            "label": "noUncheckedIndexedAccess guard",
+            "code": "const scores: Record<string, number> = { ada: 95 };\n\nfunction getScore(id: string): number | undefined {\n  if (id in scores) {\n    return scores[id]; // narrowed when flag on\n  }\n  return undefined;\n}",
+            "explanation": "With noUncheckedIndexedAccess, scores[id] is number | undefined. in check narrows before return."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — assuming key exists",
+            "code": "const cache: Record<string, User> = {};\n\nfunction getUser(id: string): User {\n  return cache[id]; // may be undefined at runtime!\n}\n\n// Fix: return User | undefined or throw if missing",
+            "explanation": "Without noUncheckedIndexedAccess this compiles but returns undefined at runtime — classic production bug."
           }
         }
       ]
@@ -120,28 +135,37 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Index signatures and Record<K, V> across languages",
+          "title": "Dictionary patterns",
           "headers": [
-            "Aspect",
+            "Pattern",
             "TypeScript",
-            "JavaScript / C#"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
+              "Dynamic map",
+              "Index signature / Record",
+              "Plain object {}",
+              "Dictionary<K,V>"
             ],
             [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
+              "Missing key",
+              "undefined (runtime)",
+              "undefined",
+              "KeyNotFoundException"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
+              "Compile-time key check",
+              "Record<Union, V>",
+              "None",
+              "Enum keys"
+            ],
+            [
+              "Safe lookup",
+              "in / hasOwnProperty",
+              "in / hasOwnProperty",
+              "TryGetValue"
             ]
           ]
         }
@@ -153,45 +177,99 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Index signatures and Record<K, V> as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Record<string, T> everywhere",
+          "body": "Loses exhaustiveness — prefer union keys or branded keys for domain IDs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Index signatures interact with excess property checking: literals cannot have unknown keys unless an index signature is present. `as const` objects can be indexed with keyof typeof for safer lookups. For API query params, validate keys at runtime — Record types do not enforce keys exist. Branded string types (UserId) prevent accidental cross-wiring of Record keys."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs",
+          "headers": [
+            "Approach",
+            "When",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "Record<Union, V>",
+              "Finite status/action maps",
+              "Key union must stay in sync"
+            ],
+            [
+              "[key: string]: V",
+              "Headers, i18n",
+              "No key validation"
+            ],
+            [
+              "Map<K, V>",
+              "Non-string keys, iteration order",
+              "Not JSON-serializable"
+            ],
+            [
+              "noUncheckedIndexedAccess",
+              "Safer lookups",
+              "More undefined handling"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected",
+          "body": "Saying Record enforces keys at runtime. Not knowing noUncheckedIndexedAccess. Using any for dynamic objects instead of index signatures."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Index signatures and Record<K, V>: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for index-signatures.",
-    "Production: validate external input before applying Index signatures and Record<K, V>; log failures with context.",
-    "60s: Index signatures and Record<K, V> — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Index signatures type open-ended object keys; Record<K,V> types known key unions.",
+    "Runtime: still plain objects — undefined for missing keys.",
+    "noUncheckedIndexedAccess adds undefined to indexed lookups.",
+    "60s: Use Record<Union,V> for finite keys with exhaustiveness. Index signature for open maps. Guard lookups. C# Dictionary throws; JS/TS return undefined.",
+    "Follow-up: when Map vs Record?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"Index signatures and Record<K, V> is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Index signatures and Record<K, V>, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: Record<string, T> for everything — loses key safety.",
+    "Weak: assuming indexed access always returns T — missing keys are undefined.",
+    "Strong: Union-key Record for enums/status. Index signature for open maps. in-check or ?? for safe access."
   ],
   "relatedTopicIds": [
     "typescript-03-union-types",
-    "typescript-03-intersection-types",
-    "typescript-03-widening-and-narrowing-basics"
+    "typescript-03-assignability-and-subtyping",
+    "typescript-10-record-exclude-extract",
+    "typescript-08-map-set-typed"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Index signatures and Record<K, V>",
-      "note": "Foundation link to javascript track for index-signatures.",
-      "futureTopicSlug": "javascript/type-system-unions-intersections/index-signatures"
+      "concept": "object as hash map",
+      "note": "JS objects accept any string key at runtime — TypeScript index signatures document that pattern at compile time.",
+      "futureTopicSlug": "javascript/objects/object-basics"
+    },
+    {
+      "language": "typescript",
+      "concept": "mapped types",
+      "note": "Record<K,V> is built on mapped types — same machinery as Partial and Pick.",
+      "futureTopicSlug": "typescript/conditional-mapped-types/mapped-types"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript — Index Types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/objects.html#index-signatures"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript — Record utility",
+      "url": "https://www.typescriptlang.org/docs/handbook/utility-types.html#recordkeys-type"
     }
-  ]
+  ],
+  "animationHint": "flow"
 }

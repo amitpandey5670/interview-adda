@@ -4,30 +4,42 @@
   "title": "Narrowing unknown at API and JSON boundaries",
   "moduleId": "typescript-11-type-narrowing-guards",
   "order": 6,
-  "hook": "Narrowing unknown at API and JSON boundaries shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "fetch and JSON.parse return unknown at the trust boundary — TypeScript will not let you read .email until you narrow. Senior interviews and Reddit threads treat unknown-at-boundaries as the fix for any: validate shape, then the compiler trusts you inside the block.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Narrowing unknown at API and JSON boundaries is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**unknown** is the type-safe top type: you can assign anything to it, but you cannot use it until you **narrow** with typeof, instanceof, in checks, or a user-defined type guard. At **API boundaries** — `response.json()`, Redis payloads, WebSocket messages, `process.env` — data is untrusted. TypeScript does not parse JSON into your interface at runtime; **erasable types** vanish on emit. The pattern: parse to `unknown`, run a **validator** (manual checks, Zod, Valibot), then work with a typed value."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "narrowing",
-              "longForm": "Narrowing unknown at API and JSON boundaries",
-              "plainDefinition": "The central idea behind \"Narrowing unknown at API and JSON boundaries\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "unknown",
+              "longForm": "unknown type",
+              "plainDefinition": "Top type that forces narrowing before use — safer than any.",
+              "example": "const data: unknown = await res.json();"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "type guard",
+              "longForm": "user-defined type guard",
+              "plainDefinition": "Function returning x is T that tells the compiler narrowing succeeded.",
+              "example": "function isUser(x: unknown): x is User { ... }"
+            },
+            {
+              "term": "trust boundary",
+              "longForm": "API trust boundary",
+              "plainDefinition": "Line where external data enters your program — assume hostile until validated.",
+              "example": "HTTP response body, message queue payload."
+            },
+            {
+              "term": "assertion function",
+              "longForm": "asserts x is T",
+              "plainDefinition": "Function that throws if narrow fails — asserts parameter type for rest of block.",
+              "example": "function assertUser(x: unknown): asserts x is User"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Narrowing unknown at API and JSON boundaries beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "`as User` after json() is a lie — production APIs change fields, return null, or nest errors. `any` silences the compiler and ships runtime `undefined is not a function`. C# deserializes with System.Text.Json into typed models but still throws on mismatch — TypeScript has no runtime unless you add validation. Redis `GET` returns string | null — parse then narrow. FAANG code review rejects `as` casts at boundaries without guards."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Narrowing unknown at API and JSON boundaries\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Interview trap: any vs unknown",
+          "body": "any disables checking — unknown forces you to prove shape. Prefer unknown on every external input; reserve any for migration only."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Boundary validation flow",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Narrowing unknown at API and JSON boundaries appears in real code — a function, type annotation, or runtime API."
+              "title": "Receive unknown",
+              "body": "const raw: unknown = await response.json()"
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Validate structure",
+              "body": "Type guard or schema library checks required fields and types."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Branch on failure",
+              "body": "Return 502, log, or throw — never proceed with partial trust."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Use narrowed type",
+              "body": "Inside if (isUser(raw)) block, raw is User — full IntelliSense."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Narrowing unknown at API and JSON boundaries flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "unknown narrowing at boundary",
+            "source": "flowchart TD\n  EXT[External JSON] --> U[unknown]\n  U --> G{Type guard / schema}\n  G -->|pass| T[Typed domain model]\n  G -->|fail| E[Error response]\n  T --> APP[Application logic]"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Narrowing unknown at API and JSON boundaries",
-            "code": "// Narrowing unknown at API and JSON boundaries\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'narrowing-at-api-boundaries',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Narrowing unknown at API and JSON boundaries. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "Manual type guard for API User",
+            "code": "interface User {\n  id: string;\n  email: string;\n}\n\nfunction isUser(value: unknown): value is User {\n  if (typeof value !== 'object' || value === null) return false;\n  const v = value as Record<string, unknown>;\n  return typeof v.id === 'string' && typeof v.email === 'string';\n}\n\nasync function fetchUser(id: string): Promise<User> {\n  const res = await fetch(`/api/users/${id}`);\n  const raw: unknown = await res.json();\n  if (!isUser(raw)) throw new Error('Invalid user payload');\n  return raw;\n}",
+            "explanation": "Line 9: null check — typeof null is 'object' in JS. Line 16: raw unknown until line 17 guard. Line 18: return raw as User — compiler knows shape."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Redis cache boundary — parse then narrow",
+            "code": "interface Session {\n  userId: string;\n  roles: string[];\n}\n\nfunction isSession(x: unknown): x is Session {\n  return (\n    typeof x === 'object' && x !== null &&\n    typeof (x as Session).userId === 'string' &&\n    Array.isArray((x as Session).roles) &&\n    (x as Session).roles.every(r => typeof r === 'string')\n  );\n}\n\nasync function getSession(id: string): Promise<Session | null> {\n  const cached = await redis.get(`session:${id}`);\n  if (!cached) return null;\n  const parsed: unknown = JSON.parse(cached);\n  if (!isSession(parsed)) {\n    await redis.del(`session:${id}`);\n    return null;\n  }\n  return parsed;\n}",
+            "explanation": "Line 19: JSON.parse returns any by default — assign to unknown first. Line 21: corrupt cache deleted — fail safe. Line 24: narrowed Session."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "asserts function — throw to narrow",
+            "code": "function assertIsUser(value: unknown): asserts value is User {\n  if (!isUser(value)) {\n    throw new TypeError('Expected User shape');\n  }\n}\n\nfunction handleWebhook(body: unknown) {\n  assertIsUser(body);\n  sendEmail(body.email); // body is User here\n}",
+            "explanation": "Line 1: asserts keyword — no return value, control flow narrows. Line 8: after assertIsUser, body typed as User in rest of function."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — unsafe cast after json()",
+            "code": "const user = await res.json() as User;\n// Runtime: API returns { user: { email } } — user.email is undefined\n// TypeScript: silent lie — no compile error",
+            "explanation": "Line 1: as User bypasses validation — most common production TS bug at boundaries. Fix: unknown + guard."
           }
         }
       ]
@@ -129,29 +141,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Narrowing unknown at API and JSON boundaries across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Boundary typing across languages",
+          "headers": ["Approach", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Untrusted input type", "unknown", "no types — manual checks", "JsonElement or object"],
+            ["Validation", "Type guards / Zod", "Manual if checks", "JsonSerializer + try/catch"],
+            ["Compile-time only", "Yes — types erase", "N/A", "Partial — runtime types exist"],
+            ["any escape hatch", "Avoid at boundaries", "Implicit any in sloppy JS", "dynamic keyword"]
           ]
         }
       ]
@@ -162,8 +158,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Narrowing unknown at API and JSON boundaries as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Trusting OpenAPI types without runtime check",
+          "body": "Generated interfaces describe intent — server can still return wrong JSON. Validate at boundary or use contract tests."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Shallow guards",
+          "body": "Checking only typeof value === 'object' is not enough — validate every field you read."
         }
       ]
     },
@@ -172,83 +174,75 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Narrowing unknown at API and JSON boundaries, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "Senior answers mention schema libraries (Zod infer types from schema — single source of truth), discriminated unions for API error envelopes `{ ok: true, data } | { ok: false, error }`, and narrowing in catch with unknown (TypeScript 4.4+). Production: log validation failures with request id, never leak raw payload to client. Compare to C# nullable reference types — compile-time only like strictNullChecks; both need runtime validation at boundaries."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Strategy", "Pros", "Cons"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Manual guards", "No dependency, explicit", "Verbose, drifts from types"],
+            ["Zod / Valibot", "Runtime + inferred TS type", "Bundle size, learning curve"],
+            ["as cast", "Fast to write", "Unsafe — rejected in review"],
+            ["OpenAPI codegen only", "Good DX", "No runtime guarantee"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Narrowing unknown at API and JSON boundaries just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
+          "body": "Using any for json(). Saying TypeScript validates JSON at runtime. Cannot write isUser guard. Not knowing unknown vs any difference. Skipping null check in object guard."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Narrowing unknown at API and JSON boundaries: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for narrowing-at-api-boundaries.",
-    "Production: validate external input before applying Narrowing unknown at API and JSON boundaries; log failures with context.",
-    "60s: Narrowing unknown at API and JSON boundaries — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "unknown at every external input — narrow before property access.",
+    "Type guards (x is T) and asserts functions for control-flow narrowing.",
+    "JSON.parse and fetch.json() do not produce your interface — validate.",
+    "60s: unknown forces proof. Manual guard or Zod. Redis and fetch are trust boundaries. any silences compiler. C# JsonSerializer throws but TS types erase.",
+    "Follow-up: discriminated union for API success/error envelope."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Narrowing unknown at API and JSON boundaries is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Narrowing unknown at API and JSON boundaries, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: as User after json() — runtime mismatch.",
+    "Weak: any at boundary — defeats TypeScript.",
+    "Strong: 'unknown in, guard validates shape, narrowed type in block. Corrupt Redis key deleted. Zod for DRY schema+type.'"
   ],
   "relatedTopicIds": [
-    "typescript-11-typeof-in-instanceof-guards",
+    "typescript-11-user-defined-type-guards",
+    "typescript-11-assertion-functions",
     "typescript-11-discriminated-unions-narrowing",
-    "typescript-11-user-defined-type-guards"
+    "typescript-06-try-catch-and-unknown",
+    "typescript-02-any-unknown-never"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Narrowing unknown at API and JSON boundaries",
-      "note": "Compare Narrowing unknown at API and JSON boundaries in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/type-narrowing-guards/narrowing-at-api-boundaries"
+      "concept": "Runtime JSON shape",
+      "note": "JavaScript has no unknown — same validation logic runs at runtime; TypeScript adds compile-time narrowing after guards.",
+      "futureTopicSlug": "javascript/types/json-and-serialization"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Narrowing unknown at API and JSON boundaries to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/11/narrowing-at-api-boundaries"
+      "concept": "any versus unknown",
+      "note": "unknown is the type-safe replacement for any at boundaries — assignable from anything, usable only after narrow.",
+      "futureTopicSlug": "typescript/types/any-unknown-never"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript handbook — Narrowing",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript 3.0 — unknown",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-0.html#new-unknown-top-type"
+    },
+    {
+      "title": "Zod — TypeScript-first schema validation",
+      "url": "https://zod.dev/"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

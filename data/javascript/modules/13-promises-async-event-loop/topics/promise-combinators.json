@@ -4,30 +4,42 @@
   "title": "Promise.all, race, any, and allSettled",
   "moduleId": "javascript-13-promises-async-event-loop",
   "order": 3,
-  "hook": "Promise.all, race, any, and allSettled shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "Promise.all waits for every sibling and fails fast on the first rejection. Promise.allSettled never rejects — you inspect each outcome. Senior interviews pair these with production patterns: fan-out to microservices, partial failure handling, and racing fetch against a timeout.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Promise.all, race, any, and allSettled is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Promise.all(iterable)** returns a single Promise that fulfills with an array of results when all input Promises fulfill — or rejects immediately when any input rejects (fail-fast). **Promise.allSettled** waits for all to finish regardless of outcome, returning `{ status, value|reason }` objects. **Promise.race** fulfills or rejects with the first settled Promise. **Promise.any** fulfills with the first fulfillment — rejects only if all reject (AggregateError). These are static methods — they do not parallelize CPU; they overlap I/O waits on the single JS thread."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "promise",
-              "longForm": "Promise.all, race, any, and allSettled",
-              "plainDefinition": "The central idea behind \"Promise.all, race, any, and allSettled\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "Promise.all",
+              "longForm": "Promise.all",
+              "plainDefinition": "Concurrent wait for all fulfillments; first rejection rejects the combined Promise.",
+              "example": "await Promise.all([fetchA(), fetchB()])"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "Promise.allSettled",
+              "longForm": "Promise.allSettled",
+              "plainDefinition": "Wait for every input to settle; never rejects the wrapper Promise.",
+              "example": "const results = await Promise.allSettled(tasks);"
+            },
+            {
+              "term": "Promise.race",
+              "longForm": "Promise.race",
+              "plainDefinition": "Adopt the state of the first Promise to settle — fulfillment or rejection.",
+              "example": "Promise.race([fetch(url), timeout(5000)])"
+            },
+            {
+              "term": "fail-fast",
+              "longForm": "fail-fast rejection",
+              "plainDefinition": "Promise.all rejects as soon as one sibling rejects — others keep running but result is lost.",
+              "example": "One 404 in parallel batch rejects entire all()."
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Promise.all, race, any, and allSettled beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Dashboard pages that fetch user profile, permissions, and notifications in parallel use Promise.all for latency — sequential await triples round-trip time. Batch jobs that must report per-item failures use allSettled. Timeout wrappers race fetch against a timer Promise. Misusing Promise.all when partial success is acceptable loses data on first failure. C# **Task.WhenAll** behaves like all; **Task.WhenAny** like race for completion."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Promise.all, race, any, and allSettled\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Empty iterable edge case",
+          "body": "Promise.all([]) fulfills immediately with []. Promise.any([]) rejects with AggregateError. Interviewers sometimes test this."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Promise.all algorithm (conceptual)",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Promise.all, race, any, and allSettled appears in real code — a function, type annotation, or runtime API."
+              "title": "Start all inputs",
+              "body": "Non-Promise values wrapped with Promise.resolve."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Track counter",
+              "body": "When one fulfills, store result at index; increment count."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "All fulfilled",
+              "body": "Resolve combined Promise with ordered array."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Any rejects",
+              "body": "Reject combined immediately — fail-fast."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Promise.all, race, any, and allSettled flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Combinator outcomes",
+            "source": "flowchart TD\n  A[Multiple Promises] --> ALL[Promise.all]\n  A --> SET[Promise.allSettled]\n  A --> RACE[Promise.race]\n  A --> ANY[Promise.any]\n  ALL -->|one reject| F[Combined reject]\n  ALL -->|all ok| OK[Array of values]\n  SET --> ARR[Array of outcomes]\n  RACE --> FIRST[First settled wins]\n  ANY --> FIRSTOK[First fulfillment]"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Promise.all, race, any, and allSettled",
-            "code": "// Promise.all, race, any, and allSettled\nconst example = {\n  topic: 'promise-combinators',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Promise.all, race, any, and allSettled. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Promise.all — parallel fetch fan-out",
+            "code": "async function loadDashboard(userId, signal) {\n  const [profile, permissions, notifications] = await Promise.all([\n    fetch(`/api/users/${userId}`, { signal }).then(r => r.json()),\n    fetch(`/api/users/${userId}/permissions`, { signal }).then(r => r.json()),\n    fetch(`/api/users/${userId}/notifications`, { signal }).then(r => r.json())\n  ]);\n  return { profile, permissions, notifications };\n}",
+            "explanation": "Line 2: three HTTP requests overlap — total latency ≈ slowest, not sum. Line 2: shared AbortSignal cancels all on timeout."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "Promise.allSettled — partial failure tolerance",
+            "code": "const urls = ['/api/a', '/api/b', '/api/c'];\nconst results = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.json())));\n\nconst ok = results.filter(r => r.status === 'fulfilled').map(r => r.value);\nconst failed = results.filter(r => r.status === 'rejected').map(r => r.reason);\nconsole.log(`${ok.length} succeeded, ${failed.length} failed`);",
+            "explanation": "Line 2: wrapper never rejects — inspect status per item. Lines 4–5: build degraded response when some microservices are down."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Promise.race — fetch vs timeout",
+            "code": "function timeout(ms) {\n  return new Promise((_, reject) =>\n    setTimeout(() => reject(new Error(`timeout ${ms}ms`)), ms)\n  );\n}\n\nasync function fetchWithTimeout(url, ms, signal) {\n  return Promise.race([\n    fetch(url, { signal }).then(r => {\n      if (!r.ok) throw new Error(`HTTP ${r.status}`);\n      return r.json();\n    }),\n    timeout(ms)\n  ]);\n}",
+            "explanation": "Line 10: race adopts first settlement — timeout rejects if fetch slower. Note: losing fetch still runs — pair with AbortSignal to cancel."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — Promise.all fail-fast hides partial data",
+            "code": "try {\n  await Promise.all([\n    redis.get('key1'),\n    redis.get('key2'), // throws connection reset\n    redis.get('key3')\n  ]);\n} catch (err) {\n  // key1 result lost even if it succeeded — use allSettled or try per-item\n}",
+            "explanation": "Line 4: one failure rejects entire batch — production bulk reads often need allSettled or per-key try/catch."
           }
         }
       ]
@@ -129,29 +141,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Promise.all, race, any, and allSettled across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Combinator mapping",
+          "headers": ["JavaScript", "C#", "Semantics"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Promise.all", "Task.WhenAll", "All succeed or first exception"],
+            ["Promise.race", "Task.WhenAny (with caveats)", "First completed task"],
+            ["Promise.any", "Not built-in", "First success only"],
+            ["Promise.allSettled", "Custom or WhenAll + per-task try", "All outcomes collected"],
+            ["TypeScript", "Promise.all<T[]>", "Typed tuple with as const inputs"]
           ]
         }
       ]
@@ -162,8 +159,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Promise.all, race, any, and allSettled as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Sequential map instead of parallel",
+          "body": "for (const url of urls) await fetch(url) is sequential. Use Promise.all(urls.map(u => fetch(u))) for overlap."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Race without aborting loser",
+          "body": "Promise.race does not cancel the slower fetch — pass AbortSignal and abort when winner settles."
         }
       ]
     },
@@ -172,83 +175,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Promise.all, race, any, and allSettled, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "Implement Promise.all as interview follow-up after scratch Promise. Production: combine all with concurrency limit (module async-concurrency-limits) when URLs count in thousands — unbounded all opens thousands of sockets. Promise.any for redundant CDN endpoints — first success wins. TypeScript: `Promise.all([p1, p2] as const)` preserves tuple types."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Combinator", "Use when", "Avoid when"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["all", "All required, fail entire operation", "Partial success needed"],
+            ["allSettled", "Bulk with independent failures", "Need single error propagation"],
+            ["race", "Timeout, redundant sources", "Must cancel losers"],
+            ["any", "First healthy replica", "All must be checked for audit"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Promise.all, race, any, and allSettled just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Saying Promise.all runs on multiple threads. Confusing race and any. Not knowing all rejects on first failure. Cannot map to Task.WhenAll."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Promise.all, race, any, and allSettled: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for promise-combinators.",
-    "Production: validate external input before applying Promise.all, race, any, and allSettled; log failures with context.",
-    "60s: Promise.all, race, any, and allSettled — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Promise.all: parallel wait, fail-fast on first rejection, ordered results.",
+    "allSettled: never rejects wrapper — inspect status per item.",
+    "race: first settle wins; any: first fulfillment wins.",
+    "60s: all equals WhenAll — overlap I/O not CPU. allSettled for partial failure. race for timeout — abort loser. any for redundant endpoints. Empty all fulfills, empty any rejects.",
+    "Follow-up: implement Promise.all or add concurrency limit."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Promise.all, race, any, and allSettled is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Promise.all, race, any, and allSettled, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: sequential await in loop calling it parallel.",
+    "Weak: race without AbortSignal — zombie requests continue.",
+    "Strong: 'all fail-fast. allSettled for degraded mode. Map to WhenAll. Bounded pool for thousands of tasks.'"
   ],
   "relatedTopicIds": [
-    "javascript-13-why-async-javascript",
     "javascript-13-promise-states-and-chaining",
-    "javascript-13-async-await-syntax"
+    "javascript-13-async-concurrency-limits",
+    "javascript-13-promises-vs-csharp-task",
+    "javascript-13-implementing-promise-from-scratch"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Promise.all, race, any, and allSettled",
-      "note": "Compare Promise.all, race, any, and allSettled in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/promises-async-event-loop/promise-combinators"
+      "concept": "Tuple typing with Promise.all",
+      "note": "as const on input array gives [User, Permissions, Notifications] tuple return type instead of union[].",
+      "futureTopicSlug": "typescript/async/promise-and-async-return-types"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Promise.all, race, any, and allSettled to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/13/promise-combinators"
+      "language": "javascript",
+      "concept": "Concurrency-limited pool",
+      "note": "Promise.all is unbounded concurrency — production uses pool pattern for large batches.",
+      "futureTopicSlug": "javascript/async/async-concurrency-limits"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Promise.all",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/all"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — Promise.allSettled",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled"
+    },
+    {
+      "title": "ECMAScript — Promise combinator functions",
+      "url": "https://tc39.es/ecma262/#sec-promise-combinator-functions"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
 }

@@ -4,30 +4,42 @@
   "title": "strictNullChecks and the null safety model",
   "moduleId": "typescript-07-null-safety-strict",
   "order": 1,
-  "hook": "strictNullChecks and the null safety model shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "With strictNullChecks enabled, null and undefined are their own types — not assignable to string or number unless you opt in. It is compile-time only: JSON, Redis, and fetch still deliver null at runtime, so you narrow or validate at boundaries like C# nullable reference types.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "strictNullChecks and the null safety model is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**strictNullChecks** is a compiler flag (part of **strict**) that makes **null** and **undefined** distinct types. A variable typed `string` cannot hold `null` unless you write `string | null`. Optional properties (`email?`) include `undefined` in their type. **Control-flow narrowing** after `if (x !== null)` refines the type inside the block. This is **compile-time only** — emitted JavaScript is unchanged; runtime null still crashes if you skip checks."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "strict",
-              "longForm": "strictNullChecks and the null safety model",
-              "plainDefinition": "The central idea behind \"strictNullChecks and the null safety model\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "strictNullChecks",
+              "longForm": "strictNullChecks compiler option",
+              "plainDefinition": "When true, null and undefined are not assignable to other types by default.",
+              "example": "\"strictNullChecks\": true in tsconfig.json"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "union with null",
+              "longForm": "T | null | undefined",
+              "plainDefinition": "Explicitly documents that a value may be absent.",
+              "example": "function find(id: string): User | null"
+            },
+            {
+              "term": "optional chaining",
+              "longForm": "optional chaining (?.)",
+              "plainDefinition": "Short-circuit property access when intermediate is null/undefined.",
+              "example": "user?.profile?.email"
+            },
+            {
+              "term": "nullish coalescing",
+              "longForm": "nullish coalescing (??)",
+              "plainDefinition": "Default only for null/undefined — not other falsy values.",
+              "example": "name ?? 'Anonymous'"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand strictNullChecks and the null safety model beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Before strictNullChecks, `users.find()` returning undefined and accessing `.name` compiled fine — classic production bug. Enabling it on legacy codebases surfaces thousands of errors that reflect real null risks. C# **nullable reference types (NRT)** are the cousin: `string` vs `string?` at compile time, both still null at runtime if you lie. Reddit senior threads rank strictNullChecks vs C# NRT as a frequent comparison — both need discipline at API boundaries."
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"strictNullChecks and the null safety model\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "variant": "remember",
+          "title": "strictNullChecks does not fix runtime",
+          "body": "await redis.get(key) returns string | null in types only if you typed the client — runtime null still needs an if check."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Null safety workflow",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where strictNullChecks and the null safety model appears in real code — a function, type annotation, or runtime API."
+              "title": "Model absence explicitly",
+              "body": "Use T | null | undefined on APIs that can miss."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Narrow before use",
+              "body": "if (value != null) { ... } — compiler knows value is T."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Optional chaining for drill-down",
+              "body": "obj?.nested?.field — undefined if any hop is nullish."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Validate external data",
+              "body": "unknown + type guard — strictNullChecks does not parse JSON."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "strictNullChecks and the null safety model flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "strictNullChecks type flow",
+            "source": "flowchart TD\n  S[string] -->|assign null| E[Compile error]\n  U[string | null] -->|if x != null| N[string narrowed]\n  JSON[External JSON] --> V[unknown + guard]\n  V --> T[Typed T]"
           }
         }
       ]
@@ -90,27 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic strictNullChecks and the null safety model",
-            "code": "// strictNullChecks and the null safety model\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'strict-null-checks',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to strictNullChecks and the null safety model. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "strictNullChecks errors and fixes",
+            "code": "function greet(name: string) {\n  return `Hello, ${name.toUpperCase()}`;\n}\n\nconst maybe: string | undefined = process.env.USER_NAME;\n// greet(maybe); // Error: undefined not assignable to string\n\nif (maybe !== undefined) {\n  greet(maybe); // narrowed to string\n}\n\ngreet(maybe ?? 'Guest');",
+            "explanation": "Line 6: env var is string | undefined. Line 7: direct call rejected. Line 9: narrowing satisfies compiler. Line 12: ?? provides default string."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
+            "label": "Optional properties and exactOptionalPropertyTypes",
+            "code": "interface Profile {\n  displayName: string;\n  bio?: string; // string | undefined when present\n}\n\nfunction render(p: Profile) {\n  const bio = p.bio?.trim() ?? '(no bio)';\n  return `${p.displayName}: ${bio}`;\n}\n\nconst fromApi: Profile = JSON.parse('{\"displayName\":\"Ada\"}');\nrender(fromApi); // bio undefined at runtime — optional chaining safe",
+            "explanation": "Line 3: optional ? adds undefined. Line 7: ?. short-circuits if bio missing. Line 10: JSON may omit bio — runtime matches type."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "language": "typescript",
+            "label": "Production — Redis get with null check",
+            "code": "async function getCachedUser(id: string): Promise<User | null> {\n  const raw = await redis.get(`user:${id}`);\n  if (raw === null) return null;\n\n  const parsed: unknown = JSON.parse(raw);\n  if (!isUser(parsed)) return null;\n  return parsed;\n}\n\nasync function greetUser(id: string) {\n  const user = await getCachedUser(id);\n  if (user === null) {\n    return fetch(`/api/users/${id}`).then(r => r.json());\n  }\n  return user;\n}",
+            "explanation": "Line 3: redis.get returns null for miss — explicit check. Line 14: second null check before using user — strictNullChecks pattern at boundary."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — non-null assertion abuse",
+            "code": "const el = document.getElementById('root')!;\n// ! tells compiler trust me — runtime null if id wrong\nel.addEventListener('click', handler); // throws if el is null",
+            "explanation": "Line 1: ! bypasses strictNullChecks — use only with proven invariant or immediate throw if null."
           }
         }
       ]
@@ -120,29 +141,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "strictNullChecks and the null safety model across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Null safety models",
+          "headers": ["Aspect", "TypeScript strictNullChecks", "JavaScript", "C# NRT"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Default for string", "Cannot be null", "null allowed anytime", "Non-nullable if enabled"],
+            ["Enforcement", "Compile time", "None", "Compile time warnings"],
+            ["Runtime guarantee", "No", "No", "No"],
+            ["Optional syntax", "prop?: T", "prop may be missing", "string?"],
+            ["Boundary validation", "Still required", "Required", "Still required"]
           ]
         }
       ]
@@ -153,45 +159,91 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating strictNullChecks and the null safety model as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Confusing ?? with ||",
+          "body": "|| treats 0 and '' as falsy. ?? only null/undefined — use ?? for defaults on nullable strings and numbers."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Disabling strict to ship",
+          "body": "Turning off strictNullChecks hides real bugs — fix with narrowing and explicit unions instead."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Compare strictNullChecks to C# NRT: both optional on legacy projects, both on in modern templates, neither prevents malicious JSON. exactOptionalPropertyTypes (separate flag) distinguishes missing prop from prop: undefined. definiteAssignmentAnalysis for class fields. Senior answer: enable strict early, use unknown at boundaries, never blanket !. Migration strategy: enable per-module with project references."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Tool", "Use", "Risk"],
+          "rows": [
+            ["| null union", "Explicit absence", "Verbose"],
+            ["?. ??", "Safe access and defaults", "Hides missing data if overused"],
+            ["! assertion", "DOM invariants", "Runtime throw"],
+            ["Zod + strict", "Runtime + compile", "Setup cost"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying strictNullChecks prevents runtime null. Using ! everywhere. Confusing optional ? with nullable | null. Not knowing C# NRT is compile-time too."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "strictNullChecks and the null safety model: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for strict-null-checks.",
-    "Production: validate external input before applying strictNullChecks and the null safety model; log failures with context.",
-    "60s: strictNullChecks and the null safety model — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "strictNullChecks: null/undefined not assignable unless union or optional.",
+    "Narrow with if, ?., ?? — compiler tracks control flow.",
+    "Compile-time only — validate JSON/Redis/fetch at runtime.",
+    "60s: strictNullChecks separates null from string. Narrow before use. ?? not ||. Same idea as C# NRT — compile time not runtime. Boundaries still need guards.",
+    "Follow-up: exactOptionalPropertyTypes difference."
   ],
   "commonPitfalls": [
-    "Weak answer: \"strictNullChecks and the null safety model is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define strictNullChecks and the null safety model, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: strictNullChecks fixes runtime null — it does not.",
+    "Weak: ! on every nullable — assertion abuse.",
+    "Strong: 'Union with null, narrow at boundary, ?. and ?? for access. C# NRT parallel. unknown guard for JSON.'"
   ],
   "relatedTopicIds": [
     "typescript-07-optional-properties",
     "typescript-07-non-null-assertion",
-    "typescript-07-definite-assignment"
+    "typescript-07-null-safety-vs-csharp-nrt",
+    "typescript-11-narrowing-at-api-boundaries",
+    "typescript-02-null-undefined-void-never"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "strictNullChecks and the null safety model",
-      "note": "Foundation link to javascript track for strict-null-checks.",
-      "futureTopicSlug": "javascript/null-safety-strict/strict-null-checks"
+      "concept": "null and undefined at runtime",
+      "note": "JavaScript has two nullish values — strictNullChecks forces you to model both; optional chaining and ?? are shared runtime syntax.",
+      "futureTopicSlug": "javascript/null-undefined/null-vs-undefined"
+    },
+    {
+      "language": "typescript",
+      "concept": "unknown at boundaries",
+      "note": "strictNullChecks handles internal null flow; unknown + guards handle external JSON that may omit or null any field.",
+      "futureTopicSlug": "typescript/narrowing/narrowing-at-api-boundaries"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript handbook — strictNullChecks",
+      "url": "https://www.typescriptlang.org/tsconfig#strictNullChecks"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript 2.0 — Null checking",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-2-0.html"
+    },
+    {
+      "title": "Microsoft — Nullable reference types",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/nullable-references"
     }
-  ]
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
 }

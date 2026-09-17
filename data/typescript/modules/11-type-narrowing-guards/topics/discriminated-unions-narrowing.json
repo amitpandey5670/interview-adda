@@ -4,30 +4,42 @@
   "title": "Discriminated unions and switch exhaustiveness",
   "moduleId": "typescript-11-type-narrowing-guards",
   "order": 2,
-  "hook": "Discriminated unions and switch exhaustiveness shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "A discriminated union tags each variant with a shared literal field — kind, type, or status. Switch on that tag and TypeScript narrows each branch; the never exhaustiveness check catches missing cases when the API adds a variant.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Discriminated unions and switch exhaustiveness is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A **discriminated union** (tagged union) is a union of object types sharing a **discriminant** property with a unique **literal type** per variant. Example: `type Result = { status: 'ok'; data: User } | { status: 'error'; message: string }`. When you `switch (result.status)`, each case narrows `result` to one variant — `data` exists only in the `'ok'` branch. **Exhaustiveness checking** uses `default: const _exhaustive: never = value` to force a compile error when a new variant is added but switch is not updated."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "discriminated",
-              "longForm": "Discriminated unions and switch exhaustiveness",
-              "plainDefinition": "The central idea behind \"Discriminated unions and switch exhaustiveness\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "discriminant",
+              "longForm": "discriminant property",
+              "plainDefinition": "Shared field with a literal type unique per union member — usually kind, type, or status.",
+              "example": "status: 'ok' | 'error'"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "exhaustiveness",
+              "longForm": "exhaustiveness checking",
+              "plainDefinition": "Compiler verifies every union member handled — often via never in default branch.",
+              "example": "default: return assertNever(action);"
+            },
+            {
+              "term": "narrowing",
+              "longForm": "control-flow narrowing",
+              "plainDefinition": "TypeScript refines union type in each branch based on discriminant comparison.",
+              "example": "case 'error': result.message // string only here"
+            },
+            {
+              "term": "never",
+              "longForm": "never type",
+              "plainDefinition": "Bottom type — assignable to nothing; used when all cases handled.",
+              "example": "const x: never = value; // error if value not never"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Discriminated unions and switch exhaustiveness beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Redux actions, API event streams, payment state machines, and AST nodes all use discriminated unions. Without exhaustiveness, adding `{ status: 'pending' }` silently breaks a switch that only handled ok/error — runtime falls through, UI shows blank. C# has discriminated unions in C# 12 with `switch` expressions and required patterns; TypeScript does this at compile time only. Reddit senior threads rank exhaustiveness with `never` as a must-know pattern."
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Discriminated unions and switch exhaustiveness\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "variant": "remember",
+          "title": "Discriminant must be readonly literal",
+          "body": "Use status: 'ok' not status: string — widening to string breaks narrowing. as const on object literals helps."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Switch narrowing flow",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Discriminated unions and switch exhaustiveness appears in real code — a function, type annotation, or runtime API."
+              "title": "Define union with literal discriminant",
+              "body": "Each member has unique tag value."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "switch (value.tag)",
+              "body": "Each case compares to literal — TypeScript narrows value."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Access variant fields",
+              "body": "Fields unique to variant are in scope only in matching case."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "default exhaustiveness",
+              "body": "Assign value to never — compile error if case missing."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Discriminated unions and switch exhaustiveness flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Discriminated union narrowing",
+            "source": "flowchart TD\n  U[Union Action] --> S{switch action.type}\n  S -->|ADD| A[AddAction fields]\n  S -->|REMOVE| R[RemoveAction fields]\n  S -->|default never| E[Compile error if new type]"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Discriminated unions and switch exhaustiveness",
-            "code": "// Discriminated unions and switch exhaustiveness\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'discriminated-unions-narrowing',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Discriminated unions and switch exhaustiveness. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "API result union with exhaustiveness",
+            "code": "type ApiResult<T> =\n  | { ok: true; data: T }\n  | { ok: false; error: string; code: number };\n\nfunction handleResult<T>(result: ApiResult<T>): T {\n  switch (result.ok) {\n    case true:\n      return result.data;\n    case false:\n      throw new Error(`[${result.code}] ${result.error}`);\n    default:\n      const _exhaustive: never = result;\n      return _exhaustive;\n  }\n}",
+            "explanation": "Line 1: boolean discriminant ok. Line 7: true branch — result.data exists. Line 9: false branch — error and code. Line 11: never check — if third variant added, line 11 errors at compile time."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Redux-style action union",
+            "code": "type Action =\n  | { type: 'user/loaded'; payload: User }\n  | { type: 'user/error'; message: string }\n  | { type: 'user/logout' };\n\nfunction reducer(state: State, action: Action): State {\n  switch (action.type) {\n    case 'user/loaded':\n      return { ...state, user: action.payload };\n    case 'user/error':\n      return { ...state, error: action.message };\n    case 'user/logout':\n      return { ...state, user: null };\n    default:\n      return action satisfies never;\n  }\n}",
+            "explanation": "Line 10: action.payload only in loaded case. Line 16: satisfies never (TS 4.9+) — exhaustiveness without dummy assignment."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Production — fetch wrapper with discriminated errors",
+            "code": "type FetchOutcome<T> =\n  | { kind: 'success'; status: number; body: T }\n  | { kind: 'http-error'; status: number; body: string }\n  | { kind: 'network'; cause: unknown };\n\nasync function fetchJson<T>(url: string, isT: (x: unknown) => x is T): Promise<FetchOutcome<T>> {\n  try {\n    const res = await fetch(url);\n    const raw: unknown = await res.json();\n    if (!res.ok) return { kind: 'http-error', status: res.status, body: String(raw) };\n    if (!isT(raw)) return { kind: 'http-error', status: 502, body: 'Invalid JSON shape' };\n    return { kind: 'success', status: res.status, body: raw };\n  } catch (cause) {\n    return { kind: 'network', cause };\n  }\n}",
+            "explanation": "Line 1: kind discriminant separates success, HTTP error, network. Line 8: caller switches on kind — no thrown exceptions for expected failures."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — widened discriminant",
+            "code": "interface BadAction {\n  type: string; // too wide — not a discriminant\n  payload?: unknown;\n}\n// switch(action.type) does not narrow action",
+            "explanation": "Line 2: type: string prevents literal comparison narrowing — use union of interfaces with type: 'specific/literal'."
           }
         }
       ]
@@ -129,29 +141,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Discriminated unions and switch exhaustiveness across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Tagged unions across languages",
+          "headers": ["Feature", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Definition", "Union + literal discriminant", "Convention only", "record + switch (C# 12)"],
+            ["Exhaustiveness", "never in default", "Manual — no check", "Compiler patterns"],
+            ["Runtime", "Types erase — plain objects", "Same objects", "Real types at runtime"],
+            ["Narrowing", "switch / if on tag", "Manual if chains", "switch expression"]
           ]
         }
       ]
@@ -162,8 +158,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Discriminated unions and switch exhaustiveness as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Optional discriminant",
+          "body": "If tag field is optional, union does not discriminate reliably — make tag required on every variant."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "if/else chain without default never",
+          "body": "Switch exhaustiveness is idiomatic — if-chains forget default never and miss new variants."
         }
       ]
     },
@@ -172,83 +174,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Discriminated unions and switch exhaustiveness, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "Combine with narrowing at boundaries: parse unknown to discriminated union after validation. Libraries like @reduxjs/toolkit use PayloadAction<T> pattern. Senior follow-up: distribute conditional types over unions (module 12). assertNever helper centralizes runtime throw for impossible cases in production logging. Pattern matching proposal may add native match — today switch + never is the idiomatic answer."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Pattern", "Pros", "Cons"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Discriminated union", "Exhaustive, self-documenting", "Verbose for many variants"],
+            ["Class hierarchy", "instanceof narrowing", "Nominal — heavier runtime"],
+            ["Exceptions only", "Simple happy path", "No compile-time exhaustiveness"],
+            ["Zod discriminatedUnion", "Runtime + inferred TS type", "Dependency"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Discriminated unions and switch exhaustiveness just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
+          "body": "Cannot define tagged union. No never exhaustiveness. Using string discriminant without literals. Saying TypeScript checks discriminant at runtime."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Discriminated unions and switch exhaustiveness: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for discriminated-unions-narrowing.",
-    "Production: validate external input before applying Discriminated unions and switch exhaustiveness; log failures with context.",
-    "60s: Discriminated unions and switch exhaustiveness — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Discriminated union = shared literal tag + variant-specific fields.",
+    "switch on tag narrows type per branch — IntelliSense knows fields.",
+    "default: const x: never = val — exhaustiveness when union grows.",
+    "60s: Tag with kind/type/status literal. Switch narrows. never in default catches missing cases. Runtime is plain JS objects. Pairs with API unknown narrowing.",
+    "Follow-up: combine with Zod discriminatedUnion or assertNever helper."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Discriminated unions and switch exhaustiveness is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Discriminated unions and switch exhaustiveness, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: type: string discriminant — no narrowing.",
+    "Weak: no default never — new variant silent bug.",
+    "Strong: 'Literal tag per variant. Switch exhaustiveness with never. Validate unknown into union at boundary.'"
   ],
   "relatedTopicIds": [
-    "typescript-11-typeof-in-instanceof-guards",
-    "typescript-11-user-defined-type-guards",
-    "typescript-11-assertion-functions"
+    "typescript-11-narrowing-at-api-boundaries",
+    "typescript-11-control-flow-analysis",
+    "typescript-03-union-types",
+    "typescript-12-distributive-conditionals"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Discriminated unions and switch exhaustiveness",
-      "note": "Compare Discriminated unions and switch exhaustiveness in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/type-narrowing-guards/discriminated-unions-narrowing"
+      "concept": "Tagged object conventions",
+      "note": "Redux actions { type, payload } are discriminated unions at runtime — TypeScript adds compile-time narrowing on switch.",
+      "futureTopicSlug": "javascript/patterns/event-emitter"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Discriminated unions and switch exhaustiveness to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/11/discriminated-unions-narrowing"
+      "concept": "Union types",
+      "note": "Discriminated unions are a refined union pattern — requires literal discriminant for control-flow analysis.",
+      "futureTopicSlug": "typescript/types/union-types"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript handbook — Discriminated unions",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html#discriminated-unions"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript handbook — never",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html#the-never-type"
+    },
+    {
+      "title": "Zod — discriminatedUnion",
+      "url": "https://zod.dev/?id=discriminated-unions"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

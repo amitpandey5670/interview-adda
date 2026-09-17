@@ -4,30 +4,42 @@
   "title": "Runtime validation: typeof guards and schema libraries",
   "moduleId": "javascript-09-structural-typing-patterns",
   "order": 2,
-  "hook": "Runtime validation: typeof guards and schema libraries shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "TypeScript disappears at runtime. Every fetch, webhook, and env var is an untyped blob until you prove its shape — typeof guards for primitives, schema libraries for nested objects.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Runtime validation: typeof guards and schema libraries is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Runtime shape validation** checks that a value actually matches what your code assumes before you use it. **typeof** and **Array.isArray** cover primitives and arrays; **in** and optional chaining help with presence; **schema libraries** (Zod, Valibot, AJV) parse nested objects with coercion rules and error paths. This is the JavaScript answer to C# model binding + DataAnnotations — except you choose where validation runs (handler edge, not compiler)."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "runtime",
-              "longForm": "Runtime validation: typeof guards and schema libraries",
-              "plainDefinition": "The central idea behind \"Runtime validation: typeof guards and schema libraries\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "type guard",
+              "longForm": "type guard",
+              "plainDefinition": "Function or check that narrows a value's type for TypeScript and protects runtime logic.",
+              "example": "function isUser(x) { return typeof x?.id === 'string'; }"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "schema",
+              "longForm": "validation schema",
+              "plainDefinition": "Declarative description of allowed shape, used to parse or reject input.",
+              "example": "const User = z.object({ id: z.string(), role: z.enum(['admin', 'member']) });"
+            },
+            {
+              "term": "parse versus safeParse",
+              "longForm": "parse vs safeParse",
+              "plainDefinition": "parse throws on failure; safeParse returns { success, data | error } for HTTP handlers.",
+              "example": "const result = UserSchema.safeParse(req.body);"
+            },
+            {
+              "term": "boundary",
+              "longForm": "trust boundary",
+              "plainDefinition": "Line where untrusted data enters — HTTP, WebSocket, localStorage, process.env.",
+              "example": "Validate once at controller; trust shape inside domain layer."
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Runtime validation: typeof guards and schema libraries beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "A missing field on a webhook payload becomes `undefined.role.toLowerCase()` and a 500 instead of a 400. Config typos in production only surface when code reads `port.toString()`. Senior teams validate **once at the edge**, map to domain types, and never re-parse deep in the stack. C# catches many issues at compile time; JS/TS teams duplicate intent: types for developers, schemas for runtime."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Runtime validation: typeof guards and schema libraries\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Interview trap: typeof null",
+          "body": "typeof null === 'object' is a famous JS bug. Senior guard: value !== null && typeof value === 'object'. Schema libraries handle this consistently."
         }
       ]
     },
@@ -53,32 +65,20 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Validate at the boundary",
           "items": [
-            {
-              "title": "Read the syntax",
-              "body": "Find where Runtime validation: typeof guards and schema libraries appears in real code — a function, type annotation, or runtime API."
-            },
-            {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
-            },
-            {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
-            },
-            {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
-            }
+            { "title": "Receive untrusted value", "body": "JSON.parse, req.body, message.payload." },
+            { "title": "Run schema or guards", "body": "Reject early with structured errors." },
+            { "title": "Map to domain model", "body": "Plain validated object or class instance." },
+            { "title": "Business logic trusts shape", "body": "No repeated typeof deep in helpers." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Runtime validation: typeof guards and schema libraries flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Validation boundary",
+            "source": "flowchart LR\n  U[Untrusted input] --> V[Schema / guards]\n  V -->|fail| E[400 + error path]\n  V -->|ok| D[Domain type]\n  D --> B[Business logic]"
           }
         }
       ]
@@ -90,36 +90,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Runtime validation: typeof guards and schema libraries",
-            "code": "// Runtime validation: typeof guards and schema libraries\nconst example = {\n  topic: 'runtime-shape-validation',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Runtime validation: typeof guards and schema libraries. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Manual typeof guards",
+            "code": "function isRecord(value) {\n  return value !== null && typeof value === 'object' && !Array.isArray(value);\n}\n\nfunction parseCreateUser(body) {\n  if (!isRecord(body)) throw new TypeError('body must be object');\n  if (typeof body.email !== 'string' || !body.email.includes('@')) {\n    throw new TypeError('email invalid');\n  }\n  return { email: body.email.trim().toLowerCase() };\n}",
+            "explanation": "Explicit guards for flat shapes. Throws TypeError — in HTTP layer map to 400 with field names."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "Zod schema at API edge",
+            "code": "// npm: zod\nimport { z } from 'zod';\n\nconst CreateUser = z.object({\n  email: z.string().email(),\n  age: z.number().int().min(13).optional()\n});\n\nexport function handleCreateUser(req, res) {\n  const parsed = CreateUser.safeParse(req.body);\n  if (!parsed.success) {\n    return res.status(400).json({ errors: parsed.error.flatten() });\n  }\n  return createUser(parsed.data);\n}",
+            "explanation": "safeParse returns discriminated result — no try/catch for expected validation failures."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "C# model validation contrast",
+            "code": "public record CreateUserDto(string Email, int? Age);\n\n[ApiController]\npublic class UsersController : ControllerBase\n{\n    [HttpPost]\n    public IActionResult Create([FromBody] CreateUserDto dto)\n    {\n        if (!ModelState.IsValid) return ValidationProblem(ModelState);\n        return Ok(_service.Create(dto));\n    }\n}",
+            "explanation": "ASP.NET binds JSON to DTO at runtime with validation attributes — analogous to Zod.parse at the JS handler."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Failure mode: trusting JSON.parse",
+            "code": "const raw = '{\"role\": 123}';\nconst user = JSON.parse(raw);\n\n// TS might say User if you cast — runtime lie\n/** @type {{ role: 'admin' | 'member' }} */\nconst typed = user;\n\ntry {\n  authorize(typed.role.toUpperCase()); // 123.toUpperCase → runtime error\n} catch (e) {\n  console.error('Should have validated role enum at boundary');\n}",
+            "explanation": "JSDoc or as-casts do not validate. Enum-like fields need runtime checks or schema.parse."
           }
         }
       ]
@@ -129,29 +129,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Runtime validation: typeof guards and schema libraries across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Runtime validation matrix",
+          "headers": ["Concern", "JavaScript", "C# / TypeScript"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Primitive check", "typeof, Number.isInteger", "Pattern matching, typeof"],
+            ["Nested object", "Zod, AJV, manual", "DataAnnotations, FluentValidation"],
+            ["When it runs", "You choose (handler)", "Model binding pipeline"],
+            ["TS compile aid", "z.infer<typeof Schema>", "N/A — types only"],
+            ["Error shape", "Custom or library flatten()", "ValidationProblemDetails"]
           ]
         }
       ]
@@ -163,7 +148,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating Runtime validation: typeof guards and schema libraries as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "Validating in every helper instead of once at boundary. Using truthy checks for numbers (0 is valid). Casting with 'as User' after JSON.parse. Returning 500 for client shape errors instead of 400 with field paths."
         }
       ]
     },
@@ -172,54 +157,39 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Runtime validation: typeof guards and schema libraries, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "Production: colocate schemas with OpenAPI or tRPC routers; version schemas when APIs evolve. Performance: AJV compiles JSON Schema once — good for high-throughput gateways; Zod ergonomics trade some speed. Security: validation is not sanitization — still escape output, still rate-limit. Pair with branded types in TS so validated output gets a distinct type via z.infer."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Tool", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Manual guards", "Tiny DTOs, zero deps", "Nested unions — error-prone"],
+            ["Zod", "DX, TS inference, forms", "Very hot paths without compile"],
+            ["AJV + JSON Schema", "OpenAPI alignment, speed", "Verbose schema authoring"],
+            ["class-validator (TS)", "Decorator style like C#", "Reflect metadata, bundle cost"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Runtime validation: typeof guards and schema libraries just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Saying 'we use TypeScript so we do not need runtime checks' for external input. Not knowing typeof null === 'object'. Cannot describe safeParse versus parse or where to validate in a layered architecture."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Runtime validation: typeof guards and schema libraries: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for runtime-shape-validation.",
-    "Production: validate external input before applying Runtime validation: typeof guards and schema libraries; log failures with context.",
-    "60s: Runtime validation: typeof guards and schema libraries — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Runtime validation proves shape after JSON.parse — TypeScript does not exist at runtime.",
+    "Validate once at trust boundaries; map to domain types inside.",
+    "typeof null is 'object' — use explicit null checks or schemas.",
+    "60s: External data needs schemas or guards. Zod safeParse for HTTP 400s. C# has model binding; JS you wire it. TS z.infer links compile and runtime.",
+    "Follow-up: how would you migrate a schema when a field becomes required?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"Runtime validation: typeof guards and schema libraries is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Runtime validation: typeof guards and schema libraries, show a 5-line example, name one pitfall and one C# difference."
+    "Casting parsed JSON with 'as' instead of parsing through a schema.",
+    "Scattering validation logic across dozens of functions.",
+    "Strong answer: boundary validation, structured 400 errors, z.infer or equivalent, never trust fetch without parse."
   ],
   "relatedTopicIds": [
     "javascript-09-duck-typing",
@@ -229,26 +199,21 @@
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Runtime validation: typeof guards and schema libraries",
-      "note": "Compare Runtime validation: typeof guards and schema libraries in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/structural-typing-patterns/runtime-shape-validation"
+      "concept": "Type predicates and z.infer",
+      "note": "function isUser(x): x is User pairs manual guards with TS narrowing; Zod infers TS types from the same schema used at runtime.",
+      "futureTopicSlug": "typescript/narrowing/type-predicates"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Runtime validation: typeof guards and schema libraries to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/9/runtime-shape-validation"
+      "language": "javascript",
+      "concept": "JSON.parse trust boundary",
+      "note": "Every JSON.parse returns any shape — same problem as C# deserializing to object without a typed DTO.",
+      "futureTopicSlug": "javascript/json/parse-boundaries"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "MDN — typeof", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/typeof" },
+    { "title": "Zod documentation", "url": "https://zod.dev/" }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

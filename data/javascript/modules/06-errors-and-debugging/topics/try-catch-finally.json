@@ -4,14 +4,14 @@
   "title": "try, catch, finally, and error propagation",
   "moduleId": "javascript-06-errors-and-debugging",
   "order": 2,
-  "hook": "try, catch, finally, and error propagation shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "try/catch/finally looks like C#, but JavaScript allows only one catch clause and no typed catch — you branch inside with instanceof. finally always runs, even when return or throw happens, and can override the return value.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "try, catch, finally, and error propagation is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**try** wraps statements that may throw. **catch (err)** runs when an exception propagates to this block — err is the thrown value. **finally** runs on all exit paths: normal completion, catch, or uncaught throw from catch. Async code needs **await inside try** to catch rejected promises; a bare async call without await escapes try/catch. There is no catch (TypeError e) syntax — emulate C# when filters with if inside catch."
         },
         {
           "type": "glossary",
@@ -19,15 +19,27 @@
           "entries": [
             {
               "term": "try",
-              "longForm": "try, catch, finally, and error propagation",
-              "plainDefinition": "The central idea behind \"try, catch, finally, and error propagation\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "longForm": "try statement",
+              "plainDefinition": "Block whose exceptions can be handled by following catch.",
+              "example": "try { risky(); } catch (e) { ... }"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "catch",
+              "longForm": "catch clause",
+              "plainDefinition": "Receives thrown value. Optional binding omitted in ES2019+ catch { }.",
+              "example": "catch (err) { if (err instanceof HttpError) ... }"
+            },
+            {
+              "term": "finally",
+              "longForm": "finally block",
+              "plainDefinition": "Always executes before try/catch completes; used for cleanup.",
+              "example": "finally { releaseLock(); }"
+            },
+            {
+              "term": "rethrow",
+              "longForm": "rethrow",
+              "plainDefinition": "throw err after logging — continues propagation.",
+              "example": "catch (err) { log(err); throw err; }"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand try, catch, finally, and error propagation beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Resource cleanup (closing files, releasing locks) belongs in finally — or use patterns that mirror C# using. Misplaced await loses errors to unhandledRejection. finally return can silently discard try return — interview favorite. Production services log in catch, wrap with cause, and rethrow or map to HTTP 500."
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"try, catch, finally, and error propagation\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "variant": "remember",
+          "title": "await in try for async",
+          "body": "try { await fetch(url); } catch (err) { ... } — not try { fetch(url); } without await."
         }
       ]
     },
@@ -53,23 +65,27 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Completion paths",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where try, catch, finally, and error propagation appears in real code — a function, type annotation, or runtime API."
+              "title": "Enter try",
+              "body": "Execute statements sequentially."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Throw occurs",
+              "body": "Skip remaining try; jump to catch if present."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "catch handles",
+              "body": "Run catch block; may return, throw new, or rethrow."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "finally runs",
+              "body": "Always before handing result to caller — even after return in try/catch."
+            },
+            {
+              "title": "Return delivery",
+              "body": "If finally returns, it wins over try/catch return — dangerous."
             }
           ]
         },
@@ -77,8 +93,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "try, catch, finally, and error propagation flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "try/catch/finally flow",
+            "source": "flowchart TD\n  A[try block] --> B{Throw?}\n  B -->|no| F[finally]\n  B -->|yes| C[catch block]\n  C --> F\n  F --> G{finally return?}\n  G -->|yes| H[finally return wins]\n  G -->|no| I[try/catch result]"
           }
         }
       ]
@@ -90,27 +106,27 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic try, catch, finally, and error propagation",
-            "code": "// try, catch, finally, and error propagation\nconst example = {\n  topic: 'try-catch-finally',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to try, catch, finally, and error propagation. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "instanceof when filter",
+            "code": "try {\n  await processPayment(order);\n} catch (err) {\n  if (err instanceof NetworkError) {\n    await retryQueue.push(order);\n    return;\n  }\n  if (err instanceof ValidationError) {\n    respond(400, err.message);\n    return;\n  }\n  throw err; // unknown — propagate\n}",
+            "explanation": "Single catch with branches emulates C# multiple catch and when filters."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "finally cleanup",
+            "code": "let lock;\ntry {\n  lock = await acquireLock(\"job-42\");\n  await runJob();\n} finally {\n  if (lock) await lock.release();\n}\n// Same idea as C# using — release even if runJob throws",
+            "explanation": "finally guarantees release on success or failure. Check lock defined — acquire may throw before assignment."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "language": "javascript",
+            "label": "finally return trap",
+            "code": "function trap() {\n  try {\n    return 1;\n  } finally {\n    return 2;\n  }\n}\nconsole.log(trap()); // 2 — finally overrides\n\nfunction safe() {\n  try {\n    return 1;\n  } finally {\n    cleanup(); // ok — no return in finally\n  }\n}",
+            "explanation": "return in finally replaces try return — avoid except deliberate tests. Interview asks this explicitly."
           }
         }
       ]
@@ -120,28 +136,37 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "try, catch, finally, and error propagation across languages",
+          "title": "Exception handling compared",
           "headers": [
-            "Aspect",
+            "Feature",
             "JavaScript",
-            "C# / TypeScript"
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
+              "Multiple catch types",
+              "One catch; instanceof inside",
+              "Ordered catch clauses"
             ],
             [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
+              "when filter",
+              "if in catch body",
+              "catch when (condition)"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
+              "finally",
+              "Same — always runs",
+              "Same"
+            ],
+            [
+              "using",
+              "Manual finally or disposable pattern",
+              "using / await using"
+            ],
+            [
+              "Async catch",
+              "await in try required",
+              "await in try same"
             ]
           ]
         }
@@ -154,44 +179,55 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating try, catch, finally, and error propagation as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "Missing await in try for promises. Empty catch that hides bugs. return in finally overriding business logic. Swallowing without logging. Assuming catch (e) types e — in TS use unknown and narrow."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "try, catch, finally, and error propagation: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for try-catch-finally.",
-    "Production: validate external input before applying try, catch, finally, and error propagation; log failures with context.",
-    "60s: try, catch, finally, and error propagation — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "One catch clause — branch with instanceof for types.",
+    "finally always runs before completion; can override return.",
+    "await inside try to catch async rejections.",
+    "Rethrow after log when error is unexpected.",
+    "60s: try/catch/finally like C# but single catch. await in try. finally return trap. instanceof when filter."
   ],
   "commonPitfalls": [
-    "Weak answer: \"try, catch, finally, and error propagation is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define try, catch, finally, and error propagation, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: \"try { asyncFn(); } catch handles it.\" Strong: \"Must await asyncFn() inside try or use .catch on the promise.\"",
+    "Weak: \"finally is optional sugar.\" Strong: \"finally runs on every path — cleanup and the return override trap.\"",
+    "Strong: \"Explain finally return 2 beating try return 1 — then say never return from finally in production.\""
   ],
   "relatedTopicIds": [
     "javascript-06-error-types-and-throwing",
     "javascript-06-unhandled-rejections",
-    "javascript-06-stack-traces-and-debugging"
+    "javascript-06-errors-vs-csharp-exceptions"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "try, catch, finally, and error propagation",
-      "note": "Foundation link to typescript track for try-catch-finally.",
-      "futureTopicSlug": "typescript/errors-and-debugging/try-catch-finally"
+      "concept": "catch clause typing",
+      "note": "TypeScript 4.4+ defaults catch to unknown — narrow with instanceof before accessing properties.",
+      "futureTopicSlug": "typescript/narrowing/catch-unknown"
+    },
+    {
+      "language": "typescript",
+      "concept": "using statement",
+      "note": "C# using disposes in finally automatically; JavaScript uses explicit finally or AbortController patterns.",
+      "futureTopicSlug": "csharp/resources/using"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — try...catch",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/try...catch"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — finally",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Statements/finally"
+    },
+    {
+      "title": "javascript.info — Try...catch",
+      "url": "https://javascript.info/try-catch"
     }
-  ]
+  ],
+  "animationHint": "flow"
 }
