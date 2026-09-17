@@ -4,119 +4,101 @@
   "title": "Function overloads and implementation signatures",
   "moduleId": "typescript-04-functions-overloads",
   "order": 3,
-  "hook": "Function overloads and implementation signatures treats functions as first-class values with lexical scope and closures. this binding rules and arrow capture semantics differ from C# delegates and lambdas.",
+  "hook": "Function overloads let you declare multiple call signatures for one implementation — callers get precise types per arity, while the body uses a wider union. Unlike C# true overloads, TypeScript emits a single JavaScript function.",
   "sections": [
     {
-      "heading": "What is Function overloads and implementation signatures?",
+      "heading": "What are function overloads?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Function overloads and implementation signatures** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Function overloads and implementation signatures treats functions as first-class values with lexical scope and closures. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Overload signatures** are multiple `function foo(x: string): number` declarations followed by one **implementation** `function foo(x: any): any`. Callers match the best overload; the implementation signature is hidden from external callers. Overloads exist only at **compile time** — emitted JS has one function. Use when **return type or arity** changes meaningfully. For simple optional params, prefer defaults or options objects instead."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            {
-              "term": "function",
-              "longForm": "Function overloads and implementation signatures",
-              "plainDefinition": "Central mechanism behind \"Function overloads and implementation signatures\" in TypeScript.",
-              "example": "See code walkthrough for runnable example."
-            },
-            {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
-            },
-            {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
-            }
+            { "term": "overload signature", "longForm": "overload signature", "plainDefinition": "Public-facing call signature without body.", "example": "function pad(n: number): string;" },
+            { "term": "implementation signature", "longForm": "implementation signature", "plainDefinition": "Single function body with compatible wider types.", "example": "function pad(x: number | string): string { ... }" },
+            { "term": "call signature overloads", "longForm": "interface overloads", "plainDefinition": "Multiple call lines in interface for callable types.", "example": "interface M { (a: string): void; (a: number): void; }" }
           ]
         }
       ]
     },
     {
-      "heading": "Why Function overloads and implementation signatures matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Function overloads and implementation signatures** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Libraries like `createElement`, `document.querySelector`, and custom factories use overloads for ergonomic APIs. C# compiles each overload to a different CLR signature with name mangling — TypeScript cannot. Interview trap: implementation signature must be compatible with all overloads — often uses `any` or union internally."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Function overloads and implementation signatures\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "When not to overload",
+          "body": "Union parameters + type guards often replace overloads with less boilerplate."
         }
       ]
     },
     {
-      "heading": "How Function overloads and implementation signatures works step by step",
+      "heading": "Overload resolution",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Writing overloads correctly",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where Function overloads and implementation signatures appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Declare overloads", "body": "One signature per call pattern — no bodies." },
+            { "title": "Single implementation", "body": "Wider param/return types covering all overloads." },
+            { "title": "Narrow inside", "body": "typeof / in checks to branch implementation logic." },
+            { "title": "Interface alternative", "body": "Overload call signatures on interface types." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Function overloads and implementation signatures flow",
-            "source": "flowchart TD\n  A[Function overloads and implementation signatures] --> B[Read / parse]\n  B --> C[Type check]\n  C --> D[Observable behavior]"
+            "title": "Overload vs emitted JS",
+            "source": "flowchart TD\n  O1[overload: string → number]\n  O2[overload: number → string]\n  IMPL[implementation: any → any]\n  EMIT[single JS function]\n  O1 -.-> IMPL\n  O2 -.-> IMPL\n  IMPL --> EMIT"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Function overloads and implementation signatures",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Core Function overloads and implementation signatures example",
-            "code": "interface Config {\n  readonly retries: number;\n  endpoint: string;\n}\n\nfunction createClient(cfg: Config) {\n  return {\n    async call(path: string) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}",
-            "explanation": "Demonstrates Function overloads and implementation signatures in a realistic API client — retries, fetch, and configuration."
+            "label": "Classic overload pattern",
+            "code": "function format(value: string): string;\nfunction format(value: number): string;\nfunction format(value: string | number): string {\n  if (typeof value === 'number') {\n    return value.toFixed(2);\n  }\n  return value.trim();\n}\n\nformat(42);      // overload 2 — return string\nformat(' hi ');  // overload 1",
+            "explanation": "Lines 1–2: public overloads. Line 3: implementation with union. Callers get precise inference per argument type."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v: unknown): v is Record<string, unknown> {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj: Record<string, unknown>, key: string): string | undefined {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
+            "label": "Arity-based overload",
+            "code": "function create(tag: string): HTMLElement;\nfunction create(tag: string, children: string): HTMLElement;\nfunction create(tag: string, children?: string): HTMLElement {\n  const el = document.createElement(tag);\n  if (children !== undefined) el.textContent = children;\n  return el;\n}",
+            "explanation": "Different return/behavior by arity — second overload requires children string."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for Function overloads and implementation signatures\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps Function overloads and implementation signatures idioms to C# — note compile-time types versus JS run-time checks."
+            "language": "typescript",
+            "label": "Interface call overloads",
+            "code": "interface Converter {\n  (input: string): number;\n  (input: number): string;\n}\n\nconst convert: Converter = (input: string | number) => {\n  return typeof input === 'string' ? Number(input) : String(input);\n} as Converter;",
+            "explanation": "Overload signatures on interface — implementation needs assertion when assigning."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — incompatible implementation",
+            "code": "// function bad(x: string): void;\n// function bad(x: number): void;\n// function bad(x: boolean): void { } // Error: not compatible with overloads",
+            "explanation": "Implementation must be assignable to all overload signatures — boolean overload breaks compatibility."
           }
         }
       ]
@@ -126,84 +108,74 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Function overloads and implementation signatures across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "C#",
-            "JavaScript emit"
-          ],
+          "title": "Overload models",
+          "headers": ["Aspect", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time",
-              "Compile + CLR",
-              "Compile only"
-            ],
-            [
-              "Type model",
-              "Structural static",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "any at boundary"
-            ]
+            ["Runtime functions", "One", "One", "Multiple CLR methods"],
+            ["Resolution", "Compile time", "N/A", "Compile time"],
+            ["Implementation bodies", "One shared", "One", "One per overload"],
+            ["Alternative", "Union + guards", "Manual checks", "params / optional"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
+        { "type": "callout", "variant": "warning", "title": "Overloading everything", "body": "Generics or discriminated unions often replace overload sprawl — easier to maintain." }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Overload resolution picks first matching overload in order — order matters. Generic overloads: function identity<T>(x: T): T. Class method overloads use same pattern. Conditional return types sometimes replace overloads (single signature, inferred return). .d.ts files for JS libs use overloads heavily (@types/node)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Overload vs alternatives",
+          "headers": ["Technique", "When", "Emit"],
+          "rows": [
+            ["Overloads", "Arity/type changes return", "1 function"],
+            ["Union param", "Simple branching", "1 function"],
+            ["Generics", "Preserve input type", "1 function"],
+            ["C# overloads", "True runtime dispatch", "N methods"]
+          ]
+        },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Function overloads and implementation signatures",
-          "body": "Treating Function overloads and implementation signatures as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "What gets you rejected",
+          "body": "Thinking TS emits multiple functions. Implementation signature visible to callers (it's not externally). Cannot explain overload ordering."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Function overloads and implementation signatures: know definition plus one runnable example.",
-    "Production: validate external input before applying Function overloads and implementation signatures; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for function-overloads.",
-    "60s: Function overloads and implementation signatures — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Overloads: multiple declare signatures + one implementation body.",
+    "Emitted JS: single function — compile-time only feature.",
+    "Implementation must satisfy all overload signatures.",
+    "60s: Overloads for call-site precision. One JS function. Narrow in body. C# has real multiple methods. Prefer unions/generics when simpler.",
+    "Follow-up: conditional types vs overloads?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses Function overloads and implementation signatures as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving function-overloads.",
-    "Strong: define Function overloads and implementation signatures, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: TS creates multiple runtime functions — it does not.",
+    "Weak: implementation signature exported to callers — hidden externally.",
+    "Strong: Order overloads carefully. Widen implementation. Use unions when overload count explodes."
   ],
   "relatedTopicIds": [
-    "typescript-04-function-type-signatures",
     "typescript-04-optional-default-rest-params",
-    "typescript-04-this-parameter-types"
+    "typescript-04-function-type-signatures",
+    "typescript-12-conditional-types-basics",
+    "typescript-04-functions-vs-csharp"
   ],
   "jsTsCorrelations": [
-    {
-      "language": "javascript",
-      "concept": "Function overloads and implementation signatures",
-      "note": "Function overloads and implementation signatures in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/functions-overloads/function-overloads"
-    }
+    { "language": "javascript", "concept": "single function object", "note": "JS has no overload concept — manual typeof checks inside one function mirror TS implementation bodies.", "futureTopicSlug": "javascript/functions/function-basics" },
+    { "language": "typescript", "concept": "conditional return types", "note": "Modern alternative to overloads for some patterns — single signature with inferred return.", "futureTopicSlug": "typescript/conditional-mapped-types/conditional-types-basics" }
   ],
   "officialSources": [
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
-    }
+    { "title": "TypeScript — Function Overloads", "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html#function-overloads" }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "rabbitmq"
+  "animationHint": "flow"
 }

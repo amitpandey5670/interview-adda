@@ -23,7 +23,7 @@ function snippet(language, label, code, explanation) {
 
 function buildVarLetConstTdz(language, ctx) {
   if (language !== 'javascript') return null;
-  const { topic, module, relatedTopicIds } = ctx;
+  const { relatedTopicIds } = ctx;
   return {
     hook:
       'let and const are block-scoped with a temporal dead zone — accessing them before the declaration throws ReferenceError. var is function-scoped, hoisted to undefined, and creates global properties on window — the classic for-loop closure bug.',

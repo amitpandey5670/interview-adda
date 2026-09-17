@@ -4,119 +4,101 @@
   "title": "Higher-order function types and callbacks",
   "moduleId": "typescript-04-functions-overloads",
   "order": 5,
-  "hook": "Higher-order function types and callbacks treats functions as first-class values with lexical scope and closures. this binding rules and arrow capture semantics differ from C# delegates and lambdas.",
+  "hook": "A higher-order function takes or returns other functions — map, middleware, and debounce are everyday examples. Typing the callback precisely is what separates safe TypeScript from any-sprinkled JavaScript.",
   "sections": [
     {
-      "heading": "What is Higher-order function types and callbacks?",
+      "heading": "What is a higher-order function?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Higher-order function types and callbacks** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Higher-order function types and callbacks treats functions as first-class values with lexical scope and closures. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "A **higher-order function (HOF)** accepts a function as an argument or returns one. TypeScript types the **callback signature** explicitly: `items.map((x: number) => x * 2)`. **Generic HOFs** preserve input/output relationships: `function identity<T>(x: T): T`. Callback types should use **strictFunctionTypes**-safe signatures. At runtime HOFs are plain JS — no wrapper enforces the callback contract."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            {
-              "term": "higher",
-              "longForm": "Higher-order function types and callbacks",
-              "plainDefinition": "Central mechanism behind \"Higher-order function types and callbacks\" in TypeScript.",
-              "example": "See code walkthrough for runnable example."
-            },
-            {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
-            },
-            {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
-            }
+            { "term": "higher-order function", "longForm": "higher-order function (HOF)", "plainDefinition": "Function that operates on other functions.", "example": "array.map, setTimeout, express middleware" },
+            { "term": "callback", "longForm": "callback function", "plainDefinition": "Function passed to HOF for later invocation.", "example": "(err, data) => void" },
+            { "term": "generic HOF", "longForm": "generic higher-order function", "plainDefinition": "Type parameter flows from input to output.", "example": "function map<T, U>(arr: T[], fn: (t: T) => U): U[]" }
           ]
         }
       ]
     },
     {
-      "heading": "Why Higher-order function types and callbacks matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Higher-order function types and callbacks** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Express `RequestHandler`, React `setState` updater, and `Array.prototype.map` all rely on HOF typing. Loose callbacks (`fn: Function`) hide bugs until runtime. C# uses `Func<>` and `Action<>` delegates — similar intent, nominal delegate types. Senior interviews ask you to implement typed `map` or `debounce` with generics."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Higher-order function types and callbacks\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Infer when possible",
+          "body": "Let generics infer T from array element — avoid redundant type args at call site."
         }
       ]
     },
     {
-      "heading": "How Higher-order function types and callbacks works step by step",
+      "heading": "Typing HOFs step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Patterns for typed callbacks",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where Higher-order function types and callbacks appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Inline callback type", "body": "fn: (item: T) => R in HOF signature." },
+            { "title": "Named alias", "body": "type Predicate<T> = (item: T) => boolean;" },
+            { "title": "Generic preservation", "body": "Return type depends on callback return via type param." },
+            { "title": "this: void on callbacks", "body": "Prevent accidental this in detached handlers." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Higher-order function types and callbacks flow",
-            "source": "flowchart TD\n  A[Higher-order function types and callbacks] --> B[Read / parse]\n  B --> C[Type check]\n  C --> D[Observable behavior]"
+            "title": "Generic map flow",
+            "source": "flowchart LR\n  ARR[\"T[]\"] --> MAP[\"map(fn: T => U)\"]\n  MAP --> OUT[\"U[]\"]\n  FN[callback] --> MAP"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Higher-order function types and callbacks",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Core Higher-order function types and callbacks example",
-            "code": "interface Config {\n  readonly retries: number;\n  endpoint: string;\n}\n\nfunction createClient(cfg: Config) {\n  return {\n    async call(path: string) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}",
-            "explanation": "Demonstrates Higher-order function types and callbacks in a realistic API client — retries, fetch, and configuration."
+            "label": "Typed map implementation",
+            "code": "function map<T, U>(items: readonly T[], fn: (item: T, index: number) => U): U[] {\n  const result: U[] = [];\n  for (let i = 0; i < items.length; i++) {\n    result.push(fn(items[i], i));\n  }\n  return result;\n}\n\nconst lengths = map(['a', 'bb'], (s) => s.length); // number[]",
+            "explanation": "Line 1: T from array, U from callback return. Line 8: inference connects string → number without explicit type args."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v: unknown): v is Record<string, unknown> {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj: Record<string, unknown>, key: string): string | undefined {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
+            "label": "Middleware HOF (Express-style)",
+            "code": "type Next = () => void;\ntype Request = { path: string };\ntype Response = { status: (code: number) => Response };\ntype Middleware = (req: Request, res: Response, next: Next) => void;\n\nfunction compose(...middleware: Middleware[]): Middleware {\n  return (req, res, next) => {\n    let i = 0;\n    const run = () => middleware[i++]?.(req, res, run) ?? next();\n    run();\n  };\n}",
+            "explanation": "Lines 1–4: named callback types. compose returns Middleware — HOF returning function."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for Higher-order function types and callbacks\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps Higher-order function types and callbacks idioms to C# — note compile-time types versus JS run-time checks."
+            "language": "typescript",
+            "label": "debounce with typed callback",
+            "code": "function debounce<T extends (...args: never[]) => void>(\n  fn: T,\n  ms: number\n): (...args: Parameters<T>) => void {\n  let timer: ReturnType<typeof setTimeout>;\n  return (...args) => {\n    clearTimeout(timer);\n    timer = setTimeout(() => fn(...args), ms);\n  };\n}\n\nconst search = debounce((q: string) => console.log(q), 300);",
+            "explanation": "Parameters<T> utility extracts callback args — returned function preserves same arity and types."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — untyped callback",
+            "code": "function forEach(arr: unknown[], cb: Function) {\n  arr.forEach(cb); // cb could be anything\n}\n\nforEach([1, 2, 3], (x: string) => x.toUpperCase()); // compiles, breaks",
+            "explanation": "Function type disables param checking — use generic or (item: unknown) => void with narrowing."
           }
         }
       ]
@@ -126,84 +108,75 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Higher-order function types and callbacks across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "C#",
-            "JavaScript emit"
-          ],
+          "title": "HOF typing",
+          "headers": ["Pattern", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time",
-              "Compile + CLR",
-              "Compile only"
-            ],
-            [
-              "Type model",
-              "Structural static",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "any at boundary"
-            ]
+            ["Array map", "Generic inference", "Dynamic", "Select with Func<T,R>"],
+            ["Delegate/HOF param", "(t: T) => R", "any function", "Func<T, TResult>"],
+            ["Return function", "Typed closure", "Closure", "Func returning Func"],
+            ["Runtime enforcement", "None", "None", "None"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
+        { "type": "callout", "variant": "warning", "title": "Callback typed as Function", "body": "Always use precise signature or generic constrained to function type." }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Parameters<T> and ReturnType<T> extract callback shape for wrappers. Overload HOFs for optional callback. Contravariance: Predicate<Animal> not assignable to Predicate<Dog> under strictFunctionTypes. Async HOFs: Promise<T> return. Currying: typed as nested function types or overload chain."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Utility types for HOFs",
+          "headers": ["Utility", "Use"],
+          "rows": [
+            ["Parameters<T>", "Extract callback args tuple"],
+            ["ReturnType<T>", "Extract return type"],
+            ["Awaited<T>", "Unwrap Promise in async HOF"],
+            ["ThisParameterType<T>", "Extract this type from method"]
+          ]
+        },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Higher-order function types and callbacks",
-          "body": "Treating Higher-order function types and callbacks as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "What gets you rejected",
+          "body": "Cannot implement generic map. Using Function type. Not knowing Parameters/ReturnType for wrappers."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Higher-order function types and callbacks: know definition plus one runnable example.",
-    "Production: validate external input before applying Higher-order function types and callbacks; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for higher-order-function-types.",
-    "60s: Higher-order function types and callbacks — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "HOFs take/return functions — type callbacks precisely.",
+    "Generics preserve T → U through map/filter pipelines.",
+    "Parameters<T> and ReturnType<T> for debounce/throttle wrappers.",
+    "60s: Type callbacks not Function. Generic HOF for inference. strictFunctionTypes on params. C# Func parallel. Runtime is plain JS.",
+    "Follow-up: implement typed curry?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses Higher-order function types and callbacks as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving higher-order-function-types.",
-    "Strong: define Higher-order function types and callbacks, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: cb: Function — disables all checking.",
+    "Weak: explicit type args when inference works.",
+    "Strong: Generic HOF with (item: T) => U. Parameters/ReturnType for wrappers. Named callback aliases."
   ],
   "relatedTopicIds": [
     "typescript-04-function-type-signatures",
-    "typescript-04-optional-default-rest-params",
-    "typescript-04-function-overloads"
+    "typescript-10-parameters-returntype",
+    "typescript-09-generic-functions-and-classes",
+    "typescript-08-typed-array-methods"
   ],
   "jsTsCorrelations": [
-    {
-      "language": "javascript",
-      "concept": "Higher-order function types and callbacks",
-      "note": "Higher-order function types and callbacks in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/functions-overloads/higher-order-function-types"
-    }
+    { "language": "javascript", "concept": "callbacks and closures", "note": "JS HOFs are untyped — TS adds callback contracts at compile time only.", "futureTopicSlug": "javascript/functions/callbacks" },
+    { "language": "typescript", "concept": "Parameters utility", "note": "Parameters<T> extracts function arg types — essential for typed debounce/partial wrappers.", "futureTopicSlug": "typescript/utility-types/parameters-returntype" }
   ],
   "officialSources": [
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
-    }
+    { "title": "TypeScript — More on Functions", "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html" },
+    { "title": "TypeScript — Parameters utility", "url": "https://www.typescriptlang.org/docs/handbook/utility-types.html#parameterstype-t" }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "redis-cache"
+  "animationHint": "flow"
 }

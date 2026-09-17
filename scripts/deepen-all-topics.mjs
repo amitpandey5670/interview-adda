@@ -380,7 +380,7 @@ function themeComparison(theme, topic, language) {
   };
 }
 
-function themeOfficialSources(theme, language, slug) {
+function themeOfficialSources(theme, language, _slug) {
   const mdn = [
     { title: 'MDN JavaScript reference', url: 'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference' },
     { title: 'javascript.info', url: 'https://javascript.info/' },
@@ -594,7 +594,7 @@ function summarizeHook(hook) {
   return first.length > 180 ? `${first.slice(0, 177)}...` : first;
 }
 
-function fixMindmap(mindmap, moduleDir, language) {
+function fixMindmap(mindmap, moduleDir, _language) {
   let changed = false;
   if (!mindmap.conceptCards) return false;
 
@@ -630,7 +630,7 @@ function fixMindmap(mindmap, moduleDir, language) {
   return changed;
 }
 
-function buildInterviewQuestion(topic, language, theme) {
+function buildInterviewQuestion(topic, language, _theme) {
   const templates = [
     `You see a production bug involving ${topic.title} — walk through how you would isolate root cause in DevTools or logs.`,
     `Compare ${topic.title} in ${language} versus C#: what mental model transfers and what does not?`,

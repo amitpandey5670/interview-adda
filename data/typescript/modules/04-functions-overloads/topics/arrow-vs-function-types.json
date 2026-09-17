@@ -4,119 +4,101 @@
   "title": "Arrow functions versus function declarations in types",
   "moduleId": "typescript-04-functions-overloads",
   "order": 6,
-  "hook": "Arrow functions versus function declarations in types treats functions as first-class values with lexical scope and closures. this binding rules and arrow capture semantics differ from C# delegates and lambdas.",
+  "hook": "Arrow functions and function declarations compile to similar JavaScript, but they differ in this binding, hoisting, and what TypeScript allows in type positions — a common source of callback bugs and interview questions.",
   "sections": [
     {
-      "heading": "What is Arrow functions versus function declarations in types?",
+      "heading": "Arrow vs function declaration",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Arrow functions versus function declarations in types** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Arrow functions versus function declarations in types treats functions as first-class values with lexical scope and closures. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Function declarations** are hoisted and have their own **dynamic this**. **Arrow functions** (`=>`) capture **lexical this** from the enclosing scope and cannot be used as constructors. In **type positions**, both write as `(x: T) => R` — arrow syntax is required in types (no `function` keyword in type aliases). **Generator** and **async** variants follow the same runtime rules as JavaScript."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            {
-              "term": "arrow",
-              "longForm": "Arrow functions versus function declarations in types",
-              "plainDefinition": "Central mechanism behind \"Arrow functions versus function declarations in types\" in TypeScript.",
-              "example": "See code walkthrough for runnable example."
-            },
-            {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
-            },
-            {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
-            }
+            { "term": "arrow function", "longForm": "arrow function (=>)", "plainDefinition": "Concise syntax with lexical this — no own this binding.", "example": "const add = (a: number, b: number) => a + b" },
+            { "term": "function declaration", "longForm": "function declaration", "plainDefinition": "Hoisted function with dynamic this and own arguments object in non-strict legacy.", "example": "function add(a: number, b: number) { return a + b; }" },
+            { "term": "lexical this", "longForm": "lexical this", "plainDefinition": "this from surrounding scope — arrow functions use this.", "example": "class C { f = () => this; }" }
           ]
         }
       ]
     },
     {
-      "heading": "Why Arrow functions versus function declarations in types matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Arrow functions versus function declarations in types** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "React class components needed arrow handlers to preserve this; hooks eliminated many cases. `Array.prototype.map` callbacks rarely need this — arrows are fine. Object methods should use method shorthand for correct this prototype sharing. C# lambdas capture variables like JS arrows but have no this keyword."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Arrow functions versus function declarations in types\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Type aliases always use arrow syntax",
+          "body": "type Fn = (x: number) => string — never type Fn = function(x: number): string"
         }
       ]
     },
     {
-      "heading": "How Arrow functions versus function declarations in types works step by step",
+      "heading": "When to use which",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Decision guide",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where Arrow functions versus function declarations in types appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Callbacks / HOFs", "body": "Arrow — no this confusion." },
+            { "title": "Class methods on prototype", "body": "Method shorthand — shared on prototype." },
+            { "title": "Class field handlers", "body": "Arrow field — lexical this for event handlers." },
+            { "title": "Generators / constructors", "body": "function* or function — arrows cannot be constructors." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Arrow functions versus function declarations in types flow",
-            "source": "flowchart TD\n  A[Arrow functions versus function declarations in types] --> B[Read / parse]\n  B --> C[Type check]\n  C --> D[Observable behavior]"
+            "title": "this binding comparison",
+            "source": "flowchart TD\n  ARROW[arrow function] --> LEX[lexical this]\n  DECL[function declaration] --> DYN[dynamic this at call site]\n  METHOD[method shorthand] --> DYN"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Arrow functions versus function declarations in types",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Core Arrow functions versus function declarations in types example",
-            "code": "interface Config {\n  readonly retries: number;\n  endpoint: string;\n}\n\nfunction createClient(cfg: Config) {\n  return {\n    async call(path: string) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}",
-            "explanation": "Demonstrates Arrow functions versus function declarations in types in a realistic API client — retries, fetch, and configuration."
+            "label": "Type position — arrow only",
+            "code": "type BinaryOp = (a: number, b: number) => number;\n\nconst add: BinaryOp = (a, b) => a + b;\nconst sub: BinaryOp = function (a, b) { return a - b; }; // OK — value can be either",
+            "explanation": "Line 1: type alias requires => syntax. Line 4: implementation can be function declaration — assignable if shape matches."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v: unknown): v is Record<string, unknown> {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj: Record<string, unknown>, key: string): string | undefined {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
+            "label": "Class — method vs arrow field",
+            "code": "class Timer {\n  private ms = 1000;\n\n  startMethod() {\n    setTimeout(function () {\n      console.log(this.ms); // Error: this is void/any\n    }, this.ms);\n  }\n\n  startArrow() {\n    setTimeout(() => {\n      console.log(this.ms); // OK — lexical this is Timer\n    }, this.ms);\n  }\n}",
+            "explanation": "Line 5: function callback loses Timer this. Line 11: arrow captures Timer instance."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for Arrow functions versus function declarations in types\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps Arrow functions versus function declarations in types idioms to C# — note compile-time types versus JS run-time checks."
+            "language": "typescript",
+            "label": "Concise returns and blocks",
+            "code": "const double = (n: number) => n * 2;\n\nconst parse = (raw: string): number | null => {\n  const n = Number(raw);\n  return Number.isNaN(n) ? null : n;\n};",
+            "explanation": "Line 1: expression body — implicit return. Line 3: block body needs explicit return and optional return type annotation."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — arrow as constructor",
+            "code": "const Person = (name: string) => {\n  this.name = name; // Error: arrow cannot have this param / constructor\n};\n// new Person('Ada'); // not a constructor",
+            "explanation": "Arrows cannot be called with new — use class or function declaration for constructors."
           }
         }
       ]
@@ -126,84 +108,74 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Arrow functions versus function declarations in types across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "C#",
-            "JavaScript emit"
-          ],
+          "title": "Function forms",
+          "headers": ["Feature", "Arrow", "function decl", "C# lambda"],
           "rows": [
-            [
-              "When checked",
-              "Compile time",
-              "Compile + CLR",
-              "Compile only"
-            ],
-            [
-              "Type model",
-              "Structural static",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "any at boundary"
-            ]
+            ["this", "Lexical", "Dynamic", "No this — captures locals"],
+            ["hoisting", "No", "Yes", "N/A"],
+            ["constructor", "No", "Yes", "N/A"],
+            ["Type syntax", "=> required", "=> in types only", "() =>"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
+        { "type": "callout", "variant": "warning", "title": "Arrow methods on prototype", "body": "class { m = () => {} } creates per-instance function — memory cost vs shared method." }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Arrow functions lack arguments object (use rest). Cannot declare this parameter on arrows. Async arrows inherit async function semantics. In strict mode, nested function declarations are block-scoped (ES2015). Performance: arrow vs function negligible — choose for semantics. React useCallback returns memoized function — still mind deps array."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Memory and prototype",
+          "headers": ["Style", "Prototype", "Per-instance"],
+          "rows": [
+            ["method() {}", "Shared", "No"],
+            ["field = () => {}", "No", "Yes — new fn each instance"],
+            ["bind in ctor", "No", "Yes — bound fn each instance"]
+          ]
+        },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Arrow functions versus function declarations in types",
-          "body": "Treating Arrow functions versus function declarations in types as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "What gets you rejected",
+          "body": "Using function keyword in type alias. Not knowing arrow lexical this. Creating arrow per instance without acknowledging memory tradeoff."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Arrow functions versus function declarations in types: know definition plus one runnable example.",
-    "Production: validate external input before applying Arrow functions versus function declarations in types; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for arrow-vs-function-types.",
-    "60s: Arrow functions versus function declarations in types — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Type aliases use => syntax; implementations can be arrow or function.",
+    "Arrows: lexical this. function: dynamic this.",
+    "Arrows cannot be constructors or have this parameter.",
+    "60s: Arrows for callbacks preserving this. Methods on prototype for shared behavior. Types always arrow syntax. C# lambdas capture locals not this.",
+    "Follow-up: per-instance arrow memory cost?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses Arrow functions versus function declarations in types as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving arrow-vs-function-types.",
-    "Strong: define Arrow functions versus function declarations in types, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: function keyword in type position — use =>.",
+    "Weak: setTimeout with function callback in class — loses this.",
+    "Strong: Arrow for HOF callbacks. Method shorthand on prototype. Arrow class fields when this needed."
   ],
   "relatedTopicIds": [
+    "typescript-04-this-parameter-types",
     "typescript-04-function-type-signatures",
-    "typescript-04-optional-default-rest-params",
-    "typescript-04-function-overloads"
+    "typescript-05-classes-and-access-modifiers",
+    "typescript-05-ts-oop-vs-js-csharp"
   ],
   "jsTsCorrelations": [
-    {
-      "language": "javascript",
-      "concept": "Arrow functions versus function declarations in types",
-      "note": "Arrow functions versus function declarations in types in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/functions-overloads/arrow-vs-function-types"
-    }
+    { "language": "javascript", "concept": "arrow functions ES2015", "note": "Arrows are runtime syntax — TS adds this-safety checks in class callbacks.", "futureTopicSlug": "javascript/functions/arrow-functions" },
+    { "language": "typescript", "concept": "this parameter", "note": "Only non-arrow functions can declare this parameter for dynamic this typing.", "futureTopicSlug": "typescript/functions/this-parameter-types" }
   ],
   "officialSources": [
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
-    }
+    { "title": "TypeScript — Arrow Functions", "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html#arrow-functions" },
+    { "title": "MDN — Arrow functions", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Arrow_functions" }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "compare"
 }
