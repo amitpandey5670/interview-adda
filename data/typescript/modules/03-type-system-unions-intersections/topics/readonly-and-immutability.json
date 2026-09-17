@@ -4,14 +4,14 @@
   "title": "readonly, Readonly<T>, and immutability flags",
   "moduleId": "typescript-03-type-system-unions-intersections",
   "order": 6,
-  "hook": "The readonly keyword tells TypeScript — and your teammates — that a property or array should not be mutated after creation. It is a compile-time promise: JavaScript still allows mutation unless you copy defensively.",
+  "hook": "The readonly keyword tells TypeScript that a property or array should not be mutated after creation — a compile-time promise, not a runtime lock.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**readonly** marks properties, array types, and tuple elements as not assignable after initialization. The utility type **`Readonly<T>`** shallowly freezes every property on an object type. **`readonly` arrays** (`readonly string[]` or `ReadonlyArray<string>`) disallow `push`, `pop`, and index assignment. Immutability in TypeScript is **enforced at compile time only** — at run time the object is a normal mutable JavaScript object. C# offers stronger guarantees with `init` accessors and immutable collections, but `readonly` in TypeScript is still invaluable for React props, reducer state, and public API contracts."
+          "text": "**readonly** marks properties and arrays as not assignable after initialization. **`Readonly<T>`** shallowly freezes every property. **`readonly` arrays** disallow push/pop. Immutability is **compile-time only** — JavaScript objects stay mutable unless you copy or freeze. C# offers stronger run-time contracts with init accessors and immutable collections."
         },
         {
           "type": "glossary",
@@ -20,20 +20,20 @@
             {
               "term": "readonly",
               "longForm": "readonly modifier",
-              "plainDefinition": "A property modifier preventing reassignment after the object is constructed. Does not make nested objects deeply immutable.",
-              "example": "`readonly id: string` — cannot do `obj.id = \"x\"`."
+              "plainDefinition": "Prevents reassignment after construction. Shallow only.",
+              "example": "`readonly id: string`"
             },
             {
               "term": "Readonly<T>",
               "longForm": "Readonly<T> utility type",
-              "plainDefinition": "Maps every property of T to readonly. Shallow — nested objects remain mutable unless separately wrapped.",
+              "plainDefinition": "Maps every property of T to readonly.",
               "example": "`type UserRO = Readonly<User>`"
             },
             {
               "term": "shallow immutability",
               "longForm": "shallow immutability",
-              "plainDefinition": "Only the top-level properties are readonly. Nested objects can still be mutated unless typed readonly recursively.",
-              "example": "`Readonly<{ inner: { x: number } }>` — `inner.x` can still change."
+              "plainDefinition": "Top-level readonly; nested objects may still mutate.",
+              "example": "Readonly<{ inner: { x: number } }> — inner.x can change."
             }
           ]
         }
@@ -44,13 +44,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "React and Angular benefit from readonly props and inputs — accidental mutation causes subtle re-render bugs. Reducers should treat state as immutable: return new objects instead of mutating. Readonly types document intent better than comments. Assignability rules favor readonly consumers — you can pass a mutable array to a `readonly string[]` parameter, but not the reverse (see assignability topic)."
+          "text": "React/Angular benefit from readonly props. Reducers should return new state. Mutable arrays assign to readonly parameters, not reverse."
         },
         {
           "type": "callout",
           "variant": "remember",
           "title": "Compile-time only",
-          "body": "`readonly` emits nothing to JavaScript. Use `Object.freeze` for shallow run-time protection, or copy-on-write patterns for real immutability. Deep immutability needs recursive types or libraries like Immer."
+          "body": "readonly emits nothing. Use Object.freeze or Immer for real immutability."
         }
       ]
     },
@@ -62,20 +62,20 @@
           "title": "Applying readonly",
           "items": [
             {
-              "title": "readonly on properties",
-              "body": "Interface or class field: `readonly createdAt: Date` — assignable in constructor or initializer only."
+              "title": "readonly properties",
+              "body": "Interface or class fields."
             },
             {
               "title": "readonly arrays",
-              "body": "`readonly number[]` removes mutating methods from the type checker."
+              "body": "`readonly number[]` — no mutating methods."
             },
             {
-              "title": "Readonly<T> utility",
-              "body": "Wrap existing types: `type ConfigRO = Readonly<Config>` for function parameters."
+              "title": "Readonly<T>",
+              "body": "Wrap types for parameters."
             },
             {
-              "title": "as const for literals",
-              "body": "Freezes literal values and makes tuples readonly — pairs with widening topic."
+              "title": "as const",
+              "body": "Freezes literal tuples — pairs with widening topic."
             }
           ]
         },
@@ -84,7 +84,7 @@
           "diagram": {
             "type": "mermaid",
             "title": "Shallow vs deep readonly",
-            "source": "flowchart TB\n  ROOT[\"Readonly<User>\"] --> P1[\"name: readonly string ✓\"]\n  ROOT --> P2[\"profile: object\"]\n  P2 --> NEST[\"profile.bio mutable ✗ unless nested readonly\"]"
+            "source": "flowchart TB\n  ROOT[\"Readonly<User>\"] --> P1[\"top-level readonly\"]\n  ROOT --> P2[\"nested still mutable\"]"
           }
         }
       ]
@@ -96,18 +96,18 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "readonly properties on interface",
-            "code": "interface AuditEntry {\n  readonly id: string;\n  readonly timestamp: Date;\n  message: string;\n}\n\nconst entry: AuditEntry = {\n  id: \"a-1\",\n  timestamp: new Date(),\n  message: \"login\",\n};\n\n// entry.id = \"a-2\";     // Error: cannot assign to readonly\nentry.message = \"logout\"; // OK",
-            "explanation": "Lines 1–5: `readonly` on `id` and `timestamp` — set once at creation. Line 14: non-readonly `message` remains mutable. Class constructors can assign readonly fields during construction."
+            "label": "readonly properties",
+            "code": "interface AuditEntry {\n  readonly id: string;\n  readonly timestamp: Date;\n  message: string;\n}\nconst entry: AuditEntry = { id: \"a-1\", timestamp: new Date(), message: \"login\" };\n// entry.id = \"a-2\"; // Error\nentry.message = \"logout\"; // OK",
+            "explanation": "readonly fields cannot reassign. Non-readonly message remains mutable."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "readonly arrays and Readonly<T>",
-            "code": "function sum(nums: readonly number[]): number {\n  // nums.push(1); // Error: push does not exist on readonly array\n  return nums.reduce((a, b) => a + b, 0);\n}\n\ntype Point = { x: number; y: number };\nfunction printPoint(p: Readonly<Point>): void {\n  console.log(p.x, p.y);\n}\n\nconst coords: number[] = [1, 2, 3];\nsum(coords); // mutable array assignable to readonly",
-            "explanation": "Line 1: readonly parameter accepts mutable arrays at call site. Line 2: mutating methods are a compile error. Lines 6–8: `Readonly<Point>` prevents reassigning `x`/`y` on the parameter. Line 11: covariance — mutable source, readonly target."
+            "label": "readonly arrays",
+            "code": "function sum(nums: readonly number[]): number {\n  return nums.reduce((a, b) => a + b, 0);\n}\nconst coords: number[] = [1, 2, 3];\nsum(coords); // mutable → readonly OK",
+            "explanation": "readonly parameter accepts mutable array at call site."
           }
         },
         {
@@ -115,17 +115,17 @@
           "snippet": {
             "language": "typescript",
             "label": "as const readonly tuple",
-            "code": "const DIRECTIONS = [\"north\", \"east\", \"south\", \"west\"] as const;\n// type: readonly [\"north\", \"east\", \"south\", \"west\"]\n\ntype Direction = typeof DIRECTIONS[number];\n// \"north\" | \"east\" | \"south\" | \"west\"\n\nfunction go(dir: Direction): void {\n  console.log(dir);\n}",
-            "explanation": "Line 1: `as const` makes the array a readonly tuple of literals. Line 4: indexing yields a union of directions, not `string`. Immutability and literal preservation combine."
+            "code": "const DIRECTIONS = [\"north\", \"east\", \"south\", \"west\"] as const;\ntype Direction = typeof DIRECTIONS[number];\n// \"north\" | \"east\" | \"south\" | \"west\"",
+            "explanation": "as const produces readonly literal tuple and direction union."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Shallow readonly trap — nested mutation still allowed",
-            "code": "type State = Readonly<{ user: { name: string } }>;\n\nconst state: State = { user: { name: \"Ada\" } };\n// state.user = { name: \"Bob\" }; // Error: readonly property\nstate.user.name = \"Bob\";         // OK at compile time — nested not readonly!\n\n// Deep immutability needs recursive Readonly or a library",
-            "explanation": "Line 5: cannot replace the `user` reference. Line 6: nested `name` is still mutable — classic shallow readonly gotcha. Production code uses Immer or deep mapped types for true nested immutability."
+            "label": "Shallow readonly trap",
+            "code": "type State = Readonly<{ user: { name: string } }>;\nconst state: State = { user: { name: \"Ada\" } };\nstate.user.name = \"Bob\"; // OK — nested not readonly",
+            "explanation": "Cannot replace user reference but can mutate nested name."
           }
         }
       ]
@@ -145,27 +145,21 @@
           "rows": [
             [
               "Compile-time flag",
-              "`readonly`, `Readonly<T>`",
-              "None (TypeScript only)",
-              "`readonly` fields, `init`"
+              "readonly, Readonly<T>",
+              "None",
+              "readonly, init"
             ],
             [
               "Run-time enforcement",
               "None by default",
-              "`Object.freeze` (shallow)",
-              "Immutable collections package"
+              "Object.freeze",
+              "Immutable collections"
             ],
             [
-              "Array immutability",
-              "`readonly T[]`",
+              "Array",
+              "readonly T[]",
               "No typed arrays",
-              "`ImmutableArray<T>` / records"
-            ],
-            [
-              "Assignability",
-              "Mutable → readonly OK",
-              "N/A",
-              "Similar for readonly collections"
+              "ImmutableArray<T>"
             ]
           ]
         }
@@ -178,7 +172,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Assuming readonly means deep immutability. Expecting run-time protection without Object.freeze or copy patterns. Trying to pass `readonly T[]` where `T[]` is required — reverse assignability fails."
+          "body": "Assuming deep immutability. Expecting runtime protection. Passing readonly array where mutable T[] required."
         }
       ]
     },
@@ -187,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "`Readonly<T>` is shallow; `ReadonlyDeep` patterns use recursive conditional mapped types (module 12). **Mutable vs immutable variance** affects function parameters and React `useState` setters. `as const` produces `readonly` deeply on literals but not arbitrary objects. For public SDK types, export `Readonly<Config>` from factories to prevent consumer mutation. C# `record` with `with` expressions provides value-copy semantics TypeScript lacks natively."
+          "text": "Deep immutability needs recursive mapped types or Immer. C# record with expressions provides copy semantics TS lacks natively."
         },
         {
           "type": "comparisonTable",
-          "title": "Tradeoffs at senior level",
+          "title": "Tradeoffs",
           "headers": [
             "Technique",
             "When",
@@ -200,46 +194,36 @@
           "rows": [
             [
               "readonly props",
-              "React/Angular inputs",
+              "Component inputs",
               "Shallow only"
             ],
             [
-              "Readonly<T> param",
-              "Defensive public APIs",
-              "Nested mutation still possible"
-            ],
-            [
-              "as const",
-              "Literal config tables",
-              "Consumers cannot push/pop"
-            ],
-            [
-              "Immer / structural sharing",
-              "Complex reducer state",
-              "Bundle size, learning curve"
+              "Immer",
+              "Reducer state",
+              "Bundle size"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What gets you rejected in interviews",
-          "body": "Claiming readonly enforces run-time immutability. Not knowing shallow vs deep. Reversing readonly assignability rules. Unable to contrast with C# init-only setters."
+          "title": "What gets you rejected",
+          "body": "Claiming readonly enforces runtime immutability. Not knowing shallow vs deep."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "readonly is compile-time only — JavaScript objects stay mutable at runtime.",
-    "Readonly<T> is shallow — nested properties need separate readonly typing.",
-    "Mutable arrays assign to readonly arrays, not vice versa.",
-    "as const produces readonly literal tuples — pairs with union exhaustiveness.",
-    "60s: readonly blocks reassignment in the type checker. Shallow by default. Use Immer or deep types for nested safety. C# init/records are stronger at runtime semantics."
+    "readonly is compile-time only.",
+    "Readonly<T> is shallow.",
+    "Mutable → readonly OK, not reverse.",
+    "as const produces readonly literal tuples.",
+    "60s: Compile-time shallow flag. Immer for nested. C# init/records stronger at runtime."
   ],
   "commonPitfalls": [
-    "Expecting deep immutability from Readonly<T> alone.",
-    "Passing readonly array to a function expecting mutable T[].",
-    "Strong answer: 'Compile-time flag. Shallow unless recursive. Covariant to readonly. Pair with as const for literals.'"
+    "Expecting deep immutability from Readonly<T>.",
+    "Passing readonly array to mutable parameter.",
+    "Strong answer: 'Shallow compile-time. Covariant to readonly. Pair with as const.'"
   ],
   "relatedTopicIds": [
     "typescript-03-intersection-types",
@@ -251,19 +235,19 @@
     {
       "language": "javascript",
       "concept": "Object.freeze",
-      "note": "`Object.freeze` provides shallow run-time immutability. TypeScript readonly is compile-time only and does not call freeze.",
+      "note": "Shallow runtime immutability; readonly is compile-time only.",
       "futureTopicSlug": "javascript/objects/freeze-seal"
     },
     {
       "language": "typescript",
       "concept": "init and immutable records",
-      "note": "C# `init` accessors and `ImmutableList<T>` enforce stronger contracts. TypeScript relies on discipline plus optional libraries.",
+      "note": "C# stronger contracts; TS relies on discipline plus libraries.",
       "futureTopicSlug": "csharp/collections/frozen-and-immutable"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook — The ReadonlyArray Type",
+      "title": "TypeScript handbook — ReadonlyArray",
       "url": "https://www.typescriptlang.org/docs/handbook/2/objects.html#the-readonlyarray-type"
     }
   ]

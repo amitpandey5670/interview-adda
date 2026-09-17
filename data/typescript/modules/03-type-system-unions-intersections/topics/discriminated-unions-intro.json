@@ -4,14 +4,14 @@
   "title": "Discriminated unions and tagged unions",
   "moduleId": "typescript-03-type-system-unions-intersections",
   "order": 5,
-  "hook": "When each variant of a union carries a shared tag field like `kind` or `type`, TypeScript can follow that tag and unlock the right fields automatically — the pattern behind most well-typed API responses and state machines.",
+  "hook": "When each variant carries a shared tag field like `kind` or `type`, TypeScript follows that tag and unlocks the right fields automatically.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "A **discriminated union** (also called a **tagged union**) is a union of object types that share a common **discriminant** property — usually a string literal field like `kind`, `type`, or `status`. When you compare that field, TypeScript **narrows** the whole object to the matching variant. Combined with **`never`-based exhaustiveness**, adding a new variant forces compiler errors in every `switch`. C# achieves similar ergonomics with **pattern matching** on records and `switch` expressions; TypeScript does it with structural unions and flow analysis."
+          "text": "A **discriminated union** (tagged union) is a union of object types sharing a **discriminant** — usually a string literal like `kind` or `type`. Comparing that field **narrows** the whole object. Combined with **`never`** exhaustiveness, new variants force compile errors. C# achieves similar ergonomics with pattern matching on records."
         },
         {
           "type": "glossary",
@@ -19,21 +19,21 @@
           "entries": [
             {
               "term": "discriminant",
-              "longForm": "discriminant (tag) property",
-              "plainDefinition": "A shared literal-typed field on every union member that identifies which variant you hold.",
+              "longForm": "discriminant property",
+              "plainDefinition": "A shared literal-typed field identifying the variant.",
               "example": "`{ kind: \"circle\"; radius: number } | { kind: \"square\"; side: number }`"
             },
             {
               "term": "tagged union",
               "longForm": "tagged union",
-              "plainDefinition": "Another name for discriminated union — the tag tells the compiler which shape is active.",
-              "example": "Redux actions: `{ type: \"INCREMENT\" } | { type: \"DECREMENT\" }`"
+              "plainDefinition": "Union where the tag tells the compiler which shape is active.",
+              "example": "Redux actions with `type` field."
             },
             {
               "term": "exhaustive switch",
               "longForm": "exhaustive switch",
-              "plainDefinition": "A switch over the discriminant where the default branch assigns to never, proving all variants handled.",
-              "example": "See union-types topic for the never pattern."
+              "plainDefinition": "Default branch assigns to never to prove all variants handled.",
+              "example": "See union-types topic."
             }
           ]
         }
@@ -44,13 +44,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Plain unions of unrelated shapes (`string | number`) need typeof guards. Object unions without a discriminant require **`in` checks** on every branch. A discriminant gives you one reliable switch point — the standard pattern for **Result/Either** types, HTTP response modeling, form wizard steps, and finite state machines. It is the single most important TypeScript pattern for replacing `any` in business logic."
+          "text": "Discriminated unions are the standard pattern for Result types, HTTP responses, state machines, and Redux actions — replacing `any` in business logic."
         },
         {
           "type": "callout",
           "variant": "remember",
-          "title": "Discriminant must be a literal",
-          "body": "The tag field must be typed as a string literal (or boolean/number literal), not plain `string`. If `kind: string`, comparing `kind === \"circle\"` does not narrow — use `kind: \"circle\"` on that member."
+          "title": "Literal discriminant required",
+          "body": "Tag must be a literal (`\"circle\"`), not plain `string`, or narrowing fails."
         }
       ]
     },
@@ -62,20 +62,20 @@
           "title": "Building a discriminated union",
           "items": [
             {
-              "title": "Define each variant",
-              "body": "Each member is an object type with the same discriminant key and a unique literal value."
+              "title": "Define variants",
+              "body": "Each has same discriminant key, unique literal value."
             },
             {
-              "title": "Union the variants",
-              "body": "`type Shape = Circle | Square | Triangle` — one parameter type for all shapes."
+              "title": "Union variants",
+              "body": "`type Shape = Circle | Square`."
             },
             {
-              "title": "Switch on the discriminant",
-              "body": "`switch (shape.kind)` — each case narrows to one variant."
+              "title": "Switch on tag",
+              "body": "Each case narrows to one variant."
             },
             {
               "title": "Prove exhaustiveness",
-              "body": "Default branch with `never` — compiler enforces updates when variants grow."
+              "body": "Default with never."
             }
           ]
         },
@@ -84,7 +84,7 @@
           "diagram": {
             "type": "mermaid",
             "title": "Discriminated union narrowing",
-            "source": "flowchart TD\n  U[\"Shape union\"] --> SW{\"switch kind\"}\n  SW -->|circle| C[\"radius available\"]\n  SW -->|square| S[\"side available\"]\n  SW -->|triangle| T[\"base + height\"]\n  SW -->|default| N[\"never — missing case?\"]"
+            "source": "flowchart TD\n  U[\"Shape union\"] --> SW{\"switch kind\"}\n  SW -->|circle| C[\"radius\"]\n  SW -->|square| S[\"side\"]\n  SW -->|default| N[\"never\"]"
           }
         }
       ]
@@ -96,36 +96,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Classic shape discriminated union",
-            "code": "type Circle = { kind: \"circle\"; radius: number };\ntype Square = { kind: \"square\"; side: number };\ntype Shape = Circle | Square;\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case \"circle\":\n      return Math.PI * shape.radius ** 2;\n    case \"square\":\n      return shape.side ** 2;\n    default: {\n      const _exhaustive: never = shape;\n      return _exhaustive;\n    }\n  }\n}",
-            "explanation": "Lines 1–3: shared `kind` literal distinguishes variants. Line 7: switching on `kind` narrows `shape`. Lines 8–9: `radius` only exists on Circle — legal after narrowing. Lines 11–14: exhaustiveness guard for future variants."
+            "label": "Shape discriminated union",
+            "code": "type Circle = { kind: \"circle\"; radius: number };\ntype Square = { kind: \"square\"; side: number };\ntype Shape = Circle | Square;\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case \"circle\": return Math.PI * shape.radius ** 2;\n    case \"square\": return shape.side ** 2;\n    default: { const _: never = shape; return _; }\n  }\n}",
+            "explanation": "Switch on kind narrows shape. never default catches missing variants."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "API Result type — success or failure",
-            "code": "type ApiSuccess<T> = { ok: true; data: T };\ntype ApiFailure = { ok: false; error: string; code: number };\ntype ApiResult<T> = ApiSuccess<T> | ApiFailure;\n\nfunction handle<T>(result: ApiResult<T>): T {\n  if (!result.ok) {\n    throw new Error(`[${result.code}] ${result.error}`);\n  }\n  return result.data; // narrowed: ok is true\n}",
-            "explanation": "Lines 1–3: boolean discriminant `ok` separates success and failure. Line 6: `!result.ok` narrows to `ApiFailure` in the if-block. Line 9: after the throw, `result` is `ApiSuccess<T>` — `data` is safe."
+            "label": "Result type",
+            "code": "type ApiSuccess<T> = { ok: true; data: T };\ntype ApiFailure = { ok: false; error: string; code: number };\ntype ApiResult<T> = ApiSuccess<T> | ApiFailure;\n\nfunction handle<T>(result: ApiResult<T>): T {\n  if (!result.ok) throw new Error(`[${result.code}] ${result.error}`);\n  return result.data;\n}",
+            "explanation": "Boolean ok discriminant. After throw, result is success variant."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Redux-style action union",
-            "code": "type AddTodo = { type: \"ADD_TODO\"; text: string };\ntype ToggleTodo = { type: \"TOGGLE_TODO\"; id: string };\ntype TodoAction = AddTodo | ToggleTodo;\n\nfunction reducer(state: string[], action: TodoAction): string[] {\n  switch (action.type) {\n    case \"ADD_TODO\":\n      return [...state, action.text];\n    case \"TOGGLE_TODO\":\n      return state; // id available on action\n    default:\n      return state;\n  }\n}",
-            "explanation": "Line 3: `type` field is the discriminant — conventional in Redux. Lines 7–10: each case sees the correct payload fields. This pattern scales to dozens of actions with exhaustiveness checking."
+            "label": "Redux-style actions",
+            "code": "type AddTodo = { type: \"ADD_TODO\"; text: string };\ntype ToggleTodo = { type: \"TOGGLE_TODO\"; id: string };\ntype TodoAction = AddTodo | ToggleTodo;",
+            "explanation": "type field is conventional Redux discriminant."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode — non-literal discriminant",
-            "code": "type BadCircle = { kind: string; radius: number };\ntype BadSquare = { kind: string; side: number };\ntype BadShape = BadCircle | BadSquare;\n\nfunction broken(shape: BadShape): number {\n  if (shape.kind === \"circle\") {\n    // shape is still BadCircle | BadSquare — radius not narrowed reliably\n    return shape.radius; // exists on both anyway here, but pattern fails for distinct fields\n  }\n  return shape.side;\n}",
-            "explanation": "Lines 1–3: `kind: string` prevents narrowing — both members allow any string. Line 7: comparison to a literal does not refine the union when the discriminant is not a literal type. Always use unique literal values per variant."
+            "label": "Failure — non-literal discriminant",
+            "code": "type BadShape = { kind: string; radius: number } | { kind: string; side: number };\n// kind: string prevents reliable narrowing on kind === \"circle\"",
+            "explanation": "Plain string discriminant blocks narrowing — use literal per variant."
           }
         }
       ]
@@ -135,7 +135,7 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Tagged variants across languages",
+          "title": "Tagged variants",
           "headers": [
             "Pattern",
             "TypeScript",
@@ -144,28 +144,22 @@
           ],
           "rows": [
             [
-              "Variant tagging",
-              "Literal field on object",
-              "Convention only",
-              "Record types + patterns"
+              "Tagging",
+              "Literal field",
+              "Convention",
+              "Record + patterns"
             ],
             [
               "Narrowing",
-              "switch / if on tag",
-              "Manual property access",
-              "`switch` expression with `case Circle c:`"
+              "switch on tag",
+              "Manual",
+              "switch expression"
             ],
             [
               "Exhaustiveness",
-              "never in default",
+              "never default",
               "Manual",
-              "Compiler warns on incomplete switch"
-            ],
-            [
-              "Algebraic data types",
-              "Union of object types",
-              "No native ADTs",
-              "Records / discriminated unions in F#-style C#"
+              "Compiler warnings"
             ]
           ]
         }
@@ -178,7 +172,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Using `string` instead of a literal for the discriminant. Forgetting exhaustiveness when the union grows. Mixing variants that use different discriminant key names (`kind` vs `type`) in the same union."
+          "body": "string instead of literal discriminant. No exhaustiveness when union grows. Mixed discriminant key names in one union."
         }
       ]
     },
@@ -187,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Discriminated unions are the TypeScript answer to **algebraic data types (ADTs)**. Pair with `satisfies` operator to validate object literals while preserving literal types. For JSON APIs, validate discriminant at runtime (Zod, io-ts) then narrow — compile-time tags do not survive untrusted input. **Discriminated unions + mapped types** power reducer typing in advanced libraries. C# 11+ `switch` on records is the closest idiomatic comparison for interview cross-talk."
+          "text": "Validate JSON discriminant at runtime (Zod) — compile-time tags do not survive untrusted input. Pair with satisfies to preserve literals. C# 11+ switch on records is the closest comparison."
         },
         {
           "type": "comparisonTable",
-          "title": "Tradeoffs at senior level",
+          "title": "Tradeoffs",
           "headers": [
             "Approach",
             "When",
@@ -200,46 +194,36 @@
           "rows": [
             [
               "Literal discriminant",
-              "Finite known variants",
-              "Breaking change when adding variant"
+              "Finite variants",
+              "Breaking on new variant"
             ],
             [
-              "Class hierarchy",
-              "Behavior per variant",
-              "Nominal — less flexible in TS"
-            ],
-            [
-              "in operator guards",
-              "No shared tag",
-              "Verbose, easy to miss a branch"
-            ],
-            [
-              "Runtime validator + union",
+              "Runtime validator",
               "External JSON",
-              "Drift between runtime and compile-time"
+              "Schema drift"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What gets you rejected in interviews",
-          "body": "Cannot explain why literal discriminant is required. No exhaustiveness strategy. Comparing to C# enums only — enums are nominal and lack per-variant payloads unless attributed."
+          "title": "What gets you rejected",
+          "body": "Cannot explain literal discriminant requirement. No exhaustiveness strategy. Comparing only to C# enums."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Discriminated unions share a literal tag field — kind, type, or status.",
-    "Switching on the tag narrows the whole object to one variant.",
-    "Combine with never in default for compile-time exhaustiveness.",
-    "The discriminant must be a literal type, not plain string.",
-    "60s: Tagged union = shared literal field + variant payloads. Switch narrows. never catches missing cases. C# uses record patterns; TS uses structural unions."
+    "Shared literal tag — kind, type, or status.",
+    "Switch on tag narrows the whole object.",
+    "never in default proves exhaustiveness.",
+    "Discriminant must be literal, not string.",
+    "60s: Tagged union = literal field + payloads. Switch narrows. Validate JSON at runtime."
   ],
   "commonPitfalls": [
-    "kind: string instead of kind: \"circle\" — narrowing fails.",
-    "No exhaustiveness check when the union grows in a large codebase.",
-    "Strong answer: 'Literal tag narrows the union. never proves exhaustiveness. Validate JSON at runtime before trusting the tag.'"
+    "kind: string instead of kind: \"circle\".",
+    "No exhaustiveness when union grows.",
+    "Strong answer: 'Literal tag narrows. never proves cases. Validate external tags.'"
   ],
   "relatedTopicIds": [
     "typescript-03-union-types",
@@ -251,13 +235,13 @@
     {
       "language": "javascript",
       "concept": "tagged object conventions",
-      "note": "Redux actions and AST nodes use `type` fields at runtime. TypeScript adds compile-time narrowing on top of the same JS object shape.",
+      "note": "Redux actions use type fields at runtime; TS adds compile-time narrowing.",
       "futureTopicSlug": "javascript/patterns/discriminated-objects"
     },
     {
       "language": "typescript",
-      "concept": "switch expressions on records",
-      "note": "C# `result switch { Success s => ..., Failure f => ... }` mirrors TS discriminated unions. C# is nominal; TS is structural.",
+      "concept": "switch on records",
+      "note": "C# switch expressions mirror TS discriminated unions nominally.",
       "futureTopicSlug": "csharp/pattern-matching/switch-expressions"
     }
   ],
