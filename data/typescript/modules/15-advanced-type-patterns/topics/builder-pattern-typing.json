@@ -4,78 +4,84 @@
   "title": "Builder pattern with progressive type safety",
   "moduleId": "typescript-15-advanced-type-patterns",
   "order": 3,
-  "hook": "Builder pattern with progressive type safety is compile-time type manipulation — erased at run time but essential for safe APIs. Conditional types, infer, and mapped types power built-in utilities like ReturnType and Partial.",
+  "hook": "**Type-state builder** tracks set fields — `build()` only when all required keys present. Generic `Set extends keyof Form` widens per setter.",
   "sections": [
     {
-      "heading": "What is Builder pattern with progressive type safety?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Builder pattern with progressive type safety** — Builder pattern with progressive type safety is compile-time type manipulation — erased at run time but essential for safe APIs.. TypeScript checks this at compile time; emitted JavaScript still runs with the same runtime rules as plain JS. Read the glossary, study the snippets, then trace one example in DevTools or with `tsc --emitDeclarationOnly` / Node REPL."
+          "text": "Each setter returns builder with updated phantom state. **build(this: Builder<Required>)** enforces completeness via `this` parameter. Alternative: fluent `returns this` without compile-time completeness."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "builder",
-              "longForm": "Builder pattern with progressive type safety",
-              "plainDefinition": "Core TypeScript mechanism for builder pattern with progressive type safety.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "type-state",
+              "longForm": "progressive builder",
+              "plainDefinition": "Generic tracks set keys.",
+              "example": "FormBuilder<\"name\"|\"email\">"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "this parameter",
+              "longForm": "build guard",
+              "plainDefinition": "build only when Set extends Required.",
+              "example": "build(this: B<Required>)"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "phantom state",
+              "longForm": "compile-time only",
+              "plainDefinition": "Not stored at runtime.",
+              "example": "generic Set param"
+            },
+            {
+              "term": "fluent",
+              "longForm": "method chaining",
+              "plainDefinition": "returns this for chain.",
+              "example": ".name().email().build()"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Builder pattern with progressive type safety matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Production bugs involving **Builder pattern with progressive type safety** rarely look like syntax errors — they show up as wrong data, memory growth, flaky tests, or CI type failures. Senior engineers explain mechanism and tradeoffs, not definitions. Use the JavaScript and C# comparison table to transfer intuition from languages you already know."
+          "text": "Compile-time half-filled form prevention. ORM/query builders. Interview type-state pattern."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Can you name one concrete failure mode for builder-pattern-typing and how you would prove the fix (test, heap snapshot, or metric)? Hand-waving loses senior loops."
+          "title": "Interview trap: runtime vs compile complete",
+          "body": "Goal: caller cannot call build() until types prove all required keys set."
         }
       ]
     },
     {
-      "heading": "How Builder pattern with progressive type safety works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Builder pattern with progressive type safety appears — syntax, API call, or type annotation."
+              "title": "Required keys union",
+              "body": "\"name\"|\"email\""
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "Builder<Set>",
+              "body": "generic state"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "setters widen Set",
+              "body": "Set | \"name\""
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "this on build",
+              "body": "requires Required"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Builder pattern with progressive type safety flow",
-            "source": "flowchart LR\n  A[Source type] --> B[Conditional / mapped]\n  B --> C[Inferred result type]\n  C --> D[Emit erases to JS]"
+            "title": "Builder state",
+            "source": "stateDiagram-v2\n  [*] --> Empty\n  Empty --> HasName: withName\n  HasName --> Done: withEmail\n  Done --> [*]: build"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Builder pattern with progressive type safety",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Conditional type with infer",
-            "code": "type Unwrap<T> = T extends Promise<infer U> ? U : T;\ntype A = Unwrap<Promise<string>>; // string\ntype B = Unwrap<number>; // number",
-            "explanation": "infer captures type variable in conditional match — pattern behind Awaited and ReturnType."
+            "label": "Type-state builder",
+            "code": "type Req = \"name\" | \"email\";\ninterface F { name: string; email: string; }\nclass B<Set extends keyof F = never> {\n  private d: Partial<F> = {};\n  name(v: string): B<Set | \"name\"> { this.d.name = v; return this as B<Set | \"name\">; }\n  email(v: string): B<Set | \"email\"> { this.d.email = v; return this as B<Set | \"email\">; }\n  build(this: B<Req>): F { return this.d as F; }\n}\nnew B().name(\"a\").build(); // error\nnew B().name(\"a\").email(\"b@c.d\").build(); // ok",
+            "explanation": "this parameter on build."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Mapped type for DTO",
-            "code": "type CreateUserDto = Pick<User, 'name' | 'email'>;\ntype UpdateUserDto = Partial<CreateUserDto> & { id: string };\ntype UserKeys = keyof User;",
-            "explanation": "Utility types compose — Partial, Pick, keyof build API layers without duplication."
+            "label": "Functional sketch",
+            "code": "type Builder<T, Set extends keyof T = never> = {\n  set<K extends keyof T>(k: K, v: T[K]): Builder<T, Set | K>;\n  build: Set extends keyof T ? () => T : never;\n};",
+            "explanation": "build type never until complete."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "satisfies preserves literal types",
-            "code": "const routes = {\n  home: '/',\n  profile: '/me',\n} satisfies Record<string, `/${string}`>;\n// routes.home is '/' not string",
-            "explanation": "satisfies checks shape without widening inferred literal types."
+            "label": "Simple fluent",
+            "code": "class Q { private s = \"SELECT *\"; where(c: string): this { this.s += ` WHERE ${c}`; return this; } }",
+            "explanation": "Chaining without type-state."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# generics versus TS structural",
-            "code": "// C# nominal — List<string> not assignable to List<object>\nList<string> names = new();\n\n// TS structural — extra properties allowed on assign\ninterface Named { name: string }\nconst x: Named = { name: 'a', id: 1 }; // excess check may error",
-            "explanation": "C# generics are nominal; TS uses structural assignability with excess property checks on fresh objects."
+            "language": "typescript",
+            "label": "Failure: build always",
+            "code": "class Bad { build() { return {}; } }",
+            "explanation": "No compile-time tracking."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "Type model",
-              "Structural",
-              "Nominal",
-              "Structural static"
+              "",
+              "type-state",
+              "runtime if",
+              "C# fluent"
             ],
             [
-              "Run time",
-              "Erased",
-              "CLR metadata",
-              "Erased to JS"
-            ],
-            [
-              "Generics",
-              "Erased",
-              "Reified",
-              "Erased"
+              "missing field",
+              "compile error",
+              "throw",
+              "throw"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Builder pattern with progressive type safety",
-          "body": "Treating Builder pattern with progressive type safety as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "over-engineer simple DTOs. build without this typing."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Builder pattern with progressive type safety** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Kysely SQL builder. plain satisfies for simple forms. C# generators emit builders."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,77 +193,62 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "type-state",
+              "compile complete",
+              "hard maintain"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "zod",
+              "runtime",
+              "not build order"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Builder pattern with progressive type safety. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot sketch Set generic. no this on build."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Builder pattern with progressive type safety: know definition plus one runnable example.",
-    "Production: validate external input before applying Builder pattern with progressive type safety; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for builder-pattern-typing.",
-    "60s: Builder pattern with progressive type safety — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Set generic tracks keys.",
+    "this on build for Required.",
+    "phantom compile-only.",
+    "60s: widen Set per setter. this build guard. C# runtime checks often.",
+    "Follow-up: Kysely."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Builder pattern with progressive type safety as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving builder-pattern-typing.",
-    "Strong: define Builder pattern with progressive type safety, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: build always callable.",
+    "Weak: type-state for 2 fields.",
+    "Strong: \"Set generic. this build Required.\""
   ],
   "relatedTopicIds": [
     "typescript-15-branded-and-opaque-types",
-    "typescript-15-recursive-types",
-    "typescript-15-type-level-programming-limits"
+    "typescript-12-conditional-types-basics",
+    "typescript-09-generic-constraints"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Builder pattern with progressive type safety",
-      "note": "Builder pattern with progressive type safety in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/advanced-type-patterns/builder-pattern-typing"
+      "concept": "builder chaining",
+      "note": "JS runtime chain.",
+      "futureTopicSlug": "javascript/09-structural-typing-patterns/factory-and-builder-patterns"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for Builder pattern with progressive type safety",
-      "note": "C# developers: map Builder pattern with progressive type safety to closest CLR concept (generics) and note differences.",
-      "futureTopicSlug": "csharp/modules/builder-pattern-typing"
+      "concept": "source generators",
+      "note": "C# generated builders.",
+      "futureTopicSlug": "csharp/generators/source-generators"
     }
   ],
   "officialSources": [
     {
-      "title": "Conditional types",
-      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS this parameters",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/classes.html#this-parameters"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "csv-import"
+  "animationHint": "flow"
 }

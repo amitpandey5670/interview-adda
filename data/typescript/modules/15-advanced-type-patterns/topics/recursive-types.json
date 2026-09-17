@@ -4,14 +4,14 @@
   "title": "Recursive types and depth limits",
   "moduleId": "typescript-15-advanced-type-patterns",
   "order": 2,
-  "hook": "Recursive types and depth limits is compile-time type manipulation — erased at run time but essential for safe APIs. Conditional types, infer, and mapped types power built-in utilities like ReturnType and Partial.",
+  "hook": "**Recursive types** model JSON trees and ASTs: `type Json = string | Json[] | { [k: string]: Json }`. Compiler depth limits cause TS2589 on deep mapped recursion.",
   "sections": [
     {
-      "heading": "What is Recursive types and depth limits?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Recursive types and depth limits** — Recursive types and depth limits is compile-time type manipulation — erased at run time but essential for safe APIs.. TypeScript checks this at compile time; emitted JavaScript still runs with the same runtime rules as plain JS. Read the glossary, study the snippets, then trace one example in DevTools or with `tsc --emitDeclarationOnly` / Node REPL."
+          "text": "Type references itself. **Json** union canonical. **interface** for trees often cleaner. **Depth-limited** DeepPartial prevents TS2589. Runtime validation still required — types erase."
         },
         {
           "type": "glossary",
@@ -19,63 +19,69 @@
           "entries": [
             {
               "term": "recursive",
-              "longForm": "Recursive types and depth limits",
-              "plainDefinition": "Core TypeScript mechanism for recursive types and depth limits.",
-              "example": "Runnable examples in the code walkthrough below."
+              "longForm": "self-reference",
+              "plainDefinition": "Type includes itself.",
+              "example": "type Tree<T> = { v: T; c: Tree<T>[] }"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "TS2589",
+              "longForm": "excessively deep",
+              "plainDefinition": "Compiler depth limit.",
+              "example": "unbounded mapped recursion"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "Json",
+              "longForm": "JSONValue",
+              "plainDefinition": "Standard recursive JSON type.",
+              "example": "string|number|Json[]|{...}"
+            },
+            {
+              "term": "zod lazy",
+              "longForm": "runtime recursive schema",
+              "plainDefinition": "Matches recursive type at boundary.",
+              "example": "z.lazy(() => schema)"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Recursive types and depth limits matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Production bugs involving **Recursive types and depth limits** rarely look like syntax errors — they show up as wrong data, memory growth, flaky tests, or CI type failures. Senior engineers explain mechanism and tradeoffs, not definitions. Use the JavaScript and C# comparison table to transfer intuition from languages you already know."
+          "text": "API trees, AST, config. DeepPartial<Json> blows budget. Interview JSON + depth question."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Can you name one concrete failure mode for recursive-types and how you would prove the fix (test, heap snapshot, or metric)? Hand-waving loses senior loops."
+          "title": "Interview trap: infinite expansion",
+          "body": "Unbounded mapped recursion on Json → TS2589 — add depth param."
         }
       ]
     },
     {
-      "heading": "How Recursive types and depth limits works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Recursive types and depth limits appears — syntax, API call, or type annotation."
+              "title": "base + recursive arm",
+              "body": "union self-ref"
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "interface for trees",
+              "body": "Node { children: Node[] }"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "watch depth",
+              "body": "simplify conditionals"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "runtime validate",
+              "body": "zod lazy"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Recursive types and depth limits flow",
-            "source": "flowchart LR\n  A[Source type] --> B[Conditional / mapped]\n  B --> C[Inferred result type]\n  C --> D[Emit erases to JS]"
+            "title": "Json recursion",
+            "source": "flowchart TD\n  J --> P[primitives]\n  J --> A[Json[]]\n  J --> O[{string:Json}]\n  A --> J\n  O --> J"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Recursive types and depth limits",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Conditional type with infer",
-            "code": "type Unwrap<T> = T extends Promise<infer U> ? U : T;\ntype A = Unwrap<Promise<string>>; // string\ntype B = Unwrap<number>; // number",
-            "explanation": "infer captures type variable in conditional match — pattern behind Awaited and ReturnType."
+            "label": "Json type",
+            "code": "type Json = string | number | boolean | null | Json[] | { [key: string]: Json };\nfunction parseJson(t: string): Json { return JSON.parse(t) as Json; }",
+            "explanation": "Canonical pattern — add runtime validator in prod."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Mapped type for DTO",
-            "code": "type CreateUserDto = Pick<User, 'name' | 'email'>;\ntype UpdateUserDto = Partial<CreateUserDto> & { id: string };\ntype UserKeys = keyof User;",
-            "explanation": "Utility types compose — Partial, Pick, keyof build API layers without duplication."
+            "label": "AST interface",
+            "code": "interface Expr { kind: \"lit\" | \"add\"; value?: number; left?: Expr; right?: Expr; }",
+            "explanation": "Interface recursive node."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "satisfies preserves literal types",
-            "code": "const routes = {\n  home: '/',\n  profile: '/me',\n} satisfies Record<string, `/${string}`>;\n// routes.home is '/' not string",
-            "explanation": "satisfies checks shape without widening inferred literal types."
+            "label": "Depth-limited DeepPartial",
+            "code": "type DP<T, D extends number = 5> = D extends 0 ? T : T extends object ? { [K in keyof T]?: DP<T[K], [-1,0,1,2,3,4][D]> } : T;",
+            "explanation": "Depth counter prevents blow-up."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# generics versus TS structural",
-            "code": "// C# nominal — List<string> not assignable to List<object>\nList<string> names = new();\n\n// TS structural — extra properties allowed on assign\ninterface Named { name: string }\nconst x: Named = { name: 'a', id: 1 }; // excess check may error",
-            "explanation": "C# generics are nominal; TS uses structural assignability with excess property checks on fresh objects."
+            "language": "typescript",
+            "label": "Failure: unbounded",
+            "code": "// type Bad<T> = { [K in keyof T]: Bad<T[K]> } on Json → TS2589",
+            "explanation": "Need depth or stop at primitives."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "Type model",
-              "Structural",
-              "Nominal",
-              "Structural static"
+              "",
+              "type recursion",
+              "interface",
+              "C# JsonNode"
             ],
             [
-              "Run time",
-              "Erased",
-              "CLR metadata",
-              "Erased to JS"
-            ],
-            [
-              "Generics",
-              "Erased",
-              "Reified",
-              "Erased"
+              "depth limit",
+              "yes",
+              "yes",
+              "runtime tree"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Recursive types and depth limits",
-          "body": "Treating Recursive types and depth limits as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "unbounded DeepPartial. no runtime JSON validation. mutual recursion with type only."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Recursive types and depth limits** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "zod lazy for runtime. flatten hot path types. F# similar depth issues."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,77 +193,62 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Json union",
+              "simple",
+              "no runtime depth"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "zod lazy",
+              "runtime+type",
+              "bundle"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Recursive types and depth limits. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot write Json type. unaware TS2589."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Recursive types and depth limits: know definition plus one runnable example.",
-    "Production: validate external input before applying Recursive types and depth limits; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for recursive-types.",
-    "60s: Recursive types and depth limits — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Json union canonical.",
+    "TS2589 depth limit.",
+    "interface for trees.",
+    "60s: recursive Json. depth DeepPartial. zod lazy boundary. C# JsonDocument runtime.",
+    "Follow-up: zod lazy."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Recursive types and depth limits as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving recursive-types.",
-    "Strong: define Recursive types and depth limits, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: infinite DeepPartial.",
+    "Weak: Json no validator.",
+    "Strong: \"Json union. depth cap. zod lazy.\""
   ],
   "relatedTopicIds": [
     "typescript-15-branded-and-opaque-types",
-    "typescript-15-builder-pattern-typing",
-    "typescript-15-type-level-programming-limits"
+    "typescript-12-mapped-types",
+    "typescript-18-type-complexity-budget"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Recursive types and depth limits",
-      "note": "Recursive types and depth limits in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/advanced-type-patterns/recursive-types"
+      "concept": "nested JSON",
+      "note": "runtime any depth.",
+      "futureTopicSlug": "javascript/types/json"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for Recursive types and depth limits",
-      "note": "C# developers: map Recursive types and depth limits to closest CLR concept (generics) and note differences.",
-      "futureTopicSlug": "csharp/modules/recursive-types"
+      "concept": "JsonNode",
+      "note": "C# runtime JSON tree.",
+      "futureTopicSlug": "csharp/types/json"
     }
   ],
   "officialSources": [
     {
-      "title": "Conditional types",
-      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS recursive types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/types-from-types.html#recursive-types"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "rabbitmq"
+  "animationHint": "flow"
 }

@@ -4,78 +4,84 @@
   "title": "paths, baseUrl, and import aliases",
   "moduleId": "typescript-14-modules-and-declarations",
   "order": 2,
-  "hook": "paths, baseUrl, and import aliases governs how code is loaded, tree-shaken, and resolved at build time versus run time. ESM/CJS interop and package exports trip monorepos and Node bundler configs daily.",
+  "hook": "`paths` and `baseUrl` create import aliases like `@app/*` — compile-time only unless bundler or tsc-alias rewrites emit. Node still sees alias strings at runtime.",
   "sections": [
     {
-      "heading": "What is paths, baseUrl, and import aliases?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**paths, baseUrl, and import aliases** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. paths, baseUrl, and import aliases governs how code is loaded, tree-shaken, and resolved at build time versus run time. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**paths** maps patterns to folders. TypeScript resolves for checking; **emit keeps alias** unless bundler rewrites. **package.json imports** (#paths) is Node 20+ native alternative. Monorepos prefer **package names** + project references over deep paths."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "path",
-              "longForm": "paths, baseUrl, and import aliases",
-              "plainDefinition": "Core TypeScript mechanism for paths, baseurl, and import aliases.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "paths",
+              "longForm": "tsconfig paths",
+              "plainDefinition": "Compile-time alias — no emit rewrite.",
+              "example": "\"@/*\": [\"src/*\"]"
             },
             {
-              "term": "ESM",
-              "longForm": "ECMAScript modules",
-              "plainDefinition": "import/export syntax; static analysis enables tree shaking.",
-              "example": "import { x } from './mod.js'"
+              "term": "baseUrl",
+              "longForm": "resolution root",
+              "plainDefinition": "Base for non-relative imports.",
+              "example": "\"baseUrl\": \"./src\""
             },
             {
-              "term": "CJS",
-              "longForm": "CommonJS",
-              "plainDefinition": "require/module.exports — Node legacy; dynamic resolution.",
-              "example": "const fs = require('fs')"
+              "term": "tsc-alias",
+              "longForm": "post emit rewrite",
+              "plainDefinition": "Rewrites paths in JS for Node.",
+              "example": "tsc && tsc-alias"
+            },
+            {
+              "term": "imports field",
+              "longForm": "package.json imports",
+              "plainDefinition": "Runtime-native # alias.",
+              "example": "\"#internal/*\": \"./src/*\""
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why paths, baseUrl, and import aliases matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **paths, baseUrl, and import aliases** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "CI MODULE_NOT_FOUND when paths work in IDE. Vite alias must mirror tsconfig paths."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"paths, baseUrl, and import aliases\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: paths rewrite emit",
+          "body": "tsc never rewrites path aliases — bundler or tsc-alias required."
         }
       ]
     },
     {
-      "heading": "How paths, baseUrl, and import aliases works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where paths, baseUrl, and import aliases appears — syntax, API call, or type annotation."
+              "title": "Define paths",
+              "body": "@app/* → src/*"
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "Mirror in Vite",
+              "body": "resolve.alias"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Or package imports",
+              "body": "Node # paths"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Monorepo packages",
+              "body": "@org/pkg name imports"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "paths, baseUrl, and import aliases flow",
-            "source": "flowchart LR\n  A[Source files] --> B[Bundler / Node resolver]\n  B --> C[Dependency graph]\n  C --> D[Tree-shaken bundle]"
+            "title": "paths compile vs runtime",
+            "source": "flowchart LR\n  SRC[\"@app/x\"] --> TSC[typecheck]\n  TSC --> EMIT[\"emit @app/x\"]\n  EMIT --> BUN[bundler rewrite] or FAIL[Node fail]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: paths, baseUrl, and import aliases",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "ESM static import",
-            "code": "import { readFile } from 'node:fs/promises';\nimport config from './config.js';\n\nexport async function load() {\n  return JSON.parse(await readFile(config.path, 'utf8'));\n}",
-            "explanation": "import/export are statically analyzable — enables tree shaking when sideEffects: false."
+            "language": "json",
+            "label": "tsconfig paths",
+            "code": "{\n  \"compilerOptions\": {\n    \"baseUrl\": \".\",\n    \"paths\": { \"@app/*\": [\"src/app/*\"] }\n  }\n}",
+            "explanation": "Alias for imports."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Dynamic import code splitting",
-            "code": "const locale = navigator.language;\nconst mod = await import(`./locales/${locale}.js`);\nmod.applyTranslations();",
-            "explanation": "import() returns Promise — bundlers emit separate chunks loaded on demand."
+            "language": "typescript",
+            "label": "Alias import",
+            "code": "import { Button } from \"@app/components/Button\";",
+            "explanation": "Emit unchanged."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "package.json exports field",
-            "code": "// package.json\n{\n  \"type\": \"module\",\n  \"exports\": {\n    \".\": \"./dist/index.js\",\n    \"./utils\": \"./dist/utils.js\"\n  }\n}",
-            "explanation": "exports map controls public API surface — breaks deep imports into node_modules/pkg/src."
+            "language": "typescript",
+            "label": "Vite alias",
+            "code": "export default { resolve: { alias: { \"@app\": resolve(__dirname, \"src/app\") } } };",
+            "explanation": "Must match tsconfig."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# assemblies versus JS modules",
-            "code": "// C# namespace + assembly boundary\nnamespace MyApp.Services { public class UserService { } }\n\n// JS: file is module scope; no nominal namespace at runtime",
-            "explanation": "C# assemblies are deployment units with strong names; JS modules are files resolved by bundler or Node."
+            "language": "typescript",
+            "label": "Failure: Node without rewrite",
+            "code": "// emit: require(\"@app/foo\") → MODULE_NOT_FOUND",
+            "explanation": "paths alone insufficient for Node."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "Unit",
-              "File / package",
-              "Assembly",
-              "Module file"
+              "Mechanism",
+              "paths",
+              "package imports",
+              "C# using"
             ],
             [
-              "Resolution",
-              "Node / bundler",
-              "Reference + NuGet",
-              "paths in tsconfig"
-            ],
-            [
-              "Tree shaking",
-              "ESM static imports",
-              "Trimming (AOT)",
-              "Type-only import erase"
+              "Runtime",
+              "Needs rewrite",
+              "Native Node 20+",
+              "Compile+runtime"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for paths, baseUrl, and import aliases",
-          "body": "Treating paths, baseUrl, and import aliases as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "paths work in Node without bundler. Mismatched Vite/tsconfig. paths instead of package name in monorepo."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **paths, baseUrl, and import aliases** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Nx generates consistent paths. ESLint import resolver reads paths. Prefer @org/lib package imports."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,77 +193,67 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "paths+Vite",
+              "Great DX",
+              "Two configs"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "package imports",
+              "Runtime native",
+              "Node version"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "relative only",
+              "Simple",
+              "Deep fragile paths"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to paths, baseUrl, and import aliases. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Says paths rewrites emit. No monorepo package strategy."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "paths, baseUrl, and import aliases: know definition plus one runnable example.",
-    "Production: validate external input before applying paths, baseUrl, and import aliases; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for path-mapping.",
-    "60s: paths, baseUrl, and import aliases — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "paths compile-time only.",
+    "Bundler/tsc-alias for Node.",
+    "package.json imports alternative.",
+    "60s: paths=typecheck. sync Vite. monorepo package names. C# namespaces.",
+    "Follow-up: project references."
   ],
   "commonPitfalls": [
-    "Weak: dismisses paths, baseUrl, and import aliases as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving path-mapping.",
-    "Strong: define paths, baseUrl, and import aliases, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: paths in tsc output on Node.",
+    "Weak: Vite/tsconfig mismatch.",
+    "Strong: \"paths typecheck only. bundler rewrite. @org/pkg monorepo.\""
   ],
   "relatedTopicIds": [
     "typescript-14-module-resolution-modes",
-    "typescript-14-ambient-declarations",
+    "typescript-17-project-references",
     "typescript-14-typing-javascript-libraries"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "paths, baseUrl, and import aliases",
-      "note": "paths, baseUrl, and import aliases in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/modules-and-declarations/path-mapping"
+      "concept": "import maps",
+      "note": "Browser runtime resolution.",
+      "futureTopicSlug": "javascript/16-modules-bundling-tooling/module-resolution"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for paths, baseUrl, and import aliases",
-      "note": "C# developers: map paths, baseUrl, and import aliases to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/path-mapping"
+      "concept": "namespaces",
+      "note": "C# using not path-based.",
+      "futureTopicSlug": "csharp/namespaces/using-directives"
     }
   ],
   "officialSources": [
     {
-      "title": "ES modules",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS paths",
+      "url": "https://www.typescriptlang.org/docs/handbook/modules/reference.html#paths"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "rabbitmq"
+  "animationHint": "flow"
 }

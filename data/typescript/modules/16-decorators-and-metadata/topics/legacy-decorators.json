@@ -4,78 +4,84 @@
   "title": "Legacy (experimental) decorators and migration",
   "moduleId": "typescript-16-decorators-and-metadata",
   "order": 2,
-  "hook": "Legacy (experimental) decorators and migration attaches metadata and behavior to classes at definition time. Stage 3 decorators differ from legacy experimental decorators — Angular and NestJS teams must know both.",
+  "hook": "**Legacy decorators** need `experimentalDecorators: true` — 3-arg `(target, key, descriptor)`. Angular, NestJS, class-validator still use them.",
   "sections": [
     {
-      "heading": "What is Legacy (experimental) decorators and migration?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Legacy (experimental) decorators and migration** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Legacy (experimental) decorators and migration attaches metadata and behavior to classes at definition time. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**experimentalDecorators** enables pre-standard API. Method decorator mutates **PropertyDescriptor**. **Parameter decorators** legacy-only for DI. **emitDecoratorMetadata** + **reflect-metadata** for design:paramtypes. **useDefineForClassFields: false** often required for Angular @Input."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "legacy",
-              "longForm": "Legacy (experimental) decorators and migration",
-              "plainDefinition": "Core TypeScript mechanism for legacy (experimental) decorators and migration.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "experimentalDecorators",
+              "longForm": "legacy flag",
+              "plainDefinition": "Old decorator implementation.",
+              "example": "true in tsconfig"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "PropertyDescriptor",
+              "longForm": "method descriptor",
+              "plainDefinition": "value/writable/enumerable/configurable.",
+              "example": "descriptor.value = wrapped"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "parameter decorator",
+              "longForm": "@Param()",
+              "plainDefinition": "Records param index — DI.",
+              "example": "Nest @Body()"
+            },
+            {
+              "term": "emitDecoratorMetadata",
+              "longForm": "design:type emit",
+              "plainDefinition": "Emits metadata for reflect-metadata.",
+              "example": "true with legacy"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Legacy (experimental) decorators and migration matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Legacy (experimental) decorators and migration** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Production Angular/Nest on legacy today. Wrong tsconfig breaks DI. parameter decorators not in stage 3 yet."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Legacy (experimental) decorators and migration\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: parameter decorators stage 3",
+          "body": "Stage 3 has no parameter decorators — Nest DI relies on legacy."
         }
       ]
     },
     {
-      "heading": "How Legacy (experimental) decorators and migration works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Legacy (experimental) decorators and migration appears — syntax, API call, or type annotation."
+              "title": "experimentalDecorators true",
+              "body": "Enable legacy decorator emit in tsconfig — required for Angular and NestJS projects until migration completes."
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "emitDecoratorMetadata",
+              "body": "if DI"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "import reflect-metadata",
+              "body": "entry"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "plan migration",
+              "body": "framework version"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Legacy (experimental) decorators and migration flow",
-            "source": "flowchart TD\n  A[Legacy (experimental) decorators and migration] --> B[Read / parse]\n  B --> C[Type check]\n  C --> D[Observable behavior]"
+            "title": "Legacy method dec",
+            "source": "flowchart LR\n  M[@Log] --> D[descriptor.value]\n  D --> W[wrapped fn]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Legacy (experimental) decorators and migration",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Stage 3 decorator",
-            "code": "function logged<T extends { new (...args: any[]): object }>(target: T, ctx: ClassDecoratorContext) {\n  return class extends target {\n    constructor(...args: any[]) { console.log('Creating', ctx.name); super(...args); }\n  };\n}\n@logged\nclass Service {}",
-            "explanation": "Stage 3 API differs from legacy experimental decorators."
+            "label": "Legacy method",
+            "code": "function Log(_t: object, key: string | symbol, d: PropertyDescriptor) {\n  const orig = d.value as (...a: unknown[]) => unknown;\n  d.value = function (...a: unknown[]) { console.log(String(key)); return orig.apply(this, a); };\n}\nclass G { @Log greet() { return \"hi\"; } }",
+            "explanation": "3-arg descriptor mutation."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Method decorator",
-            "code": "function validate(min: number) {\n  return (_t: unknown, ctx: ClassMethodDecoratorContext) => function (this: unknown, v: number) {\n    if (v < min) throw new RangeError('too small');\n    return v;\n  };\n}",
-            "explanation": "Decorator factories configure behavior — Angular/NestJS patterns."
+            "label": "Parameter decorator",
+            "code": "function Inject(token: string) {\n  return (target: object, _k: string | symbol | undefined, idx: number) => { /* register idx→token */ };\n}\nclass S { constructor(@Inject(\"CFG\") private c: unknown) {} }",
+            "explanation": "DI parameter index."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Angular tsconfig",
+            "code": "{\n  \"compilerOptions\": {\n    \"experimentalDecorators\": true,\n    \"emitDecoratorMetadata\": true,\n    \"useDefineForClassFields\": false\n  }\n}",
+            "explanation": "Angular field decorator compat."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "reflect-metadata",
-            "code": "Reflect.defineMetadata('design:paramtypes', [String], Target, 'method');",
-            "explanation": "Legacy DI metadata — migrating to Stage 3 changes shape."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "Attributes",
-            "code": "[Authorize]\npublic class UsersController : ControllerBase { }",
-            "explanation": "C# attributes are CLR metadata; TS decorators are functions at class definition."
+            "label": "Failure: stage3 in legacy project",
+            "code": "// experimentalDecorators true — stage 3 signature fails",
+            "explanation": "One mode per project."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Compile time",
-              "Compile + CLR",
-              "Compile only"
+              "",
+              "legacy 3-arg",
+              "stage 3",
+              "C# attributes"
             ],
             [
-              "Type model",
-              "Structural static",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "any at boundary"
+              "param dec",
+              "yes",
+              "no",
+              "rare"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Legacy (experimental) decorators and migration",
-          "body": "Treating Legacy (experimental) decorators and migration as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "useDefineForClassFields true breaks @Input. missing reflect-metadata."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Legacy (experimental) decorators and migration** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Angular migration docs. codemod decorator signatures. test DI after tsconfig change."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,43 +193,37 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "stay legacy",
+              "stable prod",
+              "debt"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "migrate stage3",
+              "standard",
+              "breaking upgrades"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Legacy (experimental) decorators and migration. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "no 3-arg knowledge. param dec in stage3."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Legacy (experimental) decorators and migration: know definition plus one runnable example.",
-    "Production: validate external input before applying Legacy (experimental) decorators and migration; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for legacy-decorators.",
-    "60s: Legacy (experimental) decorators and migration — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "experimentalDecorators=true legacy.",
+    "emitDecoratorMetadata+reflect-metadata.",
+    "param dec legacy only.",
+    "60s: legacy descriptor. Nest/Angular today. migrate when supported. useDefineForClassFields.",
+    "Follow-up: useDefineForClassFields."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Legacy (experimental) decorators and migration as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving legacy-decorators.",
-    "Strong: define Legacy (experimental) decorators and migration, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: stage3 in Nest without migration.",
+    "Weak: no reflect-metadata.",
+    "Strong: \"legacy 3-arg. emitDecoratorMetadata. param DI. migrate later.\""
   ],
   "relatedTopicIds": [
     "typescript-16-stage-3-decorators",
@@ -239,27 +233,22 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Legacy (experimental) decorators and migration",
-      "note": "Legacy (experimental) decorators and migration in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/decorators-and-metadata/legacy-decorators"
+      "concept": "babel legacy dec",
+      "note": "Babel old proposal.",
+      "futureTopicSlug": "javascript/tooling/babel-decorators"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for Legacy (experimental) decorators and migration",
-      "note": "C# developers: map Legacy (experimental) decorators and migration to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/legacy-decorators"
+      "concept": "DI",
+      "note": "C# constructor injection.",
+      "futureTopicSlug": "csharp/di/dependency-injection"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS legacy decorators",
+      "url": "https://www.typescriptlang.org/docs/handbook/decorators.html"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "csv-import"
+  "animationHint": "timeline"
 }

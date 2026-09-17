@@ -4,78 +4,84 @@
   "title": "CI typecheck pipelines and incremental builds",
   "moduleId": "typescript-17-compiler-options-tooling",
   "order": 5,
-  "hook": "CI typecheck pipelines and incremental builds is compile-time type manipulation — erased at run time but essential for safe APIs. Conditional types, infer, and mapped types power built-in utilities like ReturnType and Partial.",
+  "hook": "**CI pipelines** run `tsc -b` or `tsc --noEmit`, typed eslint, tests — pin TypeScript version, cache `.tsbuildinfo`, fail-fast before merge.",
   "sections": [
     {
-      "heading": "What is CI typecheck pipelines and incremental builds?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**CI typecheck pipelines and incremental builds** — CI typecheck pipelines and incremental builds is compile-time type manipulation — erased at run time but essential for safe APIs.. TypeScript checks this at compile time; emitted JavaScript still runs with the same runtime rules as plain JS. Read the glossary, study the snippets, then trace one example in DevTools or with `tsc --emitDeclarationOnly` / Node REPL."
+          "text": "install → lint → typecheck → test → build. Cache node_modules + tsbuildinfo. **Pin exact typescript** in package.json. Vite build may skip tsc — separate typecheck job required. --pretty false for CI logs."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "ci",
-              "longForm": "CI typecheck pipelines and incremental builds",
-              "plainDefinition": "Core TypeScript mechanism for ci typecheck pipelines and incremental builds.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "tsc --noEmit",
+              "longForm": "typecheck only",
+              "plainDefinition": "Check without emit.",
+              "example": "npx tsc --noEmit"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "incremental",
+              "longForm": "tsbuildinfo",
+              "plainDefinition": "Cache between CI runs.",
+              "example": "incremental true"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "fail fast",
+              "longForm": "CI gate",
+              "plainDefinition": "Typecheck before e2e.",
+              "example": "block PR on tsc error"
+            },
+            {
+              "term": "pinned TS",
+              "longForm": "exact version",
+              "plainDefinition": "CI/local match.",
+              "example": "\"typescript\": \"5.7.2\""
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why CI typecheck pipelines and incremental builds matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Production bugs involving **CI typecheck pipelines and incremental builds** rarely look like syntax errors — they show up as wrong data, memory growth, flaky tests, or CI type failures. Senior engineers explain mechanism and tradeoffs, not definitions. Use the JavaScript and C# comparison table to transfer intuition from languages you already know."
+          "text": "TS version drift wastes hours. No typecheck merges any. Monorepo without tsc -b cache times out Actions."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Can you name one concrete failure mode for ci-typecheck-pipelines and how you would prove the fix (test, heap snapshot, or metric)? Hand-waving loses senior loops."
+          "title": "Interview trap: build passes types OK",
+          "body": "esbuild transpileOnly / vite may skip types — dedicated tsc job."
         }
       ]
     },
     {
-      "heading": "How CI typecheck pipelines and incremental builds works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where CI typecheck pipelines and incremental builds appears — syntax, API call, or type annotation."
+              "title": "pin typescript",
+              "body": "Pin exact typescript version in package.json and commit lockfile — CI must not float minor versions silently."
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "typecheck script",
+              "body": "tsc -b"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "cache tsbuildinfo",
+              "body": "actions cache"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "parallel lint+tsc",
+              "body": "Run eslint and tsc -b in parallel CI jobs or sequential stages with shared node_modules cache."
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "CI typecheck pipelines and incremental builds flow",
-            "source": "flowchart LR\n  A[Source type] --> B[Conditional / mapped]\n  B --> C[Inferred result type]\n  C --> D[Emit erases to JS]"
+            "title": "CI stages",
+            "source": "flowchart LR\n  INSTALL --> LINT\n  INSTALL --> TSC\n  LINT --> TEST\n  TSC --> TEST"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: CI typecheck pipelines and incremental builds",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
-            "language": "typescript",
-            "label": "Conditional type with infer",
-            "code": "type Unwrap<T> = T extends Promise<infer U> ? U : T;\ntype A = Unwrap<Promise<string>>; // string\ntype B = Unwrap<number>; // number",
-            "explanation": "infer captures type variable in conditional match — pattern behind Awaited and ReturnType."
+            "language": "json",
+            "label": "package scripts",
+            "code": "{\n  \"scripts\": {\n    \"typecheck\": \"tsc -b --pretty false\",\n    \"ci\": \"npm run lint && npm run typecheck && npm test\"\n  },\n  \"devDependencies\": { \"typescript\": \"5.7.2\" }\n}",
+            "explanation": "CI entry scripts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "GitHub Actions",
+            "code": "jobs:\n  typecheck:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with: { node-version: 20, cache: npm }\n      - run: npm ci\n      - run: npm run typecheck",
+            "explanation": "Dedicated typecheck job."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Cache tsbuildinfo",
+            "code": "- uses: actions/cache@v4\n  with:\n    path: \"**/*.tsbuildinfo\"\n    key: tsc-${{ hashFiles(\"**/tsconfig*.json\") }}",
+            "explanation": "Incremental cache."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Mapped type for DTO",
-            "code": "type CreateUserDto = Pick<User, 'name' | 'email'>;\ntype UpdateUserDto = Partial<CreateUserDto> & { id: string };\ntype UserKeys = keyof User;",
-            "explanation": "Utility types compose — Partial, Pick, keyof build API layers without duplication."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "typescript",
-            "label": "satisfies preserves literal types",
-            "code": "const routes = {\n  home: '/',\n  profile: '/me',\n} satisfies Record<string, `/${string}`>;\n// routes.home is '/' not string",
-            "explanation": "satisfies checks shape without widening inferred literal types."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# generics versus TS structural",
-            "code": "// C# nominal — List<string> not assignable to List<object>\nList<string> names = new();\n\n// TS structural — extra properties allowed on assign\ninterface Named { name: string }\nconst x: Named = { name: 'a', id: 1 }; // excess check may error",
-            "explanation": "C# generics are nominal; TS uses structural assignability with excess property checks on fresh objects."
+            "label": "Failure: vite only CI",
+            "code": "// vite esbuild transpileOnly — no types checked without tsc job",
+            "explanation": "Build ≠ typecheck."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "Type model",
-              "Structural",
-              "Nominal",
-              "Structural static"
+              "stage",
+              "command",
+              "catches",
+              "C#"
             ],
             [
-              "Run time",
-              "Erased",
-              "CLR metadata",
-              "Erased to JS"
-            ],
-            [
-              "Generics",
-              "Erased",
-              "Reified",
-              "Erased"
+              "typecheck",
+              "tsc -b",
+              "types",
+              "dotnet build"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for CI typecheck pipelines and incremental builds",
-          "body": "Treating CI typecheck pipelines and incremental builds as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "no tsc CI. floating typescript ^. no tsbuildinfo cache."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **CI typecheck pipelines and incremental builds** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "turbo affected typecheck. husky pre-commit. Node LTS matrix."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,75 +193,61 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "tsc -b CI",
+              "authoritative",
+              "maintain refs"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "IDE only",
+              "free",
+              "drift merges"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to CI typecheck pipelines and incremental builds. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "no tsc CI. bundler checks types myth."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "CI typecheck pipelines and incremental builds: know definition plus one runnable example.",
-    "Production: validate external input before applying CI typecheck pipelines and incremental builds; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for ci-typecheck-pipelines.",
-    "60s: CI typecheck pipelines and incremental builds — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "CI explicit tsc.",
+    "pin TS version.",
+    "cache tsbuildinfo.",
+    "60s: lint+tsc+test. transpileOnly insufficient. tsc -b monorepo. pin version.",
+    "Follow-up: turbo affected."
   ],
   "commonPitfalls": [
-    "Weak: dismisses CI typecheck pipelines and incremental builds as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving ci-typecheck-pipelines.",
-    "Strong: define CI typecheck pipelines and incremental builds, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: vite build only CI.",
+    "Weak: ^typescript float.",
+    "Strong: \"dedicated tsc job. pin version. cache tsbuildinfo.\""
   ],
   "relatedTopicIds": [
-    "typescript-17-strict-compiler-flags",
-    "typescript-17-isolated-modules-verbatim",
-    "typescript-17-project-references"
+    "typescript-17-project-references",
+    "typescript-17-eslint-type-aware",
+    "typescript-18-compiler-performance"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "CI typecheck pipelines and incremental builds",
-      "note": "CI typecheck pipelines and incremental builds in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/compiler-options-tooling/ci-typecheck-pipelines"
+      "concept": "no tsc",
+      "note": "JS may skip — TS must not.",
+      "futureTopicSlug": "javascript/tooling/ci"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for CI typecheck pipelines and incremental builds",
-      "note": "C# developers: map CI typecheck pipelines and incremental builds to closest CLR concept (generics) and note differences.",
-      "futureTopicSlug": "csharp/modules/ci-typecheck-pipelines"
+      "concept": "dotnet build",
+      "note": "C# always compiles.",
+      "futureTopicSlug": "csharp/ci/github-actions"
     }
   ],
   "officialSources": [
     {
-      "title": "Conditional types",
-      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS CI performance",
+      "url": "https://github.com/microsoft/TypeScript/wiki/Performance#ci"
     }
   ],
   "animationHint": "timeline",

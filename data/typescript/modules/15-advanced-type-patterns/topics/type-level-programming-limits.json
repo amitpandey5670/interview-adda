@@ -4,78 +4,84 @@
   "title": "When to stop: readability versus clever types",
   "moduleId": "typescript-15-advanced-type-patterns",
   "order": 4,
-  "hook": "When to stop: readability versus clever types is compile-time type manipulation — erased at run time but essential for safe APIs. Conditional types, infer, and mapped types power built-in utilities like ReturnType and Partial.",
+  "hook": "Type-level programming has **readability** and **compile-time** costs — senior engineers know when to stop: Zod infer over 40-line conditionals, type budget per directory.",
   "sections": [
     {
-      "heading": "What is When to stop: readability versus clever types?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**When to stop: readability versus clever types** — When to stop: readability versus clever types is compile-time type manipulation — erased at run time but essential for safe APIs.. TypeScript checks this at compile time; emitted JavaScript still runs with the same runtime rules as plain JS. Read the glossary, study the snippets, then trace one example in DevTools or with `tsc --emitDeclarationOnly` / Node REPL."
+          "text": "Deep conditionals/recursive mapped types slow tsc and block review. **Type complexity budget**: app=interfaces+zod; shared lib=utilities with review. **extendedDiagnostics** profiles slow files. **satisfies** pragmatic middle."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "type",
-              "longForm": "When to stop: readability versus clever types",
-              "plainDefinition": "Core TypeScript mechanism for when to stop: readability versus clever types.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "type budget",
+              "longForm": "team convention",
+              "plainDefinition": "Cap on type gymnastics per area.",
+              "example": "no conditionals in features/"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "extendedDiagnostics",
+              "longForm": "tsc perf",
+              "plainDefinition": "Check time per file.",
+              "example": "tsc --extendedDiagnostics"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "infer hell",
+              "longForm": "nested infer",
+              "plainDefinition": "Unreadable infer chains.",
+              "example": "maintainer-only types"
+            },
+            {
+              "term": "satisfies",
+              "longForm": "pragmatic check",
+              "plainDefinition": "Validate without widening.",
+              "example": "cfg satisfies Config"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why When to stop: readability versus clever types matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Production bugs involving **When to stop: readability versus clever types** rarely look like syntax errors — they show up as wrong data, memory growth, flaky tests, or CI type failures. Senior engineers explain mechanism and tradeoffs, not definitions. Use the JavaScript and C# comparison table to transfer intuition from languages you already know."
+          "text": "One clever types.ts slows IDE for all. On-call cannot read 3-screen errors. Interview: know advanced AND when to refuse."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Can you name one concrete failure mode for type-level-programming-limits and how you would prove the fix (test, heap snapshot, or metric)? Hand-waving loses senior loops."
+          "title": "Interview trap: clever in prod",
+          "body": "Want mechanism knowledge AND judgment to use Zod/codegen instead."
         }
       ]
     },
     {
-      "heading": "How When to stop: readability versus clever types works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where When to stop: readability versus clever types appears — syntax, API call, or type annotation."
+              "title": "runtime first",
+              "body": "zod infer"
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "named aliases",
+              "body": "split complex types"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "measure compile",
+              "body": "extendedDiagnostics"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "review radar",
+              "body": "reject infer hell"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "When to stop: readability versus clever types flow",
-            "source": "flowchart LR\n  A[Source type] --> B[Conditional / mapped]\n  B --> C[Inferred result type]\n  C --> D[Emit erases to JS]"
+            "title": "When to stop",
+            "source": "flowchart TD\n  N[type safety need] --> Q{zod enough?}\n  Q -->|yes| Z[zod infer]\n  Q -->|no| A[advanced types]\n  A --> L{budget?}\n  L -->|no| Z"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: When to stop: readability versus clever types",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Conditional type with infer",
-            "code": "type Unwrap<T> = T extends Promise<infer U> ? U : T;\ntype A = Unwrap<Promise<string>>; // string\ntype B = Unwrap<number>; // number",
-            "explanation": "infer captures type variable in conditional match — pattern behind Awaited and ReturnType."
+            "label": "Zod over conditional",
+            "code": "const UserSchema = z.object({ id: z.string().uuid(), email: z.string().email() });\ntype User = z.infer<typeof UserSchema>;\nfunction parseUser(raw: unknown) { return UserSchema.parse(raw); }",
+            "explanation": "Single source runtime+type."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Mapped type for DTO",
-            "code": "type CreateUserDto = Pick<User, 'name' | 'email'>;\ntype UpdateUserDto = Partial<CreateUserDto> & { id: string };\ntype UserKeys = keyof User;",
-            "explanation": "Utility types compose — Partial, Pick, keyof build API layers without duplication."
+            "label": "Named aliases",
+            "code": "// Split RouteHead, RouteTail instead of 40-line template recursive type",
+            "explanation": "Decompose for compiler and humans."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Profile tsc",
+            "code": "npx tsc --noEmit --extendedDiagnostics 2>&1 | head -20",
+            "explanation": "Find slow files."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "satisfies preserves literal types",
-            "code": "const routes = {\n  home: '/',\n  profile: '/me',\n} satisfies Record<string, `/${string}`>;\n// routes.home is '/' not string",
-            "explanation": "satisfies checks shape without widening inferred literal types."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# generics versus TS structural",
-            "code": "// C# nominal — List<string> not assignable to List<object>\nList<string> names = new();\n\n// TS structural — extra properties allowed on assign\ninterface Named { name: string }\nconst x: Named = { name: 'a', id: 1 }; // excess check may error",
-            "explanation": "C# generics are nominal; TS uses structural assignability with excess property checks on fresh objects."
+            "label": "Failure: 80-line type in component",
+            "code": "// components/UserForm.tsx — move to @org/type-utils or simplify",
+            "explanation": "Clever types in UI file block team."
           }
         }
       ]
@@ -139,40 +145,40 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "Type model",
-              "Structural",
-              "Nominal",
-              "Structural static"
+              "",
+              "Zod",
+              "deep conditional",
+              "codegen"
             ],
             [
-              "Run time",
-              "Erased",
-              "CLR metadata",
-              "Erased to JS"
+              "maintain",
+              "high",
+              "low",
+              "medium"
             ],
             [
-              "Generics",
-              "Erased",
-              "Reified",
-              "Erased"
+              "runtime",
+              "yes",
+              "no",
+              "varies"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for When to stop: readability versus clever types",
-          "body": "Treating When to stop: readability versus clever types as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "conditional for JSON zod handles. no compile measurement. SO infer paste."
         }
       ]
     },
@@ -181,11 +187,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **When to stop: readability versus clever types** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "TYPE_BUDGET in CONTRIBUTING. @org/type-utils package. principal reviews type PRs."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,77 +199,62 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "zod infer",
+              "default APIs",
+              "runtime dep"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "type-utils pkg",
+              "reuse clever",
+              "still complex"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to When to stop: readability versus clever types. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Only flex types no stop rule. ignores compile time."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "When to stop: readability versus clever types: know definition plus one runnable example.",
-    "Production: validate external input before applying When to stop: readability versus clever types; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for type-level-programming-limits.",
-    "60s: When to stop: readability versus clever types — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Type cost readability+compile.",
+    "Zod replaces many conditionals.",
+    "extendedDiagnostics.",
+    "60s: budget per team. zod boundaries. named aliases. C# generators for codegen.",
+    "Follow-up: type-fest."
   ],
   "commonPitfalls": [
-    "Weak: dismisses When to stop: readability versus clever types as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving type-level-programming-limits.",
-    "Strong: define When to stop: readability versus clever types, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: 100-line conditional API.",
+    "Weak: no perf measure.",
+    "Strong: \"zod first. budget. split aliases. codegen heavy.\""
   ],
   "relatedTopicIds": [
-    "typescript-15-branded-and-opaque-types",
-    "typescript-15-recursive-types",
-    "typescript-15-builder-pattern-typing"
+    "typescript-18-type-complexity-budget",
+    "typescript-12-conditional-types-basics",
+    "typescript-15-advanced-patterns-vs-csharp"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "When to stop: readability versus clever types",
-      "note": "When to stop: readability versus clever types in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/advanced-type-patterns/type-level-programming-limits"
+      "concept": "runtime validation",
+      "note": "JS needs runtime always.",
+      "futureTopicSlug": "javascript/09-structural-typing-patterns/runtime-shape-validation"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for When to stop: readability versus clever types",
-      "note": "C# developers: map When to stop: readability versus clever types to closest CLR concept (generics) and note differences.",
-      "futureTopicSlug": "csharp/modules/type-level-programming-limits"
+      "concept": "generators",
+      "note": "C# codegen to readable code.",
+      "futureTopicSlug": "csharp/generators/source-generators"
     }
   ],
   "officialSources": [
     {
-      "title": "Conditional types",
-      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS performance authoring",
+      "url": "https://github.com/microsoft/TypeScript/wiki/Performance#authoring-easy-to-compile-code"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "csv-import"
+  "animationHint": "timeline"
 }

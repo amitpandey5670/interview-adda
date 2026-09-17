@@ -4,78 +4,84 @@
   "title": "declare module and module augmentation",
   "moduleId": "typescript-14-modules-and-declarations",
   "order": 5,
-  "hook": "declare module and module augmentation governs how code is loaded, tree-shaken, and resolved at build time versus run time. ESM/CJS interop and package exports trip monorepos and Node bundler configs daily.",
+  "hook": "**Module augmentation** extends third-party types — Express `Request.userId`, Jest custom matchers — via `declare module \"exact-name\" { interface ... }`.",
   "sections": [
     {
-      "heading": "What is declare module and module augmentation?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**declare module and module augmentation** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. declare module and module augmentation governs how code is loaded, tree-shaken, and resolved at build time versus run time. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**declare module** merges with existing module declaration. Works on **interfaces** (declaration merging), not type aliases. Must import/reference base module. Side-effect import augmentation file in entry."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "declare",
-              "longForm": "declare module and module augmentation",
-              "plainDefinition": "Core TypeScript mechanism for declare module and module augmentation.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "module augmentation",
+              "longForm": "declare module merge",
+              "plainDefinition": "Add to existing module types.",
+              "example": "declare module \"express-serve-static-core\""
             },
             {
-              "term": "ESM",
-              "longForm": "ECMAScript modules",
-              "plainDefinition": "import/export syntax; static analysis enables tree shaking.",
-              "example": "import { x } from './mod.js'"
+              "term": "declaration merging",
+              "longForm": "interface merge",
+              "plainDefinition": "Same interface name merges.",
+              "example": "interface User { a } + { b }"
             },
             {
-              "term": "CJS",
-              "longForm": "CommonJS",
-              "plainDefinition": "require/module.exports — Node legacy; dynamic resolution.",
-              "example": "const fs = require('fs')"
+              "term": "side-effect import",
+              "longForm": "import \"./types\"",
+              "plainDefinition": "Loads augmentation into graph.",
+              "example": "import \"./express.d.ts\""
+            },
+            {
+              "term": "exact module id",
+              "longForm": "resolution string",
+              "plainDefinition": "Must match import resolution.",
+              "example": "\"express-serve-static-core\" not \"Express\""
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why declare module and module augmentation matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **declare module and module augmentation** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Auth middleware req.user typing. Jest matcher extensions. Wrong module string — silent no merge. C# extension methods are runtime."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"declare module and module augmentation\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: augment type alias",
+          "body": "type aliases cannot be augmented — interfaces only."
         }
       ]
     },
     {
-      "heading": "How declare module and module augmentation works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where declare module and module augmentation appears — syntax, API call, or type annotation."
+              "title": "import base module",
+              "body": "activate in graph"
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "declare module exact id",
+              "body": "match resolution"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "extend interface",
+              "body": "inside block"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "side-effect import",
+              "body": "app entry"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "declare module and module augmentation flow",
-            "source": "flowchart LR\n  A[Source files] --> B[Bundler / Node resolver]\n  B --> C[Dependency graph]\n  C --> D[Tree-shaken bundle]"
+            "title": "Augmentation merge",
+            "source": "flowchart LR\n  ORIG[@types/express] --> AUG[your augment]\n  AUG --> MERGED[Merged Request]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: declare module and module augmentation",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "ESM static import",
-            "code": "import { readFile } from 'node:fs/promises';\nimport config from './config.js';\n\nexport async function load() {\n  return JSON.parse(await readFile(config.path, 'utf8'));\n}",
-            "explanation": "import/export are statically analyzable — enables tree shaking when sideEffects: false."
+            "language": "typescript",
+            "label": "Express Request",
+            "code": "import \"express-serve-static-core\";\ndeclare module \"express-serve-static-core\" { interface Request { userId?: string; } }\nfunction h(req: import(\"express\").Request) { console.log(req.userId); }",
+            "explanation": "Standard Express pattern."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Dynamic import code splitting",
-            "code": "const locale = navigator.language;\nconst mod = await import(`./locales/${locale}.js`);\nmod.applyTranslations();",
-            "explanation": "import() returns Promise — bundlers emit separate chunks loaded on demand."
+            "language": "typescript",
+            "label": "Jest matchers",
+            "code": "declare global { namespace jest { interface Matchers<R> { toBeWithinRange(a: number, b: number): R; } } }",
+            "explanation": "Custom matcher types."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "package.json exports field",
-            "code": "// package.json\n{\n  \"type\": \"module\",\n  \"exports\": {\n    \".\": \"./dist/index.js\",\n    \"./utils\": \"./dist/utils.js\"\n  }\n}",
-            "explanation": "exports map controls public API surface — breaks deep imports into node_modules/pkg/src."
+            "language": "typescript",
+            "label": "Library consumer extend",
+            "code": "declare module \"my-lib\" { interface Config { debug?: boolean; } }",
+            "explanation": "Ship augmentation for consumers."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# assemblies versus JS modules",
-            "code": "// C# namespace + assembly boundary\nnamespace MyApp.Services { public class UserService { } }\n\n// JS: file is module scope; no nominal namespace at runtime",
-            "explanation": "C# assemblies are deployment units with strong names; JS modules are files resolved by bundler or Node."
+            "language": "typescript",
+            "label": "Failure: wrong name",
+            "code": "declare module \"Express\" { interface Request { x: string } } // no merge",
+            "explanation": "Case/name must match resolution."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "Unit",
-              "File / package",
-              "Assembly",
-              "Module file"
+              "Augment",
+              "interface merge compile-time",
+              "N/A",
+              "extension methods runtime"
             ],
             [
-              "Resolution",
-              "Node / bundler",
-              "Reference + NuGet",
-              "paths in tsconfig"
-            ],
-            [
-              "Tree shaking",
-              "ESM static imports",
-              "Trimming (AOT)",
-              "Type-only import erase"
+              "type alias",
+              "cannot augment",
+              "N/A",
+              "cannot extend type alias"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for declare module and module augmentation",
-          "body": "Treating declare module and module augmentation as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "wrong module string. augment type alias. forget side-effect import."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **declare module and module augmentation** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Nest reflect-metadata + augmentation. Prefer explicit context type in large teams. type tests for augmentations."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,77 +193,68 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "module augment",
+              "ecosystem standard",
+              "silent fail wrong string"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "wrapper type",
+              "explicit",
+              "boilerplate"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "generic context",
+              "type-safe",
+              "refactor handlers"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to declare module and module augmentation. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot write Express augment. Tries augment type alias."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "declare module and module augmentation: know definition plus one runnable example.",
-    "Production: validate external input before applying declare module and module augmentation; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for declare-module-augmentation.",
-    "60s: declare module and module augmentation — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "declare module merges interfaces.",
+    "exact module id string.",
+    "side-effect import.",
+    "60s: Express Request. interface only. C# extensions runtime.",
+    "Follow-up: global vs module."
   ],
   "commonPitfalls": [
-    "Weak: dismisses declare module and module augmentation as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving declare-module-augmentation.",
-    "Strong: define declare module and module augmentation, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: wrong module casing.",
+    "Weak: augment type alias.",
+    "Strong: \"exact module id. interface merge. side-effect import.\""
   ],
   "relatedTopicIds": [
-    "typescript-14-module-resolution-modes",
-    "typescript-14-path-mapping",
-    "typescript-14-ambient-declarations"
+    "typescript-14-ambient-declarations",
+    "typescript-05-declaration-merging",
+    "typescript-16-reflect-metadata"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "declare module and module augmentation",
-      "note": "declare module and module augmentation in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/modules-and-declarations/declare-module-augmentation"
+      "concept": "runtime property",
+      "note": "JS adds req.user — TS types it.",
+      "futureTopicSlug": "javascript/09-structural-typing-patterns/duck-typing"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for declare module and module augmentation",
-      "note": "C# developers: map declare module and module augmentation to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/declare-module-augmentation"
+      "concept": "extension methods",
+      "note": "C# runtime dispatch.",
+      "futureTopicSlug": "csharp/classes/extension-methods"
     }
   ],
   "officialSources": [
     {
-      "title": "ES modules",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS module augmentation",
+      "url": "https://www.typescriptlang.org/docs/handbook/declaration-merging.html#module-augmentation"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

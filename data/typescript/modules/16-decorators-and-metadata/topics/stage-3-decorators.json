@@ -4,78 +4,84 @@
   "title": "Stage 3 decorators and decorator factories",
   "moduleId": "typescript-16-decorators-and-metadata",
   "order": 1,
-  "hook": "Stage 3 decorators and decorator factories attaches metadata and behavior to classes at definition time. Stage 3 decorators differ from legacy experimental decorators — Angular and NestJS teams must know both.",
+  "hook": "**Stage 3 decorators** (TS 5.0+, TC39) use `(value, context) => value` — replaces experimental 3-arg API. context.kind, context.name, addInitializer for setup.",
   "sections": [
     {
-      "heading": "What is Stage 3 decorators and decorator factories?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Stage 3 decorators and decorator factories** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Stage 3 decorators and decorator factories attaches metadata and behavior to classes at definition time. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "Disable experimentalDecorators. Decorator receives value + **DecoratorContext**. Class/method/field/accessor targets. **Decorator factories** return decorator. **addInitializer** runs post-construct. No reflect-metadata required for basic metadata — context provides it."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "stage",
-              "longForm": "Stage 3 decorators and decorator factories",
-              "plainDefinition": "Core TypeScript mechanism for stage 3 decorators and decorator factories.",
-              "example": "Runnable examples in the code walkthrough below."
+              "term": "Stage 3",
+              "longForm": "standard decorators",
+              "plainDefinition": "TC39 proposal in TS 5.0.",
+              "example": "(fn, context) => fn"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "DecoratorContext",
+              "longForm": "context object",
+              "plainDefinition": "kind, name, static, private.",
+              "example": "context.kind === \"method\""
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "factory",
+              "longForm": "decorator factory",
+              "plainDefinition": "Returns decorator with config.",
+              "example": "Logged(\"api\")"
+            },
+            {
+              "term": "addInitializer",
+              "longForm": "post-construct",
+              "plainDefinition": "Callback after instance created.",
+              "example": "context.addInitializer(()=>{})"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Stage 3 decorators and decorator factories matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Stage 3 decorators and decorator factories** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Angular 19+ path to standard decorators. Migration from legacy. Interview: signature difference."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Stage 3 decorators and decorator factories\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: legacy vs stage 3",
+          "body": "Legacy (target, key, descriptor) vs stage 3 (value, context) — different APIs."
         }
       ]
     },
     {
-      "heading": "How Stage 3 decorators and decorator factories works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Mental model",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Stage 3 decorators and decorator factories appears — syntax, API call, or type annotation."
+              "title": "TS 5+ config",
+              "body": "experimentalDecorators false"
             },
             {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+              "title": "write decorator",
+              "body": "(value, context)"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "factory for opts",
+              "body": "return decorator"
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "test emit",
+              "body": "stage 3 in output"
             }
           ]
         },
@@ -83,49 +89,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Stage 3 decorators and decorator factories flow",
-            "source": "flowchart TD\n  A[Stage 3 decorators and decorator factories] --> B[Read / parse]\n  B --> C[Type check]\n  C --> D[Observable behavior]"
+            "title": "Stage 3 apply",
+            "source": "flowchart TD\n  CLASS --> DEC[@decorator]\n  DEC --> CTX[context]\n  CTX --> OUT[value/initializer]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Stage 3 decorators and decorator factories",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Stage 3 decorator",
-            "code": "function logged<T extends { new (...args: any[]): object }>(target: T, ctx: ClassDecoratorContext) {\n  return class extends target {\n    constructor(...args: any[]) { console.log('Creating', ctx.name); super(...args); }\n  };\n}\n@logged\nclass Service {}",
-            "explanation": "Stage 3 API differs from legacy experimental decorators."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "typescript",
             "label": "Method decorator",
-            "code": "function validate(min: number) {\n  return (_t: unknown, ctx: ClassMethodDecoratorContext) => function (this: unknown, v: number) {\n    if (v < min) throw new RangeError('too small');\n    return v;\n  };\n}",
-            "explanation": "Decorator factories configure behavior — Angular/NestJS patterns."
+            "code": "function logged<T extends (...args: unknown[]) => unknown>(fn: T, ctx: ClassMethodDecoratorContext): T {\n  const name = String(ctx.name);\n  return function (this: unknown, ...args: unknown[]) { console.log(name); return fn.apply(this, args); } as T;\n}\nclass Api { @logged fetch() { return \"d\"; } }",
+            "explanation": "Stage 3 method wrap."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "reflect-metadata",
-            "code": "Reflect.defineMetadata('design:paramtypes', [String], Target, 'method');",
-            "explanation": "Legacy DI metadata — migrating to Stage 3 changes shape."
+            "label": "Factory + addInitializer",
+            "code": "function Validate(min: number) {\n  return function (_v: unknown, ctx: ClassFieldDecoratorContext) {\n    ctx.addInitializer(function () {\n      const v = (this as Record<string, unknown>)[ctx.name as string];\n      if (typeof v === \"number\" && v < min) throw new Error(\"small\");\n    });\n  };\n}\nclass C { @Validate(0) accessor timeout = 100; }",
+            "explanation": "Field validation via initializer."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "Attributes",
-            "code": "[Authorize]\npublic class UsersController : ControllerBase { }",
-            "explanation": "C# attributes are CLR metadata; TS decorators are functions at class definition."
+            "language": "typescript",
+            "label": "Class decorator",
+            "code": "function sealed<T extends { new(...a: unknown[]): object }>(ctor: T, ctx: ClassDecoratorContext) {\n  ctx.addInitializer(() => console.log(ctx.name));\n  return ctor;\n}\n@sealed class S {}",
+            "explanation": "Class decorator."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure: mixed modes",
+            "code": "// experimentalDecorators true + stage 3 body = errors",
+            "explanation": "One decorator system per project."
           }
         }
       ]
@@ -139,40 +145,34 @@
           "headers": [
             "Aspect",
             "TypeScript",
-            "C#",
-            "JavaScript emit"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Compile time",
-              "Compile + CLR",
-              "Compile only"
+              "API",
+              "(value,context)",
+              "N/A",
+              "attributes"
             ],
             [
-              "Type model",
-              "Structural static",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "any at boundary"
+              "timing",
+              "class def",
+              "N/A",
+              "compile/runtime mix"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Stage 3 decorators and decorator factories",
-          "body": "Treating Stage 3 decorators and decorator factories as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "legacy signature with stage 3 enabled. wrong target kind."
         }
       ]
     },
@@ -181,11 +181,11 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Stage 3 decorators and decorator factories** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "TC39 spec for context fields. Plan Nest/Angular migration codemods."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs at senior level",
           "headers": [
             "Approach",
             "When it wins",
@@ -193,43 +193,37 @@
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "stage 3",
+              "standard",
+              "ecosystem migrating"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "legacy",
+              "works today",
+              "deprecated"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Stage 3 decorators and decorator factories. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Same legacy/stage3 signature. cannot write decorator."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Stage 3 decorators and decorator factories: know definition plus one runnable example.",
-    "Production: validate external input before applying Stage 3 decorators and decorator factories; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for stage-3-decorators.",
-    "60s: Stage 3 decorators and decorator factories — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "stage 3 (value,context).",
+    "factories.",
+    "addInitializer.",
+    "60s: TS5 standard. context fields. legacy different. C# attributes differ.",
+    "Follow-up: Angular migration."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Stage 3 decorators and decorator factories as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving stage-3-decorators.",
-    "Strong: define Stage 3 decorators and decorator factories, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: legacy sig stage3 mode.",
+    "Weak: types as runtime.",
+    "Strong: \"(value,context). factory. addInitializer. migrate experimental.\""
   ],
   "relatedTopicIds": [
     "typescript-16-legacy-decorators",
@@ -239,27 +233,22 @@
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Stage 3 decorators and decorator factories",
-      "note": "Stage 3 decorators and decorator factories in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/decorators-and-metadata/stage-3-decorators"
+      "concept": "decorators proposal",
+      "note": "JS language feature.",
+      "futureTopicSlug": "javascript/classes/decorators"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation for Stage 3 decorators and decorator factories",
-      "note": "C# developers: map Stage 3 decorators and decorator factories to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/stage-3-decorators"
+      "concept": "attributes",
+      "note": "C# metadata attach.",
+      "futureTopicSlug": "csharp/attributes/custom-attributes"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TS 5.0 decorators",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-0.html#decorators"
     }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "redis-cache"
+  "animationHint": "flow"
 }
