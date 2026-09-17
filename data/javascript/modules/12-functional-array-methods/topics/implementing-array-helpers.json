@@ -4,128 +4,122 @@
   "title": "Implementing map, filter, and flatten from scratch",
   "moduleId": "javascript-12-functional-array-methods",
   "order": 4,
-  "hook": "Implementing map, filter, and flatten from scratch covers built-in data structures and iteration protocols. Map versus Object, Set deduplication, and generator laziness affect performance and API design in hot paths.",
+  "hook": "FAANG interviews ask you to polyfill Array.prototype.map without using map — same pattern for filter, flatten, and flatMap. You must know index, thisArg, sparse arrays, and mutation rules.",
   "sections": [
     {
-      "heading": "What is Implementing map, filter, and flatten from scratch?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Implementing map, filter, and flatten from scratch** is a run-time JavaScript mechanism enforced by the engine on every execution. Implementing map, filter, and flatten from scratch covers built-in data structures and iteration protocols. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "Implementing **map** means new array, loop indices 0..length-1, skip holes or include per spec, call callback `(element, index, array)`, push result. **filter** pushes when callback truthy. **flatten** recursively or iteratively expands nested arrays to depth. **flatMap** is map then flat(1) — one pass optimization in native code. Respect **length** property even if sparse — do not use for...of alone if holes matter."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "implementing",
-              "longForm": "Implementing map, filter, and flatten from scratch",
-              "plainDefinition": "Central mechanism behind \"Implementing map, filter, and flatten from scratch\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "polyfill",
+              "longForm": "polyfill",
+              "plainDefinition": "Userland implementation of built-in missing in older engines.",
+              "example": "if (!Array.prototype.flat) Array.prototype.flat = function() { ... }"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "callbackfn",
+              "longForm": "callback function",
+              "plainDefinition": "Predicate or mapper invoked per index with element, index, whole array.",
+              "example": "(value, index, array) => transformed"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "thisArg",
+              "longForm": "thisArg binding",
+              "plainDefinition": "Optional value bound as this inside callback — map/filter support it.",
+              "example": "arr.map(fn, contextObject)"
+            },
+            {
+              "term": "flat depth",
+              "longForm": "flat depth",
+              "plainDefinition": "How many nesting levels to flatten — Infinity for full flatten.",
+              "example": "[1,[2,[3]]].flat(2) // [1,2,3]"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Implementing map, filter, and flatten from scratch matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Implementing map, filter, and flatten from scratch** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Implement-from-scratch proves you understand iteration, not just API names. Same skills build **custom collections**, **Observable** operators, and **ORM** mappers. C# **Select** extension method is similar — LINQ to Objects is lazy IEnumerable, your JS polyfill is eager array."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Implementing map, filter, and flatten from scratch\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: mutate during iteration",
+          "body": "Spec: length may change during map/filter — use careful index loop. Mention this for senior credit."
         }
       ]
     },
     {
-      "heading": "How Implementing map, filter, and flatten from scratch works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "map polyfill algorithm",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where Implementing map, filter, and flatten from scratch appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Require callable callback", "body": "TypeError if not function." },
+            { "title": "O = Object(this), len = length", "body": "Handle array-like objects." },
+            { "title": "Loop k from 0 to len-1", "body": "If HasProperty(k), call callback, define result[k]." },
+            { "title": "Return new array A", "body": "Same length semantics as native map." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Implementing map, filter, and flatten from scratch flow",
-            "source": "flowchart TD\n  A[Implementing map, filter, and flatten from scratch] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Custom map loop",
+            "source": "flowchart TD\n  S[Start k=0] --> C{k < length?}\n  C -->|no| R[Return result array]\n  C -->|yes| H{Has index k?}\n  H -->|yes| M[callback push result]\n  H -->|no| N[skip hole]\n  M --> I[k++]\n  N --> I\n  I --> C"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Implementing map, filter, and flatten from scratch",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Map versus Object for keys",
-            "code": "const cache = new Map();\ncache.set({ id: 1 }, 'payload'); // object keys by reference\ncache.get({ id: 1 }); // undefined — different object\n\nconst byId = new Map();\nbyId.set('user-42', { name: 'Ada' });",
-            "explanation": "Map allows any key type and preserves insertion order; Object keys are strings/symbols."
+            "label": "map from scratch",
+            "code": "function myMap(array, callback, thisArg) {\n  if (array == null) throw new TypeError('array is null or undefined');\n  if (typeof callback !== 'function') throw new TypeError('callback is not a function');\n\n  const O = Object(array);\n  const len = O.length >>> 0;\n  const A = new Array(len);\n\n  for (let k = 0; k < len; k++) {\n    if (k in O) {\n      A[k] = callback.call(thisArg, O[k], k, O);\n    }\n  }\n  return A;\n}\n\nmyMap([1, 2, 3], n => n * 2); // [2,4,6]",
+            "explanation": ">>> 0 converts length to uint32 like spec. k in O preserves holes in result."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Set deduplication",
-            "code": "const ids = ['a', 'b', 'a', 'c'];\nconst unique = [...new Set(ids)];\nconsole.log(unique); // ['a', 'b', 'c']",
-            "explanation": "Set for O(1) uniqueness checks — faster than array.includes for large lists."
+            "label": "filter from scratch",
+            "code": "function myFilter(array, predicate, thisArg) {\n  const O = Object(array);\n  const len = O.length >>> 0;\n  const result = [];\n\n  for (let k = 0; k < len; k++) {\n    if (k in O && predicate.call(thisArg, O[k], k, O)) {\n      result.push(O[k]);\n    }\n  }\n  return result;\n}",
+            "explanation": "Result length unknown — push instead of pre-sized array. Truthy predicate like native filter."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Generator lazy sequence",
-            "code": "function* range(start, end) {\n  for (let i = start; i < end; i++) yield i;\n}\nfor (const n of range(0, 1_000_000)) {\n  if (n > 5) break; // no array allocated\n}",
-            "explanation": "Generators compute on demand — memory friendly versus eager array allocation."
+            "label": "flatten recursive",
+            "code": "function flatten(input, depth = 1) {\n  const out = [];\n  for (const item of input) {\n    if (Array.isArray(item) && depth > 0) {\n      out.push(...flatten(item, depth - 1));\n    } else {\n      out.push(item);\n    }\n  }\n  return out;\n}\n\nflatten([1, [2, [3]]], Infinity); // [1,2,3]",
+            "explanation": "Interview follow-up: iterative stack version avoids recursion depth limit on huge nesting."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "for-of versus for-in",
-            "code": "const arr = ['a', 'b'];\narr.extra = 'x';\nfor (const i in arr) console.log(i); // '0','1','extra'\nfor (const v of arr) console.log(v); // 'a','b'",
-            "explanation": "for-in enumerates keys including enumerable properties; for-of iterates values via Symbol.iterator."
+            "label": "Failure mode: using for...of on sparse array",
+            "code": "const sparse = [1, , 3];\nconst wrong = [];\nfor (const v of sparse) wrong.push(v * 2);\nconsole.log(wrong); // [2, 6] — hole skipped, length wrong vs map\n\nconst right = myMap(sparse, v => v * 2);\nconsole.log(right); // [2, empty, 6] — hole preserved",
+            "explanation": "Polyfill must match spec index iteration, not iterator skipping holes."
           }
         }
       ]
@@ -135,44 +129,26 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Implementing map, filter, and flatten from scratch across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
-          ],
+          "title": "Custom helpers vs LINQ",
+          "headers": ["Aspect", "JS polyfill", "C# LINQ Select"],
           "rows": [
-            [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
-            ],
-            [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
-            ]
+            ["Target", "Array-like with length", "IEnumerable<T>"],
+            ["Lazy", "No — returns array", "Yes — deferred execution"],
+            ["Holes/sparse", "Index loop spec", "N/A for List<T>"],
+            ["thisArg", "Supported in map/filter", "Not applicable"],
+            ["flatMap", "map + flat(1)", "SelectMany"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Implementing map, filter, and flatten from scratch",
-          "body": "Treating Implementing map, filter, and flatten from scratch as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "for...of polyfill losing sparse slots. Forgetting callback TypeError. flat recursive stack overflow on deep nest — use iterative. Mutating input array inside map while iterating."
         }
       ]
     },
@@ -181,85 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Implementing map, filter, and flatten from scratch** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Extend interview: **flatMap** one-pass, **reduce** polyfill, **Array.from** with mapFn. Discuss spec vs simple version — when interview wants spec-accurate vs 'works for dense arrays'. In production use native methods — polyfills for education and legacy only."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "title": "Tradeoffs at senior level",
+          "headers": ["Implementation", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
-            ]
+            ["Index for loop", "Spec-accurate map/filter", "Verbose"],
+            ["for...of", "Dense arrays readable", "Wrong for sparse spec"],
+            ["Recursive flat", "Interview clarity", "Stack depth"],
+            ["Iterative flat + stack", "Production-safe deep nest", "More code"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Implementing map, filter, and flatten from scratch. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot write map in 5 minutes. Using result.push in map without understanding pre-sized array spec. No mention of callback thisArg or holes."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Implementing map, filter, and flatten from scratch: know definition plus one runnable example.",
-    "Production: validate external input before applying Implementing map, filter, and flatten from scratch; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for implementing-array-helpers.",
-    "60s: Implementing map, filter, and flatten from scratch — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "map polyfill: index loop 0..length, k in array, callback.call(thisArg).",
+    "filter pushes when predicate truthy — result length dynamic.",
+    "flat: recursive or stack; flatMap = map + flat(1) = SelectMany.",
+    "60s: Implement map/filter with length >>> 0 and k in O. Holes matter. flat recursive depth. C# Select lazy; JS eager. thisArg optional.",
+    "Follow-up: iterative flatten without recursion stack overflow."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Implementing map, filter, and flatten from scratch as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving implementing-array-helpers.",
-    "Strong: define Implementing map, filter, and flatten from scratch, show a 5-line example, name one pitfall and one C# difference."
+    "for...of polyfill that skips sparse holes incorrectly for map spec.",
+    "filter/map without validating callback is function.",
+    "Strong answer: write map from scratch, explain holes, thisArg, flat depth, SelectMany parallel."
   ],
   "relatedTopicIds": [
     "javascript-12-map-filter-reduce",
     "javascript-12-flat-flatmap-groupby",
-    "javascript-12-currying-and-composition"
+    "javascript-18-interview-utility-implementations"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Implementing map, filter, and flatten from scratch",
-      "note": "Implementing map, filter, and flatten from scratch in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/functional-array-methods/implementing-array-helpers"
+      "concept": "ReadonlyArray and typed callbacks",
+      "note": "Implementations often generic <T, U> for mapper — mirrors writing Select<T,R> in C#.",
+      "futureTopicSlug": "typescript/generics/array-methods"
     },
     {
       "language": "javascript",
-      "concept": "C# correlation for Implementing map, filter, and flatten from scratch",
-      "note": "C# developers: map Implementing map, filter, and flatten from scratch to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/implementing-array-helpers"
+      "concept": "Array-like objects",
+      "note": "arguments and DOM NodeList have length — polyfill uses Object(array) pattern like Array.prototype methods.",
+      "futureTopicSlug": "javascript/arrays/array-like"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "ECMAScript — Array.prototype.map", "url": "https://tc39.es/ecma262/#sec-array.prototype.map" },
+    { "title": "MDN — Array.flat", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/flat" }
   ],
-  "animationHint": "flow",
-  "scenarioTag": "redis-cache"
+  "animationHint": "flow"
 }
