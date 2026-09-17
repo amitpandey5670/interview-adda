@@ -4,78 +4,78 @@
   "title": "Web Workers and dedicated worker threads",
   "moduleId": "javascript-15-workers-and-concurrency",
   "order": 1,
-  "hook": "Web Workers and dedicated worker threads is how JavaScript shares work across threads without shared mutable state by default. postMessage, transferables, and Atomics differ sharply from C# Task.Run and lock patterns.",
+  "hook": "A Web Worker runs JavaScript on a separate thread with its own event loop — no DOM access, but perfect for parsing large CSV files, crypto, or image processing without freezing the UI.",
   "sections": [
     {
-      "heading": "What is Web Workers and dedicated worker threads?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Web Workers and dedicated worker threads** is a run-time JavaScript mechanism enforced by the engine on every execution. Web Workers and dedicated worker threads is how JavaScript shares work across threads without shared mutable state by default. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Dedicated Worker**: `new Worker(url)` spawns an isolated global scope (`self`). Communication via **postMessage**. No `window`, `document`, or parent objects. **SharedWorker** (rare) and **Service Worker** (network cache) are different APIs. Node has **worker_threads** module with similar message passing."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "web",
-              "longForm": "Web Workers and dedicated worker threads",
-              "plainDefinition": "Central mechanism behind \"Web Workers and dedicated worker threads\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "Dedicated Worker",
+              "longForm": "Dedicated Web Worker",
+              "plainDefinition": "One-to-one worker owned by creating script.",
+              "example": "new Worker(\"worker.js\")"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "self",
+              "longForm": "Worker global self",
+              "plainDefinition": "Global object inside worker — like window in main.",
+              "example": "self.onmessage = handler"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "worker_threads",
+              "longForm": "Node worker_threads",
+              "plainDefinition": "Node.js API for parallel JS threads.",
+              "example": "new Worker(\"./task.js\")"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Web Workers and dedicated worker threads matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Web Workers and dedicated worker threads** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "JSON.parse on 20MB API response blocks main thread 500ms — users see jank. Offload to Worker; main thread stays responsive for fetch and Redis cache UI updates. Wrong tool: Workers for I/O — async fetch already non-blocking."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Web Workers and dedicated worker threads\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "CPU not I/O",
+          "body": "Workers help CPU-bound work. Network waits use async fetch on main thread."
         }
       ]
     },
     {
-      "heading": "How Web Workers and dedicated worker threads works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Worker lifecycle",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Web Workers and dedicated worker threads appears — syntax, API call, or type annotation."
+              "title": "Create",
+              "body": "new Worker(scriptURL) — separate thread starts."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Listen",
+              "body": "worker.onmessage on main; self.onmessage in worker."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Send work",
+              "body": "postMessage task payload."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Terminate",
+              "body": "worker.terminate() or close when done."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Web Workers and dedicated worker threads flow",
-            "source": "flowchart TD\n  A[Web Workers and dedicated worker threads] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Main vs Worker threads",
+            "source": "flowchart LR\n  M[Main thread DOM fetch] <-->|postMessage| W[Worker CPU task]\n  M --> UI[Paint UI]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Web Workers and dedicated worker threads",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Core Web Workers and dedicated worker threads example",
-            "code": "function createClient(cfg) {\n  return {\n    async call(path) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}\n\nconst client = createClient({ retries: 3, endpoint: 'https://api.example.com' });",
-            "explanation": "Demonstrates Web Workers and dedicated worker threads in a realistic API client — retries, fetch, and configuration."
+            "label": "Basic Worker",
+            "code": "// main.js\nconst worker = new Worker(\"parse-worker.js\");\nworker.postMessage({ csv: largeCsvString });\nworker.onmessage = (e) => renderTable(e.data.rows);\nworker.onerror = (e) => console.error(e.message);\n\n// parse-worker.js\nself.onmessage = (e) => {\n  const rows = parseCsv(e.data.csv);\n  self.postMessage({ rows });\n};",
+            "explanation": "Line 3: structured clone copies csv to worker thread. Line 10: result posted back — main renders."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v) {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj, key) {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for Web Workers and dedicated worker threads\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps Web Workers and dedicated worker threads idioms to C# — note compile-time types versus JS run-time checks."
+            "label": "Inline Worker via Blob URL",
+            "code": "const code = `self.onmessage = (e) => self.postMessage(e.data * 2);`;\nconst blob = new Blob([code], { type: \"application/javascript\" });\nconst worker = new Worker(URL.createObjectURL(blob));\nworker.postMessage(21);\nworker.onmessage = (e) => console.log(e.data); // 42",
+            "explanation": "Bundle-friendly pattern when separate file awkward — revoke object URL after create."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode diagnostic",
-            "code": "function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}",
-            "explanation": "Explicit unknown/error handling for Web Workers and dedicated worker threads — senior code paths always name failure modes."
+            "label": "Node worker_threads",
+            "code": "import { Worker } from \"node:worker_threads\";\nconst worker = new Worker(new URL(\"./hash.js\", import.meta.url));\nworker.postMessage({ buffer: largeBuffer });\nconst result = await new Promise((r) => worker.on(\"message\", r));",
+            "explanation": "Node Workers share some APIs; pass SharedArrayBuffer or transfer ArrayBuffer."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — DOM in Worker",
+            "code": "// inside worker.js\n// document.getElementById(\"x\"); // ReferenceError: document is not defined",
+            "explanation": "Workers cannot touch DOM — only postMessage results to main for rendering."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Web Workers and dedicated worker threads across languages",
+          "title": "Concurrency options",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Tool",
+            "Use case",
+            "DOM"
           ],
           "rows": [
             [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
+              "async/await",
+              "I/O overlap",
+              "Yes"
             ],
             [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
+              "Web Worker",
+              "CPU parallel",
+              "No"
             ],
             [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
+              "Worker pool",
+              "Many CPU jobs",
+              "No"
+            ],
+            [
+              "C# Task.Run",
+              "CPU on pool",
+              "N/A"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Web Workers and dedicated worker threads",
-          "body": "Treating Web Workers and dedicated worker threads as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Workers for every fetch. Not terminating idle workers. Loading huge scripts into every worker."
         }
       ]
     },
@@ -181,85 +182,89 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Web Workers and dedicated worker threads** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Module Workers (type: module) support ESM import in workers. COOP/COEP required for SharedArrayBuffer. Measure postMessage copy cost — may need transferables. Production: pool size = CPU cores - 1."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
             "Approach",
-            "When it wins",
-            "When it fails"
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Single Worker",
+              "Simple",
+              "One job at a time"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "Worker pool",
+              "Throughput",
+              "Complexity"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "Main thread parse",
+              "No copy overhead",
+              "UI jank"
+            ],
+            [
+              "WASM in Worker",
+              "Near-native CPU",
+              "Build pipeline"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Web Workers and dedicated worker threads. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Uses Worker for fetch. Tries DOM in worker. Says Workers share memory by default."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Web Workers and dedicated worker threads: know definition plus one runnable example.",
-    "Production: validate external input before applying Web Workers and dedicated worker threads; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for web-workers-basics.",
-    "60s: Web Workers and dedicated worker threads — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Worker = separate thread, own event loop, no DOM.",
+    "postMessage for communication; structured clone copies.",
+    "CPU-bound yes; I/O-bound use async.",
+    "60s: new Worker spawns thread. postMessage in/out. No window/document. CPU parse/crypto offload. Node worker_threads similar. Not for fetch waiting.",
+    "Follow-up: when NOT to use a Worker?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses Web Workers and dedicated worker threads as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving web-workers-basics.",
-    "Strong: define Web Workers and dedicated worker threads, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: Worker for parallel HTTP — use Promise.all.",
+    "Weak: access document in worker.",
+    "Strong: CPU offload + postMessage + terminate when idle."
   ],
   "relatedTopicIds": [
     "javascript-15-postmessage-and-transferables",
-    "javascript-15-sharedarraybuffer-and-atomics",
-    "javascript-15-worker-pools-and-patterns"
+    "javascript-15-worker-pools-and-patterns",
+    "javascript-13-why-async-javascript"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Web Workers and dedicated worker threads",
-      "note": "Web Workers and dedicated worker threads in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/workers-and-concurrency/web-workers-basics"
+      "concept": "Worker types",
+      "note": "lib.webworker types for self and postMessage payloads.",
+      "futureTopicSlug": "typescript/dom/web-workers"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Web Workers and dedicated worker threads",
-      "note": "C# developers: map Web Workers and dedicated worker threads to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/web-workers-basics"
+      "language": "typescript",
+      "concept": "Task.Run",
+      "note": "C# comparison: Task.Run CPU work on pool — shared memory unlike Workers.",
+      "futureTopicSlug": "csharp/concurrency-and-threading/task-run"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Web Workers API",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Node.js — worker_threads",
+      "url": "https://nodejs.org/api/worker_threads.html"
     }
   ],
-  "animationHint": "stack-heap",
+  "animationHint": "compare",
   "scenarioTag": "csv-import"
 }

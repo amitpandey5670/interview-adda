@@ -4,78 +4,78 @@
   "title": "Common leak patterns: timers, listeners, and caches",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 5,
-  "hook": "Common leak patterns: timers, listeners, and caches connects directly to V8 heap layout and GC pauses. Retained references — closures, timers, caches — keep objects in old generation until major GC, affecting tail latency.",
+  "hook": "Memory leaks in JavaScript are forgotten strong references — timers never cleared, event listeners never removed, and caches without eviction that grow until the tab or Node process OOMs.",
   "sections": [
     {
-      "heading": "What is Common leak patterns: timers, listeners, and caches?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Common leak patterns: timers, listeners, and caches** is a run-time JavaScript mechanism enforced by the engine on every execution. Common leak patterns: timers, listeners, and caches connects directly to V8 heap layout and GC pauses. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "A **leak** is reachable memory no longer needed by the program but still referenced from a GC root (global, closure, DOM, module scope). **Patterns**: uncleared `setInterval`, duplicate `addEventListener`, **unbounded Map/LRU missing**, **closure over large objects**, **forgotten Promise chains** holding results, **Redis client event listeners** per request."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "memory",
-              "longForm": "Common leak patterns: timers, listeners, and caches",
-              "plainDefinition": "Central mechanism behind \"Common leak patterns: timers, listeners, and caches\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "GC root",
+              "longForm": "garbage collection root",
+              "plainDefinition": "Starting point for reachability — globals, stacks, DOM.",
+              "example": "window, global, module exports"
             },
             {
-              "term": "heap",
-              "longForm": "V8 heap",
-              "plainDefinition": "Region where objects live; split into young and old generations.",
-              "example": "process.memoryUsage().heapUsed"
+              "term": "listener leak",
+              "longForm": "event listener leak",
+              "plainDefinition": "Handler keeps DOM or data alive after navigation.",
+              "example": "SPA route change without removeEventListener"
             },
             {
-              "term": "retention",
-              "longForm": "memory retention",
-              "plainDefinition": "Reachable reference prevents GC from reclaiming object.",
-              "example": "Closure holding large array"
+              "term": "cache leak",
+              "longForm": "unbounded cache",
+              "plainDefinition": "Map grows forever — every key retained.",
+              "example": "memoize without max size"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Common leak patterns: timers, listeners, and caches matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Common leak patterns: timers, listeners, and caches** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Production incidents: dashboard open 8 hours — heap grows 2GB from chart listeners. Node SQS consumer leaks closure over message batch — restart every 6 hours. Fix is profiling then breaking reference chain."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Common leak patterns: timers, listeners, and caches\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "LRU with max size",
+          "body": "Production caches need TTL or max entries — Redis EXPIRE or lru-cache npm."
         }
       ]
     },
     {
-      "heading": "How Common leak patterns: timers, listeners, and caches works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Leak hunt workflow",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Common leak patterns: timers, listeners, and caches appears — syntax, API call, or type annotation."
+              "title": "Reproduce growth",
+              "body": "Heap timeline while repeating action."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Snapshot diff",
+              "body": "Compare two heap snapshots — what grew?"
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Retainers path",
+              "body": "Walk from leaked object to root."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Break reference",
+              "body": "clearInterval, off(), bounded cache."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Common leak patterns: timers, listeners, and caches flow",
-            "source": "flowchart TD\n  A[Allocate object] --> B[Young generation]\n  B --> C{Survives Scavenge?}\n  C -->|No| D[Freed]\n  C -->|Yes| E[Old generation]\n  E --> F[Major GC when needed]"
+            "title": "Leak reference chain",
+            "source": "flowchart BT\n  R[GC Root global] --> A[listeners array]\n  A --> H[handler closure]\n  H --> D[detached DOM / huge data]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Common leak patterns: timers, listeners, and caches",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Heap usage snapshot",
-            "code": "const used = process.memoryUsage();\nconsole.log({\n  heapUsedMB: (used.heapUsed / 1024 / 1024).toFixed(1),\n  heapTotalMB: (used.heapTotal / 1024 / 1024).toFixed(1),\n  externalMB: (used.external / 1024 / 1024).toFixed(1),\n});",
-            "explanation": "heapUsed grows with retained objects; external tracks C++ bindings (Buffers)."
+            "label": "Timer leak",
+            "code": "class Poller {\n  start() {\n    this.id = setInterval(() => this.fetchMetrics(), 5000);\n  }\n  // missing stop() { clearInterval(this.id); }\n}\n// Each new Poller without stop — interval + closure retained",
+            "explanation": "Add stop() called on component unmount or SIGTERM."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Closure retention trap",
-            "code": "function createHandler() {\n  const large = new Array(1_000_000).fill('x');\n  return function onClick() {\n    console.log(large.length); // retains entire array\n  };\n}\nconst handler = createHandler(); // large stays in old gen",
-            "explanation": "Inner function closes over outer bindings — GC cannot collect large until handler released."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# IDisposable versus JS GC",
-            "code": "// C# explicit disposal\nusing var conn = new SqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable frees unmanaged resources promptly\n\n// JS: no IDisposable — release references, remove listeners",
-            "explanation": "JS relies on GC; use WeakRef/FinalizationRegistry only for optional caches, not critical cleanup."
+            "label": "Bounded LRU cache",
+            "code": "function createLRU(max) {\n  const map = new Map();\n  return {\n    get(k) { return map.get(k); },\n    set(k, v) {\n      if (map.size >= max) map.delete(map.keys().next().value);\n      map.set(k, v);\n    },\n  };\n}\nconst userCache = createLRU(500);",
+            "explanation": "Line 6: evict oldest — prevents unbounded growth during fetch fan-out."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "WeakMap for private metadata",
-            "code": "const privateData = new WeakMap();\nclass Account {\n  constructor(id) { privateData.set(this, { id }); }\n  get id() { return privateData.get(this).id; }\n}",
-            "explanation": "WeakMap keys are objects collected when key is unreachable — no memory leak from metadata map."
+            "label": "Node EventEmitter leak",
+            "code": "function perRequestLeak(req, res) {\n  redis.on(\"error\", (err) => log(err)); // adds listener every request!\n  await handle(req, res);\n}\n// Fix: single redis.on at startup or once(req)",
+            "explanation": "Line 2: N requests → N identical listeners — memory and duplicate logs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — global debug array",
+            "code": "global.debugRequests = global.debugRequests || [];\nfunction middleware(req, res, next) {\n  global.debugRequests.push(req); // never cleared\n  next();\n}",
+            "explanation": "Every request retained forever — classic staging debug leak in prod."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Common leak patterns: timers, listeners, and caches across languages",
+          "title": "Leak fixes",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Pattern",
+            "Fix",
+            "Tool"
           ],
           "rows": [
             [
-              "Reclamation",
-              "V8 generational GC",
-              "CLR generational GC",
-              "No runtime GC"
+              "setInterval",
+              "clearInterval in dispose",
+              "Heap timeline"
             ],
             [
-              "Explicit free",
-              "Remove references only",
-              "IDisposable + GC",
-              "N/A"
+              "addEventListener",
+              "removeEventListener",
+              "Elements panel"
             ],
             [
-              "Diagnostics",
-              "Heap snapshot",
-              "dotMemory / PerfView",
-              "N/A"
+              "Unbounded Map",
+              "LRU / TTL",
+              "Snapshot diff"
+            ],
+            [
+              "C# event +=",
+              "-= on dispose",
+              "dotMemory"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Common leak patterns: timers, listeners, and caches",
-          "body": "Treating Common leak patterns: timers, listeners, and caches as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Debug globals in production. Per-request global listeners. Memoize without cache cap."
         }
       ]
     },
@@ -181,89 +182,89 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Common leak patterns: timers, listeners, and caches** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Chrome: Performance → Memory → allocation instrumentation on timeline. Node: clinic heapprofiler or heapdump on SIGUSR2. Correlate leak with deploy — often new analytics SDK or missing teardown in useEffect."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Cache",
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Unbounded Map",
+              "Hit rate",
+              "OOM"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "LRU 1k",
+              "Bounded",
+              "Eviction churn"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "Redis TTL",
+              "Distributed",
+              "Network latency"
+            ],
+            [
+              "WeakMap keys",
+              "Auto key GC",
+              "Values still strong"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Common leak patterns: timers, listeners, and caches. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot name three leak patterns. No profiling workflow. Suggests restart instead of fix retainers."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Common leak patterns: timers, listeners, and caches: know definition plus one runnable example.",
-    "Production: validate external input before applying Common leak patterns: timers, listeners, and caches; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for memory-leak-patterns.",
-    "60s: Common leak patterns: timers, listeners, and caches — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Leaks = unintended strong references from GC roots.",
+    "Timers, listeners, unbounded caches are top patterns.",
+    "Fix: clear/off/bound cache; prove with heap snapshot diff.",
+    "60s: JS leaks are reachable unused memory. Classic: setInterval, duplicate listeners, Map cache no TTL. Hunt: timeline + snapshot retainers. Redis LRU or EXPIRE in prod.",
+    "Follow-up: per-request redis.on leak fix."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Common leak patterns: timers, listeners, and caches as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving memory-leak-patterns.",
-    "Strong: define Common leak patterns: timers, listeners, and caches, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: no clearInterval on route leave.",
+    "Weak: memoize all fetch results forever.",
+    "Strong: retainer path from snapshot to global listeners array."
   ],
   "relatedTopicIds": [
-    "javascript-14-stack-heap-and-references",
-    "javascript-14-v8-garbage-collection",
-    "javascript-14-closure-memory-retention"
+    "javascript-14-closure-memory-retention",
+    "javascript-14-profiling-with-devtools",
+    "javascript-14-detached-dom-and-leaks"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Common leak patterns: timers, listeners, and caches",
-      "note": "Common leak patterns: timers, listeners, and caches in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/memory-and-garbage-collection/memory-leak-patterns"
+      "concept": "Disposable pattern",
+      "note": "TS 5.2 using Disposable for cleanup — still manual discipline.",
+      "futureTopicSlug": "typescript/resource-management/disposable"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Common leak patterns: timers, listeners, and caches",
-      "note": "C# developers: map Common leak patterns: timers, listeners, and caches to closest CLR concept (GC) and note differences.",
-      "futureTopicSlug": "csharp/modules/memory-leak-patterns"
+      "language": "typescript",
+      "concept": "C# IDisposable",
+      "note": "C# comparison: using statement deterministic dispose; JS relies on GC + explicit cleanup.",
+      "futureTopicSlug": "csharp/exceptions-and-using/idisposable"
     }
   ],
   "officialSources": [
     {
-      "title": "Memory management",
+      "title": "MDN — Memory management",
       "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
     },
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Chrome DevTools — Memory",
+      "url": "https://developer.chrome.com/docs/devtools/memory/"
     }
   ],
   "animationHint": "stack-heap",
-  "scenarioTag": "high-concurrency"
+  "scenarioTag": "redis-cache"
 }

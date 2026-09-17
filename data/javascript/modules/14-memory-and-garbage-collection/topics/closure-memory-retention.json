@@ -4,14 +4,14 @@
   "title": "Closure retention and accidental memory leaks",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 3,
-  "hook": "Closure retention and accidental memory leaks connects directly to V8 heap layout and GC pauses. Retained references — closures, timers, caches — keep objects in old generation until major GC, affecting tail latency.",
+  "hook": "A closure keeps its outer lexical environment alive. If you store a closure in a global listener or timer, every variable it captured stays on the heap — even variables the closure never reads.",
   "sections": [
     {
-      "heading": "What is Closure retention and accidental memory leaks?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Closure retention and accidental memory leaks** is a run-time JavaScript mechanism enforced by the engine on every execution. Closure retention and accidental memory leaks connects directly to V8 heap layout and GC pauses. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "When a function closes over variables, V8 creates a **context** linking inner function to outer bindings. The **entire context** may be retained if any closed variable is needed — sometimes the whole scope object stays alive. **Accidental retention**: event handlers, `setInterval`, and module-level arrays holding callbacks capture large `request` or `DOM` graphs."
         },
         {
           "type": "glossary",
@@ -19,63 +19,63 @@
           "entries": [
             {
               "term": "closure",
-              "longForm": "Closure retention and accidental memory leaks",
-              "plainDefinition": "Central mechanism behind \"Closure retention and accidental memory leaks\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "longForm": "closure",
+              "plainDefinition": "Function plus preserved lexical environment.",
+              "example": "() => userId from outer scope"
             },
             {
-              "term": "heap",
-              "longForm": "V8 heap",
-              "plainDefinition": "Region where objects live; split into young and old generations.",
-              "example": "process.memoryUsage().heapUsed"
+              "term": "context",
+              "longForm": "function context",
+              "plainDefinition": "Internal structure holding closed-over bindings.",
+              "example": "Retained while function reference lives."
             },
             {
               "term": "retention",
               "longForm": "memory retention",
-              "plainDefinition": "Reachable reference prevents GC from reclaiming object.",
-              "example": "Closure holding large array"
+              "plainDefinition": "GC cannot collect reachable closure scope.",
+              "example": "Global array of handlers capturing req body."
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Closure retention and accidental memory leaks matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Closure retention and accidental memory leaks** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Express middleware that registers `req.on(\"close\", () => log(req))` retains entire request object until server restart if listener not removed. React useEffect missing cleanup retains stale props in closure."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Closure retention and accidental memory leaks\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Capture minimal data",
+          "body": "Extract `const id = user.id` instead of closing over entire `user` object if handler is long-lived."
         }
       ]
     },
     {
-      "heading": "How Closure retention and accidental memory leaks works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Retention chain",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Closure retention and accidental memory leaks appears — syntax, API call, or type annotation."
+              "title": "Inner function created",
+              "body": "Links to outer lexical environment."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Reference stored",
+              "body": "Timer, listener, or global holds inner function."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Context retained",
+              "body": "All bindings in shared context may stay alive."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Fix",
+              "body": "Remove listener, clear timer, or narrow captured values."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Closure retention and accidental memory leaks flow",
-            "source": "flowchart TD\n  A[Allocate object] --> B[Young generation]\n  B --> C{Survives Scavenge?}\n  C -->|No| D[Freed]\n  C -->|Yes| E[Old generation]\n  E --> F[Major GC when needed]"
+            "title": "Closure retention graph",
+            "source": "flowchart TD\n  G[global listeners array] --> F[handler fn]\n  F --> C[Context scope]\n  C --> H[huge request object]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Closure retention and accidental memory leaks",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Heap usage snapshot",
-            "code": "const used = process.memoryUsage();\nconsole.log({\n  heapUsedMB: (used.heapUsed / 1024 / 1024).toFixed(1),\n  heapTotalMB: (used.heapTotal / 1024 / 1024).toFixed(1),\n  externalMB: (used.external / 1024 / 1024).toFixed(1),\n});",
-            "explanation": "heapUsed grows with retained objects; external tracks C++ bindings (Buffers)."
+            "label": "Accidental req retention",
+            "code": "const subscribers = [];\nfunction subscribeToUser(req) {\n  const handler = () => console.log(req.user.email);\n  subscribers.push(handler); // req retained forever\n}\n// Fix: const email = req.user.email; subscribers.push(() => console.log(email));",
+            "explanation": "Line 3: handler closes over req — entire request graph kept while handler in array."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Closure retention trap",
-            "code": "function createHandler() {\n  const large = new Array(1_000_000).fill('x');\n  return function onClick() {\n    console.log(large.length); // retains entire array\n  };\n}\nconst handler = createHandler(); // large stays in old gen",
-            "explanation": "Inner function closes over outer bindings — GC cannot collect large until handler released."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# IDisposable versus JS GC",
-            "code": "// C# explicit disposal\nusing var conn = new SqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable frees unmanaged resources promptly\n\n// JS: no IDisposable — release references, remove listeners",
-            "explanation": "JS relies on GC; use WeakRef/FinalizationRegistry only for optional caches, not critical cleanup."
+            "label": "setInterval leak",
+            "code": "function startPolling(largeConfig) {\n  setInterval(() => {\n    check(largeConfig.apiKey); // captures largeConfig every tick\n  }, 1000);\n}\n// Fix: const key = largeConfig.apiKey; setInterval(() => check(key), 1000);",
+            "explanation": "Line 3: interval holds closure until clearInterval — config cannot GC."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "WeakMap for private metadata",
-            "code": "const privateData = new WeakMap();\nclass Account {\n  constructor(id) { privateData.set(this, { id }); }\n  get id() { return privateData.get(this).id; }\n}",
-            "explanation": "WeakMap keys are objects collected when key is unreachable — no memory leak from metadata map."
+            "label": "Cleanup pattern",
+            "code": "function onMessage(handler) {\n  const wrapped = (msg) => handler(msg.id);\n  redisSub.on(\"message\", wrapped);\n  return () => redisSub.off(\"message\", wrapped);\n}",
+            "explanation": "Line 4: returned disposer removes listener — allows GC of handler scope."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — loop closure",
+            "code": "for (var i = 0; i < 3; i++) {\n  setTimeout(() => console.log(i), 100); // 3,3,3\n}\nfor (let j = 0; j < 3; j++) {\n  setTimeout(() => console.log(j), 100); // 0,1,2\n}",
+            "explanation": "var shares one binding; let creates per-iteration binding — retention and output differ."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Closure retention and accidental memory leaks across languages",
+          "title": "Closure vs C#",
           "headers": [
             "Aspect",
             "JavaScript",
-            "C#",
-            "TypeScript"
+            "C#"
           ],
           "rows": [
             [
-              "Reclamation",
-              "V8 generational GC",
-              "CLR generational GC",
-              "No runtime GC"
+              "Capture",
+              "Lexical environment",
+              "Compiler closure class"
             ],
             [
-              "Explicit free",
-              "Remove references only",
-              "IDisposable + GC",
-              "N/A"
+              "Lifetime",
+              "While delegate referenced",
+              "While delegate referenced"
             ],
             [
-              "Diagnostics",
-              "Heap snapshot",
-              "dotMemory / PerfView",
-              "N/A"
+              "Fix",
+              "removeListener / clearInterval",
+              "Dispose / -= event"
+            ],
+            [
+              "Inspection",
+              "Heap snapshot retainers",
+              "dotMemory / VS profiler"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Closure retention and accidental memory leaks",
-          "body": "Treating Closure retention and accidental memory leaks as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Storing handlers without cleanup. Capturing entire request/config in long-lived callbacks. Using var in loop closures."
         }
       ]
     },
@@ -181,89 +182,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Closure retention and accidental memory leaks** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Chrome heap snapshot: find listener in retainers path to DOM or closure. Node: check `--inspect` allocation timeline during load test. Production: always return cleanup from subscribe helpers; weak references for metadata caches."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Pattern",
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Narrow capture",
+              "Smaller retained graph",
+              "More locals"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "WeakRef cache",
+              "Allows GC",
+              "Stale reads"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "Disposable pattern",
+              "Explicit cleanup",
+              "API ceremony"
+            ],
+            [
+              "Arrow in render",
+              "Concise",
+              "Re-subscribe each render if not careful"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Closure retention and accidental memory leaks. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Says closures only capture used variables always — V8 context granularity varies. No cleanup strategy. Cannot read heap retainers."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Closure retention and accidental memory leaks: know definition plus one runnable example.",
-    "Production: validate external input before applying Closure retention and accidental memory leaks; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for closure-memory-retention.",
-    "60s: Closure retention and accidental memory leaks — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Closure = fn + lexical env; env kept while fn referenced.",
+    "Long-lived listeners/timers are classic leak sources.",
+    "Capture minimal fields; return disposer functions.",
+    "60s: Inner fn holds outer bindings. Global listener keeps huge object alive. Fix: off/clearInterval/narrow capture. let vs var in loop closures.",
+    "Follow-up: find leak in heap snapshot retainer path."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Closure retention and accidental memory leaks as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving closure-memory-retention.",
-    "Strong: define Closure retention and accidental memory leaks, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: forget removeEventListener on SPA route change.",
+    "Weak: close over entire req in WebSocket handler.",
+    "Strong: narrow capture + cleanup + heap snapshot proof."
   ],
   "relatedTopicIds": [
-    "javascript-14-stack-heap-and-references",
-    "javascript-14-v8-garbage-collection",
-    "javascript-14-weakref-and-finalization"
+    "javascript-14-memory-leak-patterns",
+    "javascript-04-closures-and-capture",
+    "javascript-14-detached-dom-and-leaks"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Closure retention and accidental memory leaks",
-      "note": "Closure retention and accidental memory leaks in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/memory-and-garbage-collection/closure-memory-retention"
+      "concept": "Closure typing",
+      "note": "TS infers closure types — no change to retention semantics.",
+      "futureTopicSlug": "typescript/functions/closure-types"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Closure retention and accidental memory leaks",
-      "note": "C# developers: map Closure retention and accidental memory leaks to closest CLR concept (GC) and note differences.",
-      "futureTopicSlug": "csharp/modules/closure-memory-retention"
+      "language": "typescript",
+      "concept": "C# closure",
+      "note": "C# comparison: compiler-generated display class holds captured fields.",
+      "futureTopicSlug": "csharp/delegates-events-lambdas/lambda-captures"
     }
   ],
   "officialSources": [
     {
-      "title": "Memory management",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
+      "title": "MDN — Closures",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures"
     },
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "javascript.info — Closure",
+      "url": "https://javascript.info/closure"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "rabbitmq"
+  "animationHint": "stack-heap"
 }

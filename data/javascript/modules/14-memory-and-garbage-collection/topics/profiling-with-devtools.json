@@ -4,78 +4,78 @@
   "title": "Profiling memory with Chrome DevTools and heap snapshots",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 7,
-  "hook": "Profiling memory with Chrome DevTools and heap snapshots connects directly to V8 heap layout and GC pauses. Retained references — closures, timers, caches — keep objects in old generation until major GC, affecting tail latency.",
+  "hook": "Chrome DevTools Memory panel shows what objects live on the heap, who retains them, and whether memory grows without bound — the production-debugging skill for browser leaks and allocation regressions.",
   "sections": [
     {
-      "heading": "What is Profiling memory with Chrome DevTools and heap snapshots?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Profiling memory with Chrome DevTools and heap snapshots** is a run-time JavaScript mechanism enforced by the engine on every execution. Profiling memory with Chrome DevTools and heap snapshots connects directly to V8 heap layout and GC pauses. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Heap snapshot**: point-in-time graph of all JS objects. **Comparison**: diff two snapshots after repeating suspect action — shows what grew. **Allocation timeline**: record allocations over time, stack traces to constructor site. **Retainers view**: path from object to GC root explaining why not collected."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "profiling",
-              "longForm": "Profiling memory with Chrome DevTools and heap snapshots",
-              "plainDefinition": "Central mechanism behind \"Profiling memory with Chrome DevTools and heap snapshots\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "heap snapshot",
+              "longForm": "heap snapshot",
+              "plainDefinition": "Serialized object graph for analysis.",
+              "example": "Take snapshot → filter Constructor"
             },
             {
-              "term": "heap",
-              "longForm": "V8 heap",
-              "plainDefinition": "Region where objects live; split into young and old generations.",
-              "example": "process.memoryUsage().heapUsed"
+              "term": "retainers",
+              "longForm": "retainer path",
+              "plainDefinition": "Chain of objects keeping target alive.",
+              "example": "Window → array → closure → DOM"
             },
             {
-              "term": "retention",
-              "longForm": "memory retention",
-              "plainDefinition": "Reachable reference prevents GC from reclaiming object.",
-              "example": "Closure holding large array"
+              "term": "shallow size",
+              "longForm": "shallow size",
+              "plainDefinition": "Memory of object itself excluding referenced objects.",
+              "example": "Small array shallow, huge elements retained size"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Profiling memory with Chrome DevTools and heap snapshots matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Profiling memory with Chrome DevTools and heap snapshots** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Without profiling you guess — add random gc() calls. Senior engineers reproduce leak (open/close modal 20x), diff snapshots, find `(closure)` retaining Detached HTMLElement, fix missing teardown. Same workflow for fetch response caches in SPAs."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Profiling memory with Chrome DevTools and heap snapshots\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Node profiling",
+          "body": "Node: chrome://inspect → take heap snapshot; or `node --inspect` + DevTools."
         }
       ]
     },
     {
-      "heading": "How Profiling memory with Chrome DevTools and heap snapshots works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Snapshot workflow",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Profiling memory with Chrome DevTools and heap snapshots appears — syntax, API call, or type annotation."
+              "title": "Baseline snapshot",
+              "body": "After page load settled."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Reproduce",
+              "body": "Repeat suspected leak action N times."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Second snapshot",
+              "body": "Comparison mode vs baseline."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Inspect delta",
+              "body": "Sort by # Delta; walk retainers."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Profiling memory with Chrome DevTools and heap snapshots flow",
-            "source": "flowchart TD\n  A[Allocate object] --> B[Young generation]\n  B --> C{Survives Scavenge?}\n  C -->|No| D[Freed]\n  C -->|Yes| E[Old generation]\n  E --> F[Major GC when needed]"
+            "title": "Profiling workflow",
+            "source": "flowchart LR\n  B[Baseline snap] --> A[Action x20]\n  A --> S[Second snap]\n  S --> D[Diff retainers]\n  D --> F[Fix code]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Profiling memory with Chrome DevTools and heap snapshots",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Heap usage snapshot",
-            "code": "const used = process.memoryUsage();\nconsole.log({\n  heapUsedMB: (used.heapUsed / 1024 / 1024).toFixed(1),\n  heapTotalMB: (used.heapTotal / 1024 / 1024).toFixed(1),\n  externalMB: (used.external / 1024 / 1024).toFixed(1),\n});",
-            "explanation": "heapUsed grows with retained objects; external tracks C++ bindings (Buffers)."
+            "label": "Reproduce leak for snapshot",
+            "code": "async function stressModal() {\n  for (let i = 0; i < 30; i++) {\n    openModal(fetch(`/api/items/${i}`));\n    await new Promise((r) => setTimeout(r, 50));\n    closeModal(); // bug: listeners not removed\n  }\n}\n// Take heap snapshot before and after stressModal",
+            "explanation": "Controlled reproduction makes snapshot delta obvious."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Closure retention trap",
-            "code": "function createHandler() {\n  const large = new Array(1_000_000).fill('x');\n  return function onClick() {\n    console.log(large.length); // retains entire array\n  };\n}\nconst handler = createHandler(); // large stays in old gen",
-            "explanation": "Inner function closes over outer bindings — GC cannot collect large until handler released."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# IDisposable versus JS GC",
-            "code": "// C# explicit disposal\nusing var conn = new SqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable frees unmanaged resources promptly\n\n// JS: no IDisposable — release references, remove listeners",
-            "explanation": "JS relies on GC; use WeakRef/FinalizationRegistry only for optional caches, not critical cleanup."
+            "label": "performance.memory (Chrome)",
+            "code": "if (performance.memory) {\n  console.log({\n    usedMB: (performance.memory.usedJSHeapSize / 1048576).toFixed(1),\n    totalMB: (performance.memory.totalJSHeapSize / 1048576).toFixed(1),\n  });\n}",
+            "explanation": "Rough heap trend in field — not as precise as snapshot."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "WeakMap for private metadata",
-            "code": "const privateData = new WeakMap();\nclass Account {\n  constructor(id) { privateData.set(this, { id }); }\n  get id() { return privateData.get(this).id; }\n}",
-            "explanation": "WeakMap keys are objects collected when key is unreachable — no memory leak from metadata map."
+            "label": "Node heap dump trigger",
+            "code": "process.on(\"SIGUSR2\", () => {\n  const v8 = require(\"node:v8\");\n  const path = `/tmp/heap-${Date.now()}.heapsnapshot`;\n  v8.writeHeapSnapshot(path);\n  console.log(\"wrote\", path);\n});",
+            "explanation": "Load test + SIGUSR2 → analyze snapshot in Chrome DevTools."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Reading retainers (conceptual)",
+            "code": "// In DevTools: select (string) entry with +5000 delta\n// Retainers: system / Window / app.listeners / Closure / Detached <div>\n// Fix: app.listeners.splice(...) + removeEventListener",
+            "explanation": "Walk chain from leaked object upward to code you control."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Profiling memory with Chrome DevTools and heap snapshots across languages",
+          "title": "Profiling tools",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Tool",
+            "Host",
+            "Best for"
           ],
           "rows": [
             [
-              "Reclamation",
-              "V8 generational GC",
-              "CLR generational GC",
-              "No runtime GC"
+              "Chrome Memory",
+              "Browser",
+              "DOM leaks, snapshots"
             ],
             [
-              "Explicit free",
-              "Remove references only",
-              "IDisposable + GC",
-              "N/A"
+              "Node --inspect",
+              "Node",
+              "Server heap"
             ],
             [
-              "Diagnostics",
-              "Heap snapshot",
-              "dotMemory / PerfView",
-              "N/A"
+              "clinic.js",
+              "Node",
+              "Production heapprofiler"
+            ],
+            [
+              "dotMemory",
+              "C#",
+              "CLR heap"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Profiling memory with Chrome DevTools and heap snapshots",
-          "body": "Treating Profiling memory with Chrome DevTools and heap snapshots as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Single snapshot without baseline. Not forcing GC before compare (minor). Ignoring retained size vs shallow size."
         }
       ]
     },
@@ -181,89 +182,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Profiling memory with Chrome DevTools and heap snapshots** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Report: action reproduced, delta count, retainer path screenshot, fix PR. Allocation instrumentation links to stack — find `new Array` in hot path. Compare with Lighthouse not sufficient for leaks — need heap diff."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Method",
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Snapshot diff",
+              "Precise objects",
+              "Pause heavy"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "Timeline",
+              "Allocation stacks",
+              "Noisy"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "performance.memory",
+              "Quick trend",
+              "Chrome only"
+            ],
+            [
+              "console.log sizes",
+              "Fast",
+              "Misleading"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Profiling memory with Chrome DevTools and heap snapshots. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Never used heap snapshot. Confuses CPU profiler with memory. Cannot read retainer path."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Profiling memory with Chrome DevTools and heap snapshots: know definition plus one runnable example.",
-    "Production: validate external input before applying Profiling memory with Chrome DevTools and heap snapshots; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for profiling-with-devtools.",
-    "60s: Profiling memory with Chrome DevTools and heap snapshots — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Baseline + reproduce + compare snapshots.",
+    "Retainers explain why object not GC'd.",
+    "Detached DOM visible in snapshot filter.",
+    "60s: Heap snapshot = object graph. Diff after repeat action. Retainers walk to root. Node --inspect same. Fix reference not gc().",
+    "Follow-up: modal open/close 30x — what grows?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses Profiling memory with Chrome DevTools and heap snapshots as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving profiling-with-devtools.",
-    "Strong: define Profiling memory with Chrome DevTools and heap snapshots, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: one snapshot only — no delta.",
+    "Weak: CPU profile for memory leak.",
+    "Strong: baseline/repro/compare + retainer path narrative."
   ],
   "relatedTopicIds": [
-    "javascript-14-stack-heap-and-references",
-    "javascript-14-v8-garbage-collection",
-    "javascript-14-closure-memory-retention"
+    "javascript-14-memory-leak-patterns",
+    "javascript-14-detached-dom-and-leaks",
+    "javascript-06-stack-traces-and-debugging"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Profiling memory with Chrome DevTools and heap snapshots",
-      "note": "Profiling memory with Chrome DevTools and heap snapshots in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/memory-and-garbage-collection/profiling-with-devtools"
+      "concept": "Source maps",
+      "note": "Source maps map snapshot stacks back to TS lines.",
+      "futureTopicSlug": "typescript/tooling/source-maps"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Profiling memory with Chrome DevTools and heap snapshots",
-      "note": "C# developers: map Profiling memory with Chrome DevTools and heap snapshots to closest CLR concept (GC) and note differences.",
-      "futureTopicSlug": "csharp/modules/profiling-with-devtools"
+      "language": "typescript",
+      "concept": "CLR profilers",
+      "note": "C# comparison: dotMemory / PerfView for managed heap — similar diff mindset.",
+      "futureTopicSlug": "csharp/memory-and-gc/profiling"
     }
   ],
   "officialSources": [
     {
-      "title": "Memory management",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
+      "title": "Chrome DevTools — Memory",
+      "url": "https://developer.chrome.com/docs/devtools/memory/"
     },
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Node.js — Heap snapshots",
+      "url": "https://nodejs.org/en/docs/guides/diagnostics/memory/using-heap-snapshot"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "stack-heap"
 }

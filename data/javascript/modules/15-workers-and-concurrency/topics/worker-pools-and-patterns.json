@@ -4,78 +4,78 @@
   "title": "Worker pools and offloading CPU work",
   "moduleId": "javascript-15-workers-and-concurrency",
   "order": 4,
-  "hook": "Worker pools and offloading CPU work is how JavaScript shares work across threads without shared mutable state by default. postMessage, transferables, and Atomics differ sharply from C# Task.Run and lock patterns.",
+  "hook": "One Worker processes one CPU job at a time. A pool of N Workers matches available cores — queue tasks from the main thread and collect results like a mini thread pool for parsing, hashing, or image thumbnails.",
   "sections": [
     {
-      "heading": "What is Worker pools and offloading CPU work?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Worker pools and offloading CPU work** is a run-time JavaScript mechanism enforced by the engine on every execution. Worker pools and offloading CPU work is how JavaScript shares work across threads without shared mutable state by default. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Worker pool**: fixed array of Worker instances, **task queue**, dispatch idle worker on new job, resolve Promise when worker posts result. **Patterns**: round-robin, least-busy, **comlink** RPC wrapper. Different from **async pool** (module 13) — Workers use real OS threads for CPU."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "worker",
-              "longForm": "Worker pools and offloading CPU work",
-              "plainDefinition": "Central mechanism behind \"Worker pools and offloading CPU work\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "worker pool",
+              "longForm": "worker pool",
+              "plainDefinition": "Reuse N Workers for many tasks.",
+              "example": "pool.run(parseCsv, data)"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "task queue",
+              "longForm": "worker task queue",
+              "plainDefinition": "Pending jobs when all workers busy.",
+              "example": "FIFO queue of { resolve, payload }"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "comlink",
+              "longForm": "Comlink library",
+              "plainDefinition": "RPC proxy over postMessage.",
+              "example": "Comlink.wrap(worker).parse(data)"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Worker pools and offloading CPU work matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Worker pools and offloading CPU work** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Spawning Worker per CSV upload exhausts memory — 50 Workers × 10MB script heap. Pool of 4 matches quad-core laptop. SQS-style batch: main receives messages, pool workers hash/validate in parallel, aggregate on main."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Worker pools and offloading CPU work\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Pool size",
+          "body": "Often navigator.hardwareConcurrency or cores - 1 — profile on target devices."
         }
       ]
     },
     {
-      "heading": "How Worker pools and offloading CPU work works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Pool dispatch",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Worker pools and offloading CPU work appears — syntax, API call, or type annotation."
+              "title": "Enqueue task",
+              "body": "Push job + Promise resolver to queue."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Find idle worker",
+              "body": "Or wait until one finishes current job."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "postMessage job",
+              "body": "Worker processes; posts result with job id."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Resolve + next",
+              "body": "Resolve Promise; dispatch next queued task."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Worker pools and offloading CPU work flow",
-            "source": "flowchart TD\n  A[Worker pools and offloading CPU work] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Worker pool queue",
+            "source": "flowchart TD\n  Q[Task queue] --> W1[Worker 1]\n  Q --> W2[Worker 2]\n  Q --> W3[Worker 3]\n  W1 --> R[Results]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Worker pools and offloading CPU work",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Core Worker pools and offloading CPU work example",
-            "code": "function createClient(cfg) {\n  return {\n    async call(path) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}\n\nconst client = createClient({ retries: 3, endpoint: 'https://api.example.com' });",
-            "explanation": "Demonstrates Worker pools and offloading CPU work in a realistic API client — retries, fetch, and configuration."
+            "label": "Minimal Worker pool",
+            "code": "function createPool(size, scriptUrl) {\n  const workers = Array.from({ length: size }, () => new Worker(scriptUrl));\n  const queue = [];\n  const busy = new Set();\n\n  function dispatch(worker) {\n    const job = queue.shift();\n    if (!job) { busy.delete(worker); return; }\n    busy.add(worker);\n    worker.onmessage = (e) => {\n      job.resolve(e.data);\n      dispatch(worker);\n    };\n    worker.postMessage(job.payload);\n  }\n\n  return {\n    run(payload) {\n      return new Promise((resolve) => {\n        queue.push({ payload, resolve });\n        const idle = workers.find((w) => !busy.has(w));\n        if (idle) dispatch(idle);\n      });\n    },\n  };\n}",
+            "explanation": "Line 8: on job complete, dispatch next from queue. Line 19: assign idle worker on enqueue."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v) {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj, key) {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for Worker pools and offloading CPU work\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps Worker pools and offloading CPU work idioms to C# — note compile-time types versus JS run-time checks."
+            "label": "Batch CSV rows through pool",
+            "code": "const pool = createPool(4, \"row-validator.js\");\nconst rows = await fetch(\"/import.csv\").then((r) => r.text()).then(parseLines);\nconst results = await Promise.all(rows.map((row) => pool.run({ row })));\nconst invalid = results.filter((r) => !r.valid);",
+            "explanation": "Line 3: 10k rows queued — pool keeps 4 Workers busy without 10k Worker spawns."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode diagnostic",
-            "code": "function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}",
-            "explanation": "Explicit unknown/error handling for Worker pools and offloading CPU work — senior code paths always name failure modes."
+            "label": "Terminate pool on unload",
+            "code": "window.addEventListener(\"beforeunload\", () => {\n  workers.forEach((w) => w.terminate());\n});",
+            "explanation": "Terminate frees thread and memory — important for SPAs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — unbounded Workers",
+            "code": "rows.forEach((row) => {\n  const w = new Worker(\"validate.js\");\n  w.postMessage(row); // 10000 Workers!\n});",
+            "explanation": "Spawn per row — browser tab crash. Use pool."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Worker pools and offloading CPU work across languages",
+          "title": "Pool types",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Pool",
+            "Threads",
+            "Use"
           ],
           "rows": [
             [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
+              "async mapPool",
+              "1 JS thread",
+              "I/O cap"
             ],
             [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
+              "Worker pool",
+              "N OS threads",
+              "CPU cap"
             ],
             [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
+              "C# Parallel.For",
+              "Thread pool",
+              "CPU + I/O"
+            ],
+            [
+              "Cluster module",
+              "Node processes",
+              "Multi-core servers"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Worker pools and offloading CPU work",
-          "body": "Treating Worker pools and offloading CPU work as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "New Worker per task. No queue when saturated. Forgetting terminate on page leave."
         }
       ]
     },
@@ -181,85 +182,89 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Worker pools and offloading CPU work** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "comlink simplifies API surface. For Node CPU work at scale use worker_threads pool or child_process cluster. Measure queue depth metric — growing queue means increase pool or optimize worker script."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Size",
+            "Effect",
+            "Risk"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "1 Worker",
+              "Low memory",
+              "Serial CPU"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "hardwareConcurrency",
+              "Balanced",
+              "Mobile thermal throttle"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "Oversubscribe",
+              "Queue latency",
+              "Context switch cost"
+            ],
+            [
+              "Main thread",
+              "No copy",
+              "Jank"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Worker pools and offloading CPU work. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Confuses Worker pool with Promise.all pool. Spawns unlimited Workers. No task queue."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Worker pools and offloading CPU work: know definition plus one runnable example.",
-    "Production: validate external input before applying Worker pools and offloading CPU work; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for worker-pools-and-patterns.",
-    "60s: Worker pools and offloading CPU work — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Pool = fixed Workers + task queue + dispatch idle.",
+    "CPU-bound — not for overlapping fetch.",
+    "Size ≈ hardwareConcurrency.",
+    "60s: Reuse N Workers. Queue jobs. postMessage when idle. Different from async semaphore — real threads. Terminate on unload. SQS batch validate pattern.",
+    "Follow-up: design pool API returning Promise per job."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Worker pools and offloading CPU work as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving worker-pools-and-patterns.",
-    "Strong: define Worker pools and offloading CPU work, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: new Worker per row.",
+    "Weak: use Worker pool for HTTP.",
+    "Strong: queue + idle dispatch + terminate + core count sizing."
   ],
   "relatedTopicIds": [
     "javascript-15-web-workers-basics",
-    "javascript-15-postmessage-and-transferables",
-    "javascript-15-sharedarraybuffer-and-atomics"
+    "javascript-13-async-concurrency-limits",
+    "javascript-15-postmessage-and-transferables"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Worker pools and offloading CPU work",
-      "note": "Worker pools and offloading CPU work in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/workers-and-concurrency/worker-pools-and-patterns"
+      "concept": "Generic pool API",
+      "note": "pool.run<T, R>(payload: T): Promise<R> — type job and result.",
+      "futureTopicSlug": "typescript/generics/generic-functions"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Worker pools and offloading CPU work",
-      "note": "C# developers: map Worker pools and offloading CPU work to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/worker-pools-and-patterns"
+      "language": "typescript",
+      "concept": "Parallel.For",
+      "note": "C# comparison: Parallel.ForEach for CPU — shared memory unlike Worker message passing.",
+      "futureTopicSlug": "csharp/concurrency-and-threading/parallel-for"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Worker",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Worker"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Comlink",
+      "url": "https://github.com/GoogleChromeLabs/comlink"
     }
   ],
-  "animationHint": "stack-heap",
+  "animationHint": "flow",
   "scenarioTag": "sqs-consumer"
 }

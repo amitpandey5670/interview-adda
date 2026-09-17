@@ -4,78 +4,78 @@
   "title": "SharedArrayBuffer and Atomics",
   "moduleId": "javascript-15-workers-and-concurrency",
   "order": 3,
-  "hook": "SharedArrayBuffer and Atomics is how JavaScript shares work across threads without shared mutable state by default. postMessage, transferables, and Atomics differ sharply from C# Task.Run and lock patterns.",
+  "hook": "SharedArrayBuffer lets Workers and the main thread read the same memory — but without Atomics, you get data races. Atomics.add and Atomics.wait coordinate lock-free counters and semaphores across threads.",
   "sections": [
     {
-      "heading": "What is SharedArrayBuffer and Atomics?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**SharedArrayBuffer and Atomics** is a run-time JavaScript mechanism enforced by the engine on every execution. SharedArrayBuffer and Atomics is how JavaScript shares work across threads without shared mutable state by default. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**SharedArrayBuffer (SAB)**: fixed-length raw binary buffer shared across agents. **Atomics**: atomic read-modify-write (`add`, `compareExchange`) and **wait/notify** for futex-style blocking. Requires **cross-origin isolation** headers: `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "sharedarraybuffer",
-              "longForm": "SharedArrayBuffer and Atomics",
-              "plainDefinition": "Central mechanism behind \"SharedArrayBuffer and Atomics\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "SharedArrayBuffer",
+              "longForm": "SharedArrayBuffer",
+              "plainDefinition": "Growable-fixed buffer shared between threads.",
+              "example": "new SharedArrayBuffer(1024)"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "Atomics",
+              "longForm": "Atomics API",
+              "plainDefinition": "Atomic operations on Int32Array views of SAB.",
+              "example": "Atomics.add(ia32, 0, 1)"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "COOP/COEP",
+              "longForm": "cross-origin isolation",
+              "plainDefinition": "HTTP headers required for SAB after Spectre mitigations.",
+              "example": "COEP require-corp"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why SharedArrayBuffer and Atomics matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **SharedArrayBuffer and Atomics** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "High-frequency counters (frames rendered, bytes processed) without postMessage per increment. WASM pthreads use SAB. Without Atomics, torn reads corrupt shared state. Most web apps never need SAB — postMessage suffices."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"SharedArrayBuffer and Atomics\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Security gate",
+          "body": "SAB disabled unless page is cross-origin isolated — check self.crossOriginIsolated."
         }
       ]
     },
     {
-      "heading": "How SharedArrayBuffer and Atomics works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Shared counter pattern",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where SharedArrayBuffer and Atomics appears — syntax, API call, or type annotation."
+              "title": "Allocate SAB",
+              "body": "new SharedArrayBuffer(4) — share with Worker."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Int32Array view",
+              "body": "Both threads use same view on index 0."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Atomics.add",
+              "body": "Thread-safe increment."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Atomics.wait/notify",
+              "body": "Worker waits; main notifies on work available."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "SharedArrayBuffer and Atomics flow",
-            "source": "flowchart TD\n  A[SharedArrayBuffer and Atomics] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Shared memory coordination",
+            "source": "flowchart LR\n  M[Main Int32Array view] --- SAB[SharedArrayBuffer]\n  W[Worker view] --- SAB\n  M -->|Atomics.notify| W"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: SharedArrayBuffer and Atomics",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Core SharedArrayBuffer and Atomics example",
-            "code": "function createClient(cfg) {\n  return {\n    async call(path) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}\n\nconst client = createClient({ retries: 3, endpoint: 'https://api.example.com' });",
-            "explanation": "Demonstrates SharedArrayBuffer and Atomics in a realistic API client — retries, fetch, and configuration."
+            "label": "Atomic counter",
+            "code": "const sab = new SharedArrayBuffer(4);\nconst counter = new Int32Array(sab);\nconst worker = new Worker(\"inc-worker.js\");\nworker.postMessage(sab);\n\n// inc-worker.js: self.onmessage = (e) => {\n//   const c = new Int32Array(e.data);\n//   setInterval(() => Atomics.add(c, 0, 1), 1);\n// };\nconsole.log(Atomics.load(counter, 0));",
+            "explanation": "Line 1: shared buffer. Atomics.add safe concurrent increment from worker."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v) {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj, key) {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for SharedArrayBuffer and Atomics\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps SharedArrayBuffer and Atomics idioms to C# — note compile-time types versus JS run-time checks."
+            "label": "Atomics.wait / notify",
+            "code": "const sab = new SharedArrayBuffer(8);\nconst state = new Int32Array(sab);\n// Worker: while (Atomics.wait(state, 0, 0) === \"ok\") { processJob(); Atomics.store(state, 0, 0); }\n// Main: Atomics.store(state, 0, 1); Atomics.notify(state, 0);",
+            "explanation": "Worker blocks on wait until main notifies new work — futex pattern."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode diagnostic",
-            "code": "function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}",
-            "explanation": "Explicit unknown/error handling for SharedArrayBuffer and Atomics — senior code paths always name failure modes."
+            "label": "Check cross-origin isolated",
+            "code": "if (!crossOriginIsolated) {\n  console.warn(\"SAB unavailable — use postMessage instead\");\n} else {\n  const sab = new SharedArrayBuffer(1024);\n}",
+            "explanation": "Feature detect before allocating SAB in production."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — race without Atomics",
+            "code": "const sab = new SharedArrayBuffer(4);\nconst arr = new Int32Array(sab);\n// Two threads: arr[0]++ without Atomics — lost updates",
+            "explanation": "Plain read-modify-write races — use Atomics.add or postMessage."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "SharedArrayBuffer and Atomics across languages",
+          "title": "Shared vs message",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Pattern",
+            "Latency",
+            "Complexity"
           ],
           "rows": [
             [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
+              "postMessage",
+              "Copy/transfer cost",
+              "Low"
             ],
             [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
+              "SAB + Atomics",
+              "Shared reads",
+              "High — races"
             ],
             [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
+              "Mutex in WASM",
+              "Fine-grained",
+              "Very high"
+            ],
+            [
+              "C# lock",
+              "Shared memory threads",
+              "Medium"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for SharedArrayBuffer and Atomics",
-          "body": "Treating SharedArrayBuffer and Atomics as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "SAB without COOP/COEP headers. Non-atomic updates to shared Int32. Using SAB when postMessage enough."
         }
       ]
     },
@@ -181,85 +182,89 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **SharedArrayBuffer and Atomics** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Spectre led to SAB gating. Ring buffers in SAB for audio worklets. compareExchange implements lock-free queue head. Most teams: avoid SAB unless WASM pthreads or extreme perf need."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
             "Approach",
-            "When it wins",
-            "When it fails"
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "SAB counter",
+              "No message per inc",
+              "Header requirements"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "postMessage batch",
+              "Simple",
+              "Copy cost"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "Atomics.wait",
+              "Efficient block",
+              "Main thread caution"
+            ],
+            [
+              "Mutex simulation",
+              "Correctness",
+              "Complex deadlocks"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to SharedArrayBuffer and Atomics. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Non-atomic shared writes. No COOP/COEP awareness. Says SAB works everywhere post-2020 without headers."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "SharedArrayBuffer and Atomics: know definition plus one runnable example.",
-    "Production: validate external input before applying SharedArrayBuffer and Atomics; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for sharedarraybuffer-and-atomics.",
-    "60s: SharedArrayBuffer and Atomics — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "SAB shared memory across Workers; requires cross-origin isolation.",
+    "Atomics for thread-safe ops; wait/notify for coordination.",
+    "Data races without Atomics.",
+    "60s: SharedArrayBuffer same memory multiple threads. Atomics.add/compareExchange. COOP COEP required. Prefer postMessage unless need shared state. C# lock on shared vars analog.",
+    "Follow-up: why SAB disabled by default?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses SharedArrayBuffer and Atomics as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving sharedarraybuffer-and-atomics.",
-    "Strong: define SharedArrayBuffer and Atomics, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: arr[0]++ from two threads.",
+    "Weak: SAB without crossOriginIsolated check.",
+    "Strong: Atomics + headers + when postMessage enough."
   ],
   "relatedTopicIds": [
-    "javascript-15-web-workers-basics",
     "javascript-15-postmessage-and-transferables",
-    "javascript-15-worker-pools-and-patterns"
+    "javascript-15-worker-pools-and-patterns",
+    "javascript-15-workers-vs-csharp-threading"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "SharedArrayBuffer and Atomics",
-      "note": "SharedArrayBuffer and Atomics in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/workers-and-concurrency/sharedarraybuffer-and-atomics"
+      "concept": "SharedArrayBuffer types",
+      "note": "SharedArrayBuffer in lib — same as ArrayBuffer for typing views.",
+      "futureTopicSlug": "typescript/collections/typed-arrays"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for SharedArrayBuffer and Atomics",
-      "note": "C# developers: map SharedArrayBuffer and Atomics to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/sharedarraybuffer-and-atomics"
+      "language": "typescript",
+      "concept": "Interlocked",
+      "note": "C# comparison: Interlocked.Increment like Atomics.add.",
+      "futureTopicSlug": "csharp/concurrency-and-threading/interlocked"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — SharedArrayBuffer",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/SharedArrayBuffer"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — Atomics",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics"
     }
   ],
-  "animationHint": "timeline",
-  "scenarioTag": "auth-token"
+  "animationHint": "compare",
+  "scenarioTag": "high-concurrency"
 }

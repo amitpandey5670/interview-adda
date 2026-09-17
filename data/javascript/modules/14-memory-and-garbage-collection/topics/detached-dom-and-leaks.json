@@ -4,14 +4,14 @@
   "title": "Detached DOM nodes and browser memory leaks",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 6,
-  "hook": "Detached DOM nodes and browser memory leaks connects directly to V8 heap layout and GC pauses. Retained references — closures, timers, caches — keep objects in old generation until major GC, affecting tail latency.",
+  "hook": "A DOM node removed from the document but still referenced in JavaScript is detached — it cannot be painted but still consumes memory until every reference is dropped.",
   "sections": [
     {
-      "heading": "What is Detached DOM nodes and browser memory leaks?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Detached DOM nodes and browser memory leaks** is a run-time JavaScript mechanism enforced by the engine on every execution. Detached DOM nodes and browser memory leaks connects directly to V8 heap layout and GC pauses. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Detached DOM tree**: element removed via `removeChild` or `innerHTML = ''` but JS variable, closure, or WeakMap-strong-value still references it. Browser keeps layout/DOM structures alive. **Retained event listeners** on detached nodes also keep handlers and captured data alive. Common in SPAs with manual DOM manipulation or jQuery-era patterns."
         },
         {
           "type": "glossary",
@@ -19,63 +19,63 @@
           "entries": [
             {
               "term": "detached",
-              "longForm": "Detached DOM nodes and browser memory leaks",
-              "plainDefinition": "Central mechanism behind \"Detached DOM nodes and browser memory leaks\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "longForm": "detached DOM node",
+              "plainDefinition": "Not in document but referenced from JS.",
+              "example": "const el = div; div.remove(); el still exists"
             },
             {
-              "term": "heap",
-              "longForm": "V8 heap",
-              "plainDefinition": "Region where objects live; split into young and old generations.",
-              "example": "process.memoryUsage().heapUsed"
+              "term": "retainer",
+              "longForm": "GC retainer",
+              "plainDefinition": "Object keeping another reachable.",
+              "example": "closure → detached ul → li nodes"
             },
             {
-              "term": "retention",
-              "longForm": "memory retention",
-              "plainDefinition": "Reachable reference prevents GC from reclaiming object.",
-              "example": "Closure holding large array"
+              "term": "orphan subtree",
+              "longForm": "orphan DOM subtree",
+              "plainDefinition": "Whole tree detached but held by one ref.",
+              "example": "cached template fragment"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Detached DOM nodes and browser memory leaks matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Detached DOM nodes and browser memory leaks** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Long-lived admin dashboards that re-render tables without teardown leak thousands of detached `<tr>` nodes — Chrome memory climbs, tab crashes. React/Vue usually handle this; leaks appear in D3 charts, third-party widgets, and global caches of DOM fragments."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Detached DOM nodes and browser memory leaks\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Detached in heap snapshot",
+          "body": "Chrome shows \"Detached\" label on nodes still retained from JS."
         }
       ]
     },
     {
-      "heading": "How Detached DOM nodes and browser memory leaks works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "DOM leak fix",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Detached DOM nodes and browser memory leaks appears — syntax, API call, or type annotation."
+              "title": "Identify detached",
+              "body": "Heap snapshot → filter Detached."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Walk retainers",
+              "body": "Find JS array or closure holding root."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Null references",
+              "body": "Clear cache; remove from array."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Prefer framework",
+              "body": "Let React unmount clean listeners."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Detached DOM nodes and browser memory leaks flow",
-            "source": "flowchart TD\n  A[Allocate object] --> B[Young generation]\n  B --> C{Survives Scavenge?}\n  C -->|No| D[Freed]\n  C -->|Yes| E[Old generation]\n  E --> F[Major GC when needed]"
+            "title": "Detached but retained",
+            "source": "flowchart TD\n  DOC[document] -.removed.-> NODE[div element]\n  JS[JS variable cache] -->|strong ref| NODE"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Detached DOM nodes and browser memory leaks",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Heap usage snapshot",
-            "code": "const used = process.memoryUsage();\nconsole.log({\n  heapUsedMB: (used.heapUsed / 1024 / 1024).toFixed(1),\n  heapTotalMB: (used.heapTotal / 1024 / 1024).toFixed(1),\n  externalMB: (used.external / 1024 / 1024).toFixed(1),\n});",
-            "explanation": "heapUsed grows with retained objects; external tracks C++ bindings (Buffers)."
+            "label": "Detached fragment cache",
+            "code": "const templateCache = [];\nfunction renderRow(data) {\n  const tr = document.createElement(\"tr\");\n  tr.innerHTML = `<td>${data.name}</td>`;\n  tbody.appendChild(tr);\n  templateCache.push(tr); // leak: removed rows stay in cache\n  return tr;\n}",
+            "explanation": "Line 6: cache holds every row ever created even after DOM removal."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Closure retention trap",
-            "code": "function createHandler() {\n  const large = new Array(1_000_000).fill('x');\n  return function onClick() {\n    console.log(large.length); // retains entire array\n  };\n}\nconst handler = createHandler(); // large stays in old gen",
-            "explanation": "Inner function closes over outer bindings — GC cannot collect large until handler released."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# IDisposable versus JS GC",
-            "code": "// C# explicit disposal\nusing var conn = new SqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable frees unmanaged resources promptly\n\n// JS: no IDisposable — release references, remove listeners",
-            "explanation": "JS relies on GC; use WeakRef/FinalizationRegistry only for optional caches, not critical cleanup."
+            "label": "Fix — weak or bounded cache",
+            "code": "function renderRow(data, cache) {\n  const tr = document.createElement(\"tr\");\n  tr.textContent = data.name;\n  if (cache.size > 100) cache.delete(cache.keys().next().value);\n  cache.set(data.id, tr);\n  return tr;\n}",
+            "explanation": "Bounded Map by id — old rows eligible for GC when evicted and unreferenced."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "WeakMap for private metadata",
-            "code": "const privateData = new WeakMap();\nclass Account {\n  constructor(id) { privateData.set(this, { id }); }\n  get id() { return privateData.get(this).id; }\n}",
-            "explanation": "WeakMap keys are objects collected when key is unreachable — no memory leak from metadata map."
+            "label": "Cleanup on route change",
+            "code": "let chartContainer = null;\nfunction mountChart(el) {\n  chartContainer = el;\n  d3.select(el).selectAll(\"*\").data(data).enter().append(\"div\");\n}\nfunction unmountChart() {\n  if (chartContainer) {\n    d3.select(chartContainer).selectAll(\"*\").remove();\n    chartContainer = null;\n  }\n}",
+            "explanation": "Line 9–10: drop reference so D3 detached nodes can GC."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — innerHTML swap",
+            "code": "list.innerHTML = newHtml; // old children detached\nwindow._lastRows = oldRows; // if you saved refs — leak",
+            "explanation": "Saving references to replaced children prevents collection."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Detached DOM nodes and browser memory leaks across languages",
+          "title": "Browser vs Node",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Environment",
+            "DOM leak",
+            "Analog"
           ],
           "rows": [
             [
-              "Reclamation",
-              "V8 generational GC",
-              "CLR generational GC",
-              "No runtime GC"
+              "Browser",
+              "Detached nodes",
+              "Primary leak source"
             ],
             [
-              "Explicit free",
-              "Remove references only",
-              "IDisposable + GC",
-              "N/A"
+              "Node",
+              "No DOM",
+              "Closures, caches, handles"
             ],
             [
-              "Diagnostics",
-              "Heap snapshot",
-              "dotMemory / PerfView",
-              "N/A"
+              "React",
+              "Auto unmount",
+              "Still watch refs to DOM"
+            ],
+            [
+              "C# UI",
+              "Dispose controls",
+              "Deterministic"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Detached DOM nodes and browser memory leaks",
-          "body": "Treating Detached DOM nodes and browser memory leaks as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Global arrays of DOM nodes for \"performance\". Forgetting third-party widget destroy(). Saving innerHTML children before replace."
         }
       ]
     },
@@ -181,89 +182,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Detached DOM nodes and browser memory leaks** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Measure: performance.memory.usedJSHeapSize trend. Detached nodes often hide in chart libraries — call destroy() APIs. Memory tool \"Summary → Detached\" filter. Pair with listener cleanup."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Pattern",
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "DOM cache",
+              "Fast re-render",
+              "Detached leak"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "Virtual DOM framework",
+              "Managed lifecycle",
+              "Ref escape hatches"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "DocumentFragment once",
+              "Batch insert",
+              "Held ref leaks"
+            ],
+            [
+              "innerHTML",
+              "Simple",
+              "Loses listeners + leak refs"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Detached DOM nodes and browser memory leaks. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Never heard of detached DOM. Says removeChild always frees memory. No heap snapshot workflow."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Detached DOM nodes and browser memory leaks: know definition plus one runnable example.",
-    "Production: validate external input before applying Detached DOM nodes and browser memory leaks; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for detached-dom-and-leaks.",
-    "60s: Detached DOM nodes and browser memory leaks — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Detached = not in document but JS-referenced.",
+    "Shows in Chrome heap snapshot as Detached.",
+    "Fix: clear JS refs + remove listeners.",
+    "60s: removeChild without dropping JS ref leaks memory. Common in SPA manual DOM. Snapshot → Detached → retainers. Framework unmount helps.",
+    "Follow-up: templateCache holding removed tr elements."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Detached DOM nodes and browser memory leaks as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving detached-dom-and-leaks.",
-    "Strong: define Detached DOM nodes and browser memory leaks, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: cache every rendered row in global array.",
+    "Weak: ignore chart library destroy on navigation.",
+    "Strong: detached definition + snapshot + clear retainers."
   ],
   "relatedTopicIds": [
-    "javascript-14-stack-heap-and-references",
-    "javascript-14-v8-garbage-collection",
-    "javascript-14-closure-memory-retention"
+    "javascript-14-memory-leak-patterns",
+    "javascript-14-weakref-and-finalization",
+    "javascript-10-dom-events-and-delegation"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Detached DOM nodes and browser memory leaks",
-      "note": "Detached DOM nodes and browser memory leaks in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/memory-and-garbage-collection/detached-dom-and-leaks"
+      "concept": "Ref types",
+      "note": "React RefObject holds DOM node — null on unmount prevents leak if not copied elsewhere.",
+      "futureTopicSlug": "typescript/react/refs"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Detached DOM nodes and browser memory leaks",
-      "note": "C# developers: map Detached DOM nodes and browser memory leaks to closest CLR concept (GC) and note differences.",
-      "futureTopicSlug": "csharp/modules/detached-dom-and-leaks"
+      "language": "typescript",
+      "concept": "C# Control.Dispose",
+      "note": "C# comparison: Dispose releases UI handles deterministically.",
+      "futureTopicSlug": "csharp/winforms-or-wpf/dispose-pattern"
     }
   ],
   "officialSources": [
     {
-      "title": "Memory management",
+      "title": "Chrome DevTools — Memory",
+      "url": "https://developer.chrome.com/docs/devtools/memory/"
+    },
+    {
+      "title": "MDN — Memory management",
       "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
-    },
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "csv-import"
+  "animationHint": "stack-heap"
 }

@@ -4,14 +4,14 @@
   "title": "V8 garbage collection: generations, mark-sweep, and compaction",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 2,
-  "hook": "V8 divides the heap into young (nursery) and old generations. Minor GC scavenges short-lived objects in milliseconds; major GC mark-sweep-compact reclaims the old generation and can pause the main thread — the key to understanding Node.js latency spikes.",
+  "hook": "V8 splits the heap into young and old generations. Most objects die young — Scavenge copies survivors in milliseconds. Long-lived objects graduate to old space where Mark-Sweep-Compact runs less often but pauses longer.",
   "sections": [
     {
-      "heading": "What is V8 garbage collection?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**V8** manages memory automatically: allocate on the heap, reclaim unreachable objects via **garbage collection**. The **young generation** (nursery) holds new objects; a copying **Scavenge** (minor GC) is fast and frequent. Surviving objects are **promoted** to the **old generation** where **mark-sweep-compact** (major GC) runs less often but can pause longer. **Incremental marking** and **concurrent marking** reduce pause times. The **GC roots** are globals, stack references, and registered handles."
+          "text": "**Generational hypothesis**: most allocations are short-lived. **Young generation** (nursery): new objects allocated in **From-Space**; **Scavenge** (minor GC) copies live objects to **To-Space**, discards dead. Survivors age; after threshold, **promoted** to **old generation**. **Old generation**: **Mark-Sweep** finds unreachable objects; **Mark-Compact** defragments. **Incremental/concurrent** marking reduces pause times in modern V8."
         },
         {
           "type": "glossary",
@@ -19,69 +19,63 @@
           "entries": [
             {
               "term": "Scavenge",
-              "longForm": "minor GC / Scavenge",
-              "plainDefinition": "Copy live young-generation objects to survivor space; discard dead.",
-              "example": "Runs when nursery fills — typically < 5ms"
+              "longForm": "minor GC Scavenge",
+              "plainDefinition": "Copying collector for young generation.",
+              "example": "Runs frequently, low pause."
             },
             {
               "term": "mark-sweep",
-              "longForm": "mark-sweep-compact",
-              "plainDefinition": "Mark reachable old-gen objects, sweep unreachable, compact fragmentation.",
-              "example": "Major GC — can pause 10–100ms+ on large heaps"
+              "longForm": "mark-sweep",
+              "plainDefinition": "Trace reachable objects; sweep unmarked.",
+              "example": "Old generation full GC."
             },
             {
               "term": "promotion",
               "longForm": "object promotion",
-              "plainDefinition": "Young object that survives Scavenge moves to old generation.",
-              "example": "Long-lived caches promote quickly"
-            },
-            {
-              "term": "write barrier",
-              "longForm": "write barrier",
-              "plainDefinition": "Tracks old→young references so minor GC does not miss live objects.",
-              "example": "Internal V8 mechanism during incremental marking"
+              "plainDefinition": "Move survivor from young to old gen.",
+              "example": "Long-lived cache entries promote."
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why V8 GC matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "GC pauses cause **tail latency** in APIs and jank in browsers. Allocating many short-lived objects fills the nursery and triggers frequent Scavenge. Retaining objects accidentally — closures, timers, caches — grows old space and triggers expensive major GC. **--expose-gc** and **performance.measureUserAgentSpecificMemory** help diagnose. Unlike C# CLR, V8 runs on the main thread for most work."
+          "text": "GC pauses cause tail latency spikes in Node APIs. Allocating millions of short objects per request triggers frequent Scavenge — CPU spent on GC not business logic. Tuning `--max-old-space-size` and reducing allocation rate fixes production OOM."
         },
         {
           "type": "callout",
-          "variant": "remember",
-          "title": "C# CLR comparison",
-          "body": "CLR has generational GC with LOH (large object heap). V8 old space is similar to Gen2. CLR background GC reduces pauses; V8 uses incremental/concurrent marking. Both promote survivors. JS has no IDisposable — only GC and WeakRef."
+          "variant": "tip",
+          "title": "GC is non-deterministic",
+          "body": "You cannot force GC in production reliably — fix retention, not gc() calls."
         }
       ]
     },
     {
-      "heading": "How generational GC works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Object lifetime",
+          "title": "GC cycle",
           "items": [
             {
-              "title": "Allocate",
-              "body": "New object in nursery (young generation)."
+              "title": "Allocate in nursery",
+              "body": "New object in young gen From-Space."
             },
             {
               "title": "Minor GC",
-              "body": "Scavenge copies survivors; dead objects discarded."
+              "body": "Scavenge copies live to To-Space; flip spaces."
             },
             {
-              "title": "Promote",
-              "body": "Objects surviving enough cycles move to old generation."
+              "title": "Promotion",
+              "body": "Objects surviving N scavenge cycles move to old gen."
             },
             {
               "title": "Major GC",
-              "body": "Mark-sweep-compact on old space when threshold hit."
+              "body": "Mark-sweep-compact old space when threshold hit."
             }
           ]
         },
@@ -90,101 +84,96 @@
           "diagram": {
             "type": "mermaid",
             "title": "V8 generational heap",
-            "source": "flowchart LR\n  N[New space nursery] -->|Scavenge survivors| S[Survivor space]\n  S -->|Promotion| O[Old space]\n  O -->|Major GC| O\n  R[GC roots: stack globals] --> N\n  R --> O"
+            "source": "flowchart TD\n  A[New object] --> Y[Young From-Space]\n  Y -->|Scavenge| T[Young To-Space]\n  T -->|promote| O[Old generation]\n  O -->|Mark-Sweep-Compact| F[Free memory]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: allocation, retention, and GC signals",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Short-lived versus promoted objects",
-            "code": "function processBatch(rows) {\n  return rows.map((row) => ({\n    id: row.id,\n    label: row.name.toUpperCase(),\n  }));\n}\n\n// Many ephemeral objects per call — nursery Scavenge reclaims them\nprocessBatch(largeCsv);",
-            "explanation": "Transient map results die after return — ideal for minor GC. Avoid retaining every batch in a global array."
+            "label": "Short-lived allocations",
+            "code": "function handleRequest(req) {\n  const temp = req.body.items.map((i) => ({ ...i, processed: true }));\n  return temp.length;\n}\n// temp dies after return — ideal for young gen",
+            "explanation": "Line 2: many short-lived objects collected in next Scavenge."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Accidental old-gen retention",
-            "code": "const cache = new Map();\nfunction loadUser(id) {\n  const data = fetchProfile(id); // Promise retained by cache key forever\n  cache.set(id, data);\n  return data;\n}\n// Fix: LRU eviction, WeakRef, or TTL cleanup",
-            "explanation": "Unbounded Map holds promises in old generation — major GC cannot reclaim until entries removed."
+            "label": "Long-lived cache promotes",
+            "code": "const sessionCache = new Map();\nfunction getSession(id) {\n  if (!sessionCache.has(id)) sessionCache.set(id, loadFromRedis(id));\n  return sessionCache.get(id);\n}\n// Map and entries live in old gen — major GC scans them",
+            "explanation": "Line 1: unbounded Map prevents collection — memory leak if keys grow forever."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Observing GC in Node (--expose-gc)",
-            "code": "// node --expose-gc app.mjs\nimport v8 from 'node:v8';\n\nconst before = process.memoryUsage().heapUsed;\nglobal.gc(); // manual major GC when flag set\nconst after = process.memoryUsage().heapUsed;\nconsole.log('Freed MB:', (before - after) / 1024 / 1024);\nconsole.log(v8.getHeapStatistics());",
-            "explanation": "heapUsed drops after gc() if unreachable objects existed. Use in benchmarks, not production."
+            "label": "Monitor GC in Node",
+            "code": "const v8 = require(\"node:v8\");\nconst stats = v8.getHeapStatistics();\nconsole.log({\n  used: stats.used_heap_size,\n  total: stats.total_heap_size,\n  malloced: stats.malloced_memory,\n});",
+            "explanation": "Track heap growth over deploy — step change indicates leak or traffic pattern."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "WeakRef for optional cache",
-            "code": "const registry = new FinalizationRegistry((id) => {\n  console.log('Object gone:', id);\n});\n\nlet ref = new WeakRef({ data: [1, 2, 3] });\nregistry.register(ref.deref(), 'cache-entry');\n// When object collected, finalizer runs (do not rely on timing)",
-            "explanation": "WeakRef does not prevent GC — use for caches that should not block collection. FinalizationRegistry for cleanup side effects."
+            "label": "Failure — global.gc() myth",
+            "code": "// if (--expose-gc) global.gc();\n// Production: fix retainers, not manual GC",
+            "explanation": "Manual GC hides leaks in dev; unavailable in prod Node by default."
           }
         }
       ]
     },
     {
-      "heading": "Compare with C# CLR and TypeScript",
+      "heading": "Compare with C# and TypeScript",
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "GC model matrix",
+          "title": "GC phases",
           "headers": [
-            "Aspect",
-            "V8 (JS)",
-            "CLR (C#)",
-            "TypeScript"
+            "Generation",
+            "Algorithm",
+            "Pause"
           ],
           "rows": [
             [
-              "Generations",
-              "Young + old",
-              "Gen0/1/2 + LOH",
-              "No runtime GC — emits JS"
+              "Young",
+              "Scavenge (copying)",
+              "Sub-ms typical"
             ],
             [
-              "Pause impact",
-              "Main thread STW phases",
-              "Background GC options",
-              "N/A"
+              "Old",
+              "Mark-Sweep-Compact",
+              "Milliseconds+"
             ],
             [
-              "Disposal",
-              "GC only (+ WeakRef)",
-              "IDisposable + GC",
-              "N/A"
+              "Large objects",
+              "Large object space",
+              "Separate handling"
             ],
             [
-              "Diagnostics",
-              "DevTools heap snapshot",
-              "dotMemory, PerfView",
-              "N/A"
+              "Incremental",
+              "Concurrent marking",
+              "Reduced pause"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "GC misconceptions",
-          "body": "Thinking GC frees memory immediately. Assuming null assignment collects instantly — only unreachable graphs are collected. Unbounded caches in old gen. Creating massive temporary strings/arrays per request. Relying on FinalizationRegistry for critical cleanup timing."
+          "title": "Pitfalls to avoid",
+          "body": "Calling global.gc() in prod. Assuming GC runs immediately when reference nulled. Creating long-lived closures holding huge arrays."
         }
       ]
     },
@@ -193,56 +182,86 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Explain tri-color marking, incremental marking reducing pause, and Orinoco (concurrent) GC in modern V8. Contrast with CLR background GC. When to pool objects in Node hot paths. How detached DOM nodes keep whole trees alive in browsers. Read heap snapshot dominators tree to find retention path."
+          "text": "Use --trace-gc in staging to correlate pauses with QPS. Orinoco is V8 GC project name. Major GC during Redis pipeline batch causes p99 spike — pool object reuse reduces promotion."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs",
+          "headers": [
+            "Strategy",
+            "Wins",
+            "Fails"
+          ],
+          "rows": [
+            [
+              "Reduce allocations",
+              "Less GC CPU",
+              "Code complexity"
+            ],
+            [
+              "Object pools",
+              "Stable old gen",
+              "Stale state bugs"
+            ],
+            [
+              "Larger heap flag",
+              "Fewer major GC",
+              "Longer pauses when GC runs"
+            ],
+            [
+              "WeakMap caches",
+              "Auto cleanup keys",
+              "Values still strong"
+            ]
+          ]
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Production tuning",
-          "body": "--max-old-space-size for Node heap cap. Monitor GC pause with clinic.js or Chrome Performance panel. Reduce allocation rate before tuning flags."
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot name young vs old gen. Says reference counting is primary V8 strategy. Thinks delete obj frees memory instantly."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Young gen Scavenge is fast; old gen mark-sweep-compact can pause.",
-    "Promotion: survivors move to old space — long-lived caches matter.",
-    "GC roots: stack, globals, closures retaining references prevent collection.",
-    "60s: Generational GC — nursery Scavenge vs old mark-sweep-compact. Main-thread pauses. Compare CLR Gen2. Unbounded caches cause major GC pressure.",
-    "Follow-up: how do closures cause memory leaks in old generation?"
+    "Young gen Scavenge; old gen mark-sweep-compact.",
+    "Most objects die young — generational hypothesis.",
+    "Promotion = survivor moves to old space.",
+    "60s: Allocate nursery. Scavenge copies live. Promote survivors. Old gen mark-sweep. Pauses correlate with live set size. Fix retention not gc().",
+    "Follow-up: what triggers major GC?"
   ],
   "commonPitfalls": [
-    "Weak: 'GC runs when I set null' — only unreachable object graphs are collected.",
-    "Weak: 'minor GC and major GC are the same' — different algorithms and cost profiles.",
-    "Weak: 'WeakRef prevents collection' — opposite; it does not keep object alive.",
-    "Strong: 'Young Scavenge vs old mark-sweep-compact, promotion, roots, pause impact, retention paths via heap snapshot.'"
+    "Weak: reference counting mental model — V8 is tracing.",
+    "Weak: unbounded Map as cache — old gen leak.",
+    "Strong: young/old + Scavenge vs mark-sweep + production metrics."
   ],
   "relatedTopicIds": [
     "javascript-14-stack-heap-and-references",
-    "javascript-14-closure-memory-retention",
-    "javascript-14-weakref-and-finalization"
+    "javascript-14-v8-vs-clr-gc",
+    "javascript-14-allocation-hot-paths"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "No compile-time GC",
-      "note": "TypeScript types erase — memory behavior is pure V8. WeakRef and FinalizationRegistry typed in lib.d.ts.",
-      "futureTopicSlug": "typescript/runtime/memory"
+      "concept": "No GC types",
+      "note": "TypeScript adds no memory management — same V8 GC at runtime.",
+      "futureTopicSlug": "typescript/runtime/erasable-types"
     },
     {
-      "language": "javascript",
-      "concept": "Closure retention",
-      "note": "Closures keep outer bindings alive — connects GC to scope. See closure-memory-retention topic.",
-      "futureTopicSlug": "javascript/memory-and-garbage-collection/closure-memory-retention"
+      "language": "typescript",
+      "concept": "CLR GC",
+      "note": "C# comparison: both generational; CLR LOH for large arrays.",
+      "futureTopicSlug": "csharp/memory-and-gc/generations"
     }
   ],
   "officialSources": [
     {
-      "title": "V8 garbage collection",
+      "title": "V8 — Trash talk",
       "url": "https://v8.dev/blog/trash-talk"
     },
     {
-      "title": "Memory management",
+      "title": "MDN — Memory management",
       "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
     }
   ],

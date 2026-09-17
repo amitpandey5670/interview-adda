@@ -4,78 +4,78 @@
   "title": "Workers versus C# threads and Task.Run",
   "moduleId": "javascript-15-workers-and-concurrency",
   "order": 5,
-  "hook": "Workers versus C# threads and Task.Run is how JavaScript shares work across threads without shared mutable state by default. postMessage, transferables, and Atomics differ sharply from C# Task.Run and lock patterns.",
+  "hook": "C# threads share heap memory with locks; JavaScript Workers are isolated agents communicating only via postMessage — closer to processes than threads, despite the name \"Worker thread\".",
   "sections": [
     {
-      "heading": "What is Workers versus C# threads and Task.Run?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Workers versus C# threads and Task.Run** is a run-time JavaScript mechanism enforced by the engine on every execution. Workers versus C# threads and Task. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**C# Thread / Task.Run**: shared address space, `lock`, `ConcurrentDictionary`, **race conditions** if unsynchronized. **JS Worker**: separate V8 isolate (usually), no shared JS objects — **structured clone** or **SAB+Atomics** exception. **Main thread**: single JS execution agent. **Node cluster**: multiple processes, not Workers."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "workers",
-              "longForm": "Workers versus C# threads and Task.Run",
-              "plainDefinition": "Central mechanism behind \"Workers versus C# threads and Task.Run\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "isolate",
+              "longForm": "V8 isolate",
+              "plainDefinition": "Separate JS heap and execution in Worker.",
+              "example": "No shared global object"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "Task.Run",
+              "longForm": "C# Task.Run",
+              "plainDefinition": "Queue work to thread pool.",
+              "example": "Task.Run(() => Compute())"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "shared memory",
+              "longForm": "shared memory threading",
+              "plainDefinition": "C# default; JS only via SAB.",
+              "example": "lock (_gate) { ... }"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why Workers versus C# threads and Task.Run matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Workers versus C# threads and Task.Run** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "C# devs porting algorithms expect `static int counter` visible to all threads — in Workers each has own counter unless SAB. Task.Run for CPU parallels Worker; async I/O parallels Promise — different axes."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Workers versus C# threads and Task.Run\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Two axes",
+          "body": "Parallelism (Workers/Task.Run) vs async I/O overlap (Promise/async) — orthogonal in both ecosystems."
         }
       ]
     },
     {
-      "heading": "How Workers versus C# threads and Task.Run works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Choose the tool",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where Workers versus C# threads and Task.Run appears — syntax, API call, or type annotation."
+              "title": "I/O bound",
+              "body": "JS: async/await. C#: async Task."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "CPU bound JS",
+              "body": "Worker pool or WASM."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "CPU bound C#",
+              "body": "Task.Run or Parallel.For."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Shared state",
+              "body": "C#: locks. JS: postMessage or SAB Atomics."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Workers versus C# threads and Task.Run flow",
-            "source": "flowchart TD\n  A[Workers versus C# threads and Task.Run] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Memory models",
+            "source": "flowchart TD\n  subgraph CSharp\n    T1[Thread 1] --> H[Shared heap]\n    T2[Thread 2] --> H\n  end\n  subgraph JS\n    M[Main] <-->|messages| W[Worker isolate]\n  end"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Workers versus C# threads and Task.Run",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Core Workers versus C# threads and Task.Run example",
-            "code": "function createClient(cfg) {\n  return {\n    async call(path) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}\n\nconst client = createClient({ retries: 3, endpoint: 'https://api.example.com' });",
-            "explanation": "Demonstrates Workers versus C# threads and Task.Run in a realistic API client — retries, fetch, and configuration."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v) {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj, key) {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
+            "label": "JS — no shared counter",
+            "code": "// main.js\nlet count = 0;\nworker.postMessage(\"inc\");\n// worker cannot increment main count — must postMessage back",
+            "explanation": "Isolated globals — unlike C# static field."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for Workers versus C# threads and Task.Run\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps Workers versus C# threads and Task.Run idioms to C# — note compile-time types versus JS run-time checks."
+            "label": "C# shared counter with lock",
+            "code": "static int count;\nstatic readonly object gate = new();\n\nTask.Run(() => { lock (gate) { count++; } });\nTask.Run(() => { lock (gate) { count++; } });",
+            "explanation": "Threads share count — synchronize with lock."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode diagnostic",
-            "code": "function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}",
-            "explanation": "Explicit unknown/error handling for Workers versus C# threads and Task.Run — senior code paths always name failure modes."
+            "label": "JS aggregate results via messages",
+            "code": "let total = 0;\nworker.onmessage = (e) => { total += e.data.partial; };\nworkers.forEach((w) => w.postMessage(chunk));",
+            "explanation": "Main aggregates partial CPU results — message passing not shared mutation."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# Parallel aggregate",
+            "code": "var sum = 0;\nParallel.ForEach(chunks, () => new int(), (c, state, local) => local + Sum(c), local => Interlocked.Add(ref sum, local));",
+            "explanation": "Thread-local aggregation then Interlocked — shared sum safely."
           }
         }
       ]
@@ -135,44 +135,50 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Workers versus C# threads and Task.Run across languages",
+          "title": "Workers vs threads",
           "headers": [
             "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "JS Worker",
+            "C# Thread"
           ],
           "rows": [
             [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
+              "Memory",
+              "Isolated (SAB exception)",
+              "Shared heap"
             ],
             [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
+              "Communication",
+              "postMessage",
+              "Shared vars + locks"
             ],
             [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
+              "DOM / UI",
+              "Main only",
+              "UI thread rules"
+            ],
+            [
+              "Spawn cost",
+              "Higher isolate",
+              "Pool cheaper"
+            ],
+            [
+              "Race bugs",
+              "Rare without SAB",
+              "Common without lock"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Workers versus C# threads and Task.Run",
-          "body": "Treating Workers versus C# threads and Task.Run as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Expect shared globals across Workers. Using C# lock mental model in JS. Task.Run equivalent for fetch."
         }
       ]
     },
@@ -181,85 +187,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **Workers versus C# threads and Task.Run** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Node worker_threads closer to C# than browser Workers but still message-first. WASM pthreads + SAB bridge ecosystems. Interview: draw two models; cite Spectre isolation for SAB."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Mapping",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "C#",
+            "JavaScript",
+            "Notes"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Task.Run CPU",
+              "Worker pool",
+              "Parallel compute"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "async I/O",
+              "Promise/async",
+              "Overlap waits"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "lock",
+              "Atomics / postMessage",
+              "Coordination"
+            ],
+            [
+              "ConcurrentBag",
+              "Main aggregates messages",
+              "Result collection"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to Workers versus C# threads and Task.Run. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Says Workers share JS heap. Maps Task.Run to fetch. No isolation concept."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Workers versus C# threads and Task.Run: know definition plus one runnable example.",
-    "Production: validate external input before applying Workers versus C# threads and Task.Run; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for workers-vs-csharp-threading.",
-    "60s: Workers versus C# threads and Task.Run — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Workers = isolated agents; C# threads share heap.",
+    "postMessage vs locks for coordination.",
+    "Task.Run ≈ Worker for CPU; async ≈ Promise for I/O.",
+    "60s: C# threads share memory need locks. JS Workers isolated postMessage. SAB+Atomics exception. CPU: Worker vs Task.Run. I/O: async both. No DOM in Worker.",
+    "Follow-up: implement shared counter in both models."
   ],
   "commonPitfalls": [
-    "Weak: dismisses Workers versus C# threads and Task.Run as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving workers-vs-csharp-threading.",
-    "Strong: define Workers versus C# threads and Task.Run, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: static variable shared across Workers.",
+    "Weak: Worker for I/O latency.",
+    "Strong: isolation + message aggregate + axis CPU vs I/O."
   ],
   "relatedTopicIds": [
     "javascript-15-web-workers-basics",
-    "javascript-15-postmessage-and-transferables",
+    "javascript-13-promises-vs-csharp-task",
     "javascript-15-sharedarraybuffer-and-atomics"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Workers versus C# threads and Task.Run",
-      "note": "Workers versus C# threads and Task.Run in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/workers-and-concurrency/workers-vs-csharp-threading"
+      "concept": "No thread types",
+      "note": "TS does not model Worker isolation — structural typing on message payloads only.",
+      "futureTopicSlug": "typescript/dom/worker-messages"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for Workers versus C# threads and Task.Run",
-      "note": "C# developers: map Workers versus C# threads and Task.Run to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/workers-vs-csharp-threading"
+      "language": "typescript",
+      "concept": "Threading",
+      "note": "C# comparison: lock, Monitor, SemaphoreSlim — no direct JS equivalent except Atomics.",
+      "futureTopicSlug": "csharp/concurrency-and-threading/locks"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Web Workers",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Microsoft — Parallel programming",
+      "url": "https://learn.microsoft.com/en-us/dotnet/standard/parallel-programming/"
     }
   ],
-  "animationHint": "compare",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "compare"
 }

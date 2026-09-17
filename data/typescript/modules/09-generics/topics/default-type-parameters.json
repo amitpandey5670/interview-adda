@@ -4,97 +4,128 @@
   "title": "Default type parameters and inference",
   "moduleId": "typescript-09-generics",
   "order": 3,
-  "hook": "Default type parameters let callers omit generic args when the default fits — Promise<void> defaults resolve type, and ComponentPropsWithoutRef<'div'> relies on defaults deep in React types.",
+  "hook": "Default type parameters and inference is compile-time type manipulation — erased at run time but essential for safe APIs. Conditional types, infer, and mapped types power built-in utilities like ReturnType and Partial.",
   "sections": [
     {
-      "heading": "What is this?",
+      "heading": "What is Default type parameters and inference?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Syntax: `interface ApiResponse<TData = unknown, TError = string>`. If caller writes `ApiResponse<User>`, `TData` is `User` and `TError` defaults to `string`. Defaults apply **right to left** when partially specifying type args: `Foo<A, B = BDefault, C = CDefault>` — `Foo<X>` sets A=X, B and C use defaults. **Inference** from value arguments can still override defaults. Defaults appear throughout lib.d.ts — `Array<T>`, `Promise<T = void>` in some patterns, and custom hooks."
+          "text": "**Default type parameters and inference** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Default type parameters and inference is compile-time type manipulation — erased at run time but essential for safe APIs. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            { "term": "default type parameter", "longForm": "default generic type", "plainDefinition": "Fallback type when caller omits that type argument.", "example": "T = unknown" },
-            { "term": "partial specification", "longForm": "partial type args", "plainDefinition": "Supplying only leading type args — rest use defaults.", "example": "Map<string> // invalid — must supply all or infer" },
-            { "term": "inference priority", "longForm": "inference vs default", "plainDefinition": "Inferred types beat defaults when arguments provide evidence.", "example": "createState(0) infers number over default unknown" },
-            { "term": "trailing defaults", "longForm": "required before optional type params", "plainDefinition": "Parameters without defaults must come before those with defaults.", "example": "<T, U = string> valid; <T = string, U> invalid" }
+            {
+              "term": "default",
+              "longForm": "Default type parameters and inference",
+              "plainDefinition": "Core TypeScript mechanism for default type parameters and inference.",
+              "example": "Runnable examples in the code walkthrough below."
+            },
+            {
+              "term": "structural typing",
+              "longForm": "structural typing",
+              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
+              "example": "{ id: string } assignable to interface User"
+            },
+            {
+              "term": "type erasure",
+              "longForm": "type erasure",
+              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
+              "example": "interface User erases completely"
+            }
           ]
         }
       ]
     },
     {
-      "heading": "Why does it matter?",
+      "heading": "Why Default type parameters and inference matters in production",
       "blocks": [
         {
           "type": "prose",
-          "text": "Library APIs use defaults to reduce boilerplate — `EventEmitter<T = any>` (legacy), modern libs prefer `unknown`. React `useRef<HTMLDivElement>(null)` needs explicit type because default null inference differs. C# has `class Foo<T> where T : new()` but default type args are `class Foo<T = string>`. Senior interviews ask when inference fails with empty arrays and how defaults fix `useState<number[]>([])`."
+          "text": "Senior interviews and on-call debugging both test **Default type parameters and inference** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
         },
-        { "type": "callout", "variant": "tip", "title": "Defaults vs inference", "body": "Defaults apply when type arg omitted — inference from values is separate and usually wins when present." }
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview trap",
+          "body": "Interviewers ask \"Default type parameters and inference\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+        }
       ]
     },
     {
-      "heading": "How it works step by step",
+      "heading": "How Default type parameters and inference works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Using defaults effectively",
+          "title": "Mental model",
           "items": [
-            { "title": "Pick sensible defaults", "body": "unknown over any for safety; void for no-return generics." },
-            { "title": "Order parameters", "body": "Required type params first; defaulted ones trailing." },
-            { "title": "Combine with constraints", "body": "T extends Entity = DefaultEntity — default must satisfy constraint." },
-            { "title": "Document when to omit", "body": "Most callers use defaults; power users override." }
+            {
+              "title": "Locate in code",
+              "body": "Find where Default type parameters and inference appears — syntax, API call, or type annotation."
+            },
+            {
+              "title": "Trace behavior",
+              "body": "Hover types in the editor, emit JS, verify what survives at run time."
+            },
+            {
+              "title": "Test edge cases",
+              "body": "Null input, empty collections, network failure, wrong types from JSON."
+            },
+            {
+              "title": "Connect neighbors",
+              "body": "Follow related topics at the bottom for closures, types, or async context."
+            }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Default vs inferred type args",
-            "source": "flowchart TD\n  CALL[Call generic API] --> INF{Args infer T?}\n  INF -->|yes| USE[Use inferred T]\n  INF -->|no| DEF[Use default T]"
+            "title": "Default type parameters and inference flow",
+            "source": "flowchart LR\n  A[Source type] --> B[Conditional / mapped]\n  B --> C[Inferred result type]\n  C --> D[Emit erases to JS]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough",
+      "heading": "Code walkthrough: Default type parameters and inference",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Interface with defaulted error type",
-            "code": "type Result<T, E = Error> =\n  | { ok: true; value: T }\n  | { ok: false; error: E };\n\nconst success: Result<number> = { ok: true, value: 42 };\nconst failure: Result<number, string> = { ok: false, error: 'timeout' };",
-            "explanation": "Line 1: E defaults to Error. Line 5: only T specified — E is Error. Line 6: override E to string."
+            "label": "Conditional type with infer",
+            "code": "type Unwrap<T> = T extends Promise<infer U> ? U : T;\ntype A = Unwrap<Promise<string>>; // string\ntype B = Unwrap<number>; // number",
+            "explanation": "infer captures type variable in conditional match — pattern behind Awaited and ReturnType."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Function default fixes empty array",
-            "code": "function createList<T = string>(items: T[] = []): T[] {\n  return [...items];\n}\n\nconst strings = createList();        // string[]\nconst nums = createList<number>([]); // number[]",
-            "explanation": "Line 1: default T = string when no arg clues. Line 5: empty call gets string[]. Line 6: explicit number[] override."
+            "label": "Mapped type for DTO",
+            "code": "type CreateUserDto = Pick<User, 'name' | 'email'>;\ntype UpdateUserDto = Partial<CreateUserDto> & { id: string };\ntype UserKeys = keyof User;",
+            "explanation": "Utility types compose — Partial, Pick, keyof build API layers without duplication."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Multiple defaults right-to-left",
-            "code": "type CacheConfig<\n  TKey extends string = string,\n  TValue = unknown,\n  TTL extends number = 3600\n> = { key: TKey; value: TValue; ttl: TTL };\n\ntype DefaultCache = CacheConfig; // all defaults\ntype UserCache = CacheConfig<'user', User>;",
-            "explanation": "Line 7: no args — all defaults apply. Line 8: partial — TTL still defaults to 3600."
+            "label": "satisfies preserves literal types",
+            "code": "const routes = {\n  home: '/',\n  profile: '/me',\n} satisfies Record<string, `/${string}`>;\n// routes.home is '/' not string",
+            "explanation": "satisfies checks shape without widening inferred literal types."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "typescript",
-            "label": "Failure mode — default any hides bugs",
-            "code": "// Legacy pattern — avoid:\ntype LegacyStore<T = any> = { get(): T };\n\n// Prefer:\ntype SafeStore<T = unknown> = { get(): T };\n\nconst store: SafeStore = { get: () => JSON.parse('{}') };\n// Must narrow after get()",
-            "explanation": "Default any makes store.get() return any — poisons chain. unknown forces narrowing."
+            "language": "csharp",
+            "label": "C# generics versus TS structural",
+            "code": "// C# nominal — List<string> not assignable to List<object>\nList<string> names = new();\n\n// TS structural — extra properties allowed on assign\ninterface Named { name: string }\nconst x: Named = { name: 'a', id: 1 }; // excess check may error",
+            "explanation": "C# generics are nominal; TS uses structural assignability with excess property checks on fresh objects."
           }
         }
       ]
@@ -104,22 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Default type parameters",
-          "headers": ["Feature", "TypeScript", "C#"],
+          "title": "Default type parameters and inference across languages",
+          "headers": [
+            "Aspect",
+            "TypeScript",
+            "C#",
+            "JavaScript emit"
+          ],
           "rows": [
-            ["Syntax", "T = Default", "T = Default"],
-            ["Order rule", "Required before defaulted", "Same"],
-            ["Inference", "From value arguments", "From arguments + defaults"],
-            ["Constraint + default", "T extends Foo = Bar", "where T : Foo, T = Bar"]
+            [
+              "Type model",
+              "Structural",
+              "Nominal",
+              "Structural static"
+            ],
+            [
+              "Run time",
+              "Erased",
+              "CLR metadata",
+              "Erased to JS"
+            ],
+            [
+              "Generics",
+              "Erased",
+              "Reified",
+              "Erased"
+            ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes",
+      "heading": "Common mistakes to avoid",
       "blocks": [
-        { "type": "callout", "variant": "warning", "title": "Default any", "body": "T = any in public APIs — prefer unknown or a concrete default." },
-        { "type": "callout", "variant": "warning", "title": "Wrong parameter order", "body": "Required type param after defaulted one — syntax error." }
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls for Default type parameters and inference",
+          "body": "Treating Default type parameters and inference as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+        }
       ]
     },
     {
@@ -127,40 +181,89 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Conditional types can use defaults: `type Foo<T = never> = ...`. React 18+ types chain defaults across ComponentProps. When inference and defaults conflict, explicit type args win. `NoInfer<T>` (TS 5.4+) blocks inference from specific positions — defaults apply instead. Library design: minimize type params; default the least important ones trailing."
+          "text": "Prove mastery of **Default type parameters and inference** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the compiler and emitted JS actually do — plus when the simple explicit version beats the clever abstraction."
         },
         {
           "type": "comparisonTable",
-          "title": "Tradeoffs at senior level",
-          "headers": ["Choice", "Wins", "Fails"],
+          "title": "Senior tradeoffs",
+          "headers": [
+            "Approach",
+            "When it wins",
+            "When it fails"
+          ],
           "rows": [
-            ["T = unknown", "Safe default", "Caller must narrow"],
-            ["T = any", "Easy migration", "Type safety hole"],
-            ["Explicit at call", "Precision", "Verbose"],
-            ["NoInfer", "Control inference site", "TS 5.4+ only"]
+            [
+              "Explicit / verbose",
+              "On-call clarity, junior-friendly",
+              "More boilerplate"
+            ],
+            [
+              "Clever one-liner",
+              "Short examples",
+              "Hard to debug under load"
+            ],
+            [
+              "Library abstraction",
+              "Consistent policy",
+              "Bundle size, hidden behavior"
+            ]
           ]
         },
-        { "type": "callout", "variant": "warning", "title": "What gets you rejected in interviews", "body": "Cannot explain partial type arg specification. Default any in API design. Confusing inference with defaults." }
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What fails senior loops",
+          "body": "Cannot trace a production bug to Default type parameters and inference. Says \"it just works\" without naming run-time checks, error paths, or JavaScript and C# differences."
+        }
       ]
     }
   ],
   "interviewTakeaways": [
-    "T = Default in angle brackets — used when type arg omitted.",
-    "Required type params before defaulted ones.",
-    "Inference from values often overrides need for explicit args.",
-    "60s: Defaults reduce boilerplate in generic APIs. T=unknown safer than any. Partial specification fills trailing defaults. useState/array cases need explicit or default.",
-    "Follow-up: NoInfer, conditional type defaults, React prop defaults."
+    "Default type parameters and inference: know definition plus one runnable example.",
+    "Production: validate external input before applying Default type parameters and inference; log failures with context.",
+    "Tradeoff: prefer explicit debuggable code over clever shortcuts for default-type-parameters.",
+    "60s: Default type parameters and inference — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
+    "Follow-up: trace a bug or extend the example to async/error/null paths."
   ],
   "commonPitfalls": [
-    "Weak: \"defaults are runtime values\" — compile-time only.",
-    "T = any as public default.",
-    "Strong: \"Default type params when arg omitted. Order matters. Prefer unknown. Combine with constraints.\""
+    "Weak: dismisses Default type parameters and inference as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
+    "Weak: using any at boundaries without validation.",
+    "Weak: cannot name a concrete production failure involving default-type-parameters.",
+    "Strong: define Default type parameters and inference, show a 5-line example, name one pitfall and one C# difference."
   ],
-  "relatedTopicIds": ["typescript-09-generic-functions-and-classes", "typescript-09-generic-utility-wrappers", "typescript-12-conditional-types-basics"],
+  "relatedTopicIds": [
+    "typescript-09-generic-functions-and-classes",
+    "typescript-09-generic-constraints",
+    "typescript-09-generic-utility-wrappers"
+  ],
   "jsTsCorrelations": [
-    { "language": "javascript", "concept": "Default parameters", "note": "JS default function params are runtime; TS default type params are compile-time only.", "futureTopicSlug": "javascript/functions/default-parameters" },
-    { "language": "typescript", "concept": "Generic defaults", "note": "C# and TS share T=Default syntax — both apply at compile time; C# also reifies generic args at runtime.", "futureTopicSlug": "csharp/generics/defaults" }
+    {
+      "language": "javascript",
+      "concept": "Default type parameters and inference",
+      "note": "Default type parameters and inference in javascript — same programmer mental model, run-time enforcement differs.",
+      "futureTopicSlug": "javascript/generics/default-type-parameters"
+    },
+    {
+      "language": "typescript",
+      "concept": "C# correlation for Default type parameters and inference",
+      "note": "C# developers: map Default type parameters and inference to closest CLR concept (generics) and note differences.",
+      "futureTopicSlug": "csharp/modules/default-type-parameters"
+    }
   ],
-  "officialSources": [{ "title": "TypeScript handbook — Generic Parameter Defaults", "url": "https://www.typescriptlang.org/docs/handbook/2/generics.html#generic-parameter-defaults" }],
-  "animationHint": "flow"
+  "officialSources": [
+    {
+      "title": "Conditional types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/conditional-types.html"
+    },
+    {
+      "title": "TypeScript handbook",
+      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+    },
+    {
+      "title": "TypeScript release notes",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

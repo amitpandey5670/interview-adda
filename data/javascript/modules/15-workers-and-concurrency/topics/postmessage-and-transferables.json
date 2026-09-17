@@ -4,78 +4,78 @@
   "title": "postMessage, structured clone, and transferables",
   "moduleId": "javascript-15-workers-and-concurrency",
   "order": 2,
-  "hook": "postMessage, structured clone, and transferables is how JavaScript shares work across threads without shared mutable state by default. postMessage, transferables, and Atomics differ sharply from C# Task.Run and lock patterns.",
+  "hook": "postMessage copies most data via the structured clone algorithm — expensive for large ArrayBuffers. Transferables move ownership zero-copy: after transfer, the sender's buffer is detached and unusable.",
   "sections": [
     {
-      "heading": "What is postMessage, structured clone, and transferables?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**postMessage, structured clone, and transferables** is a run-time JavaScript mechanism enforced by the engine on every execution. postMessage, structured clone, and transferables is how JavaScript shares work across threads without shared mutable state by default. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Structured clone**: recursive copy of supported types (objects, arrays, Map, Date, ArrayBuffer copy). **Transfer list**: second argument `[buffer]` **moves** ArrayBuffer, MessagePort, ImageBitmap — sender loses access. **Clone vs transfer**: clone duplicates memory; transfer reassigns ownership without copy."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "postmessage",
-              "longForm": "postMessage, structured clone, and transferables",
-              "plainDefinition": "Central mechanism behind \"postMessage, structured clone, and transferables\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "structured clone",
+              "longForm": "structured clone algorithm",
+              "plainDefinition": "Deep copy for postMessage and indexedDB.",
+              "example": "postMessage({ nested: [1,2] })"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "transferable",
+              "longForm": "transferable object",
+              "plainDefinition": "Object that can move between contexts without copy.",
+              "example": "postMessage(buf, [buf])"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "detached ArrayBuffer",
+              "longForm": "detached ArrayBuffer",
+              "plainDefinition": "Buffer neutered after transfer — byteLength 0.",
+              "example": "buf.byteLength === 0 after transfer"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why postMessage, structured clone, and transferables matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **postMessage, structured clone, and transferables** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Sending 50MB image bitmap to Worker via clone doubles memory briefly — transfer avoids copy. Forgetting transfer list on large TypedArray-backed buffers causes GC pressure and jank. MessageChannel ports transfer for bidirectional pipes."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"postMessage, structured clone, and transferables\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Functions not cloneable",
+          "body": "postMessage cannot send functions or DOM nodes — only structured-cloneable types."
         }
       ]
     },
     {
-      "heading": "How postMessage, structured clone, and transferables works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Transfer flow",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where postMessage, structured clone, and transferables appears — syntax, API call, or type annotation."
+              "title": "Create buffer",
+              "body": "ArrayBuffer or TypedArray view."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "postMessage data, [buffer]",
+              "body": "List buffer in transfer array."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "Sender detached",
+              "body": "Original buffer unusable — intentional."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Receiver owns",
+              "body": "Worker processes without copy cost."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "postMessage, structured clone, and transferables flow",
-            "source": "flowchart TD\n  A[postMessage, structured clone, and transferables] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Clone vs transfer",
+            "source": "flowchart TD\n  C[Clone postMessage] -->|copy bytes| W1[Worker copy]\n  T[Transfer postMessage] -->|move ownership| W2[Worker same memory]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: postMessage, structured clone, and transferables",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Core postMessage, structured clone, and transferables example",
-            "code": "function createClient(cfg) {\n  return {\n    async call(path) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}\n\nconst client = createClient({ retries: 3, endpoint: 'https://api.example.com' });",
-            "explanation": "Demonstrates postMessage, structured clone, and transferables in a realistic API client — retries, fetch, and configuration."
+            "label": "Structured clone (copy)",
+            "code": "const data = { items: new Uint8Array(1e6) };\nworker.postMessage(data);\n// data.items still usable on main — duplicate memory in worker",
+            "explanation": "Clone copies 1MB — 2MB total briefly."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v) {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj, key) {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for postMessage, structured clone, and transferables\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps postMessage, structured clone, and transferables idioms to C# — note compile-time types versus JS run-time checks."
+            "label": "Transfer ArrayBuffer",
+            "code": "const buf = new ArrayBuffer(1e6);\nworker.postMessage({ type: \"process\", buffer: buf }, [buf]);\nconsole.log(buf.byteLength); // 0 — detached",
+            "explanation": "Line 2: transfer list moves buf — zero copy. Line 3: sender must not use buf after."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode diagnostic",
-            "code": "function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}",
-            "explanation": "Explicit unknown/error handling for postMessage, structured clone, and transferables — senior code paths always name failure modes."
+            "label": "MessageChannel bidirectional",
+            "code": "const channel = new MessageChannel();\nworker.postMessage({ port: channel.port1 }, [channel.port1]);\nchannel.port2.onmessage = (e) => console.log(\"from worker\", e.data);\nchannel.port2.postMessage(\"hello\");",
+            "explanation": "Line 2: transfer port1 to worker; main keeps port2 for two-way comms."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — use buffer after transfer",
+            "code": "const view = new Uint8Array(buf);\nworker.postMessage({ buf }, [buf]);\nview[0] = 1; // TypeError or silent wrong — detached",
+            "explanation": "Always stop using transferred buffers on sending side."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "postMessage, structured clone, and transferables across languages",
+          "title": "Messaging costs",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Method",
+            "Memory",
+            "Sender after"
           ],
           "rows": [
             [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
+              "Clone",
+              "Duplicate",
+              "Keeps copy"
             ],
             [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
+              "Transfer",
+              "Zero-copy move",
+              "Detached"
             ],
             [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
+              "SharedArrayBuffer",
+              "Shared",
+              "Both access — Atomics"
+            ],
+            [
+              "C# Pipe",
+              "Copy or unsafe",
+              "Stream semantics"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for postMessage, structured clone, and transferables",
-          "body": "Treating postMessage, structured clone, and transferables as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Cloning multi-MB buffers. Using buffer after transfer. Sending non-cloneable functions."
         }
       ]
     },
@@ -181,85 +182,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **postMessage, structured clone, and transferables** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Serialization cost dominates small messages — batch work per postMessage. Comlink library abstracts RPC over postMessage. In Node worker_threads, transfer list same semantics. Benchmark clone vs transfer for image processing pipeline."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Choice",
+            "Wins",
+            "Fails"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "Clone small objects",
+              "Simple",
+              "Large binary"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "Transfer buffers",
+              "Fast",
+              "Sender loses access"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "SAB + Atomics",
+              "Shared state",
+              "COOP/COEP headers"
+            ],
+            [
+              "Many tiny messages",
+              "Low latency each",
+              "Overhead"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to postMessage, structured clone, and transferables. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Clones 100MB and wonders why slow. Uses buffer after transfer. Thinks postMessage shares object reference."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "postMessage, structured clone, and transferables: know definition plus one runnable example.",
-    "Production: validate external input before applying postMessage, structured clone, and transferables; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for postmessage-and-transferables.",
-    "60s: postMessage, structured clone, and transferables — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "structured clone deep-copies supported types.",
+    "Transfer list moves ArrayBuffer — sender detached.",
+    "Functions/DOM not cloneable.",
+    "60s: postMessage clones by default. Transfer [buffer] for zero-copy — byteLength 0 on sender. MessagePort transferable. SharedArrayBuffer different — shared memory.",
+    "Follow-up: clone vs transfer for 10MB image?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses postMessage, structured clone, and transferables as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving postmessage-and-transferables.",
-    "Strong: define postMessage, structured clone, and transferables, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: clone large ArrayBuffer every frame.",
+    "Weak: read buffer after transfer.",
+    "Strong: transfer list + detached check + batch messages."
   ],
   "relatedTopicIds": [
     "javascript-15-web-workers-basics",
     "javascript-15-sharedarraybuffer-and-atomics",
-    "javascript-15-worker-pools-and-patterns"
+    "javascript-03-json-and-serialization"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "postMessage, structured clone, and transferables",
-      "note": "postMessage, structured clone, and transferables in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/workers-and-concurrency/postmessage-and-transferables"
+      "concept": "Transferable",
+      "note": "TypeScript Transferable type for transfer list elements.",
+      "futureTopicSlug": "typescript/dom/transferable"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for postMessage, structured clone, and transferables",
-      "note": "C# developers: map postMessage, structured clone, and transferables to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/postmessage-and-transferables"
+      "language": "typescript",
+      "concept": "MemoryMarshal",
+      "note": "C# comparison: unsafe shared memory different model — Workers use explicit transfer.",
+      "futureTopicSlug": "csharp/span-unsafe-interop/memory-marshal"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — structuredClone",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/structuredClone"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "HTML spec — Transferable objects",
+      "url": "https://html.spec.whatwg.org/multipage/structured-data.html#transferable-objects"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "csv-import"
+  "animationHint": "compare"
 }

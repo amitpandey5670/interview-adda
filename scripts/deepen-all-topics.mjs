@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { javascriptModules, typescriptModules } from './js-ts-module-plan.mjs';
 import { getP0Topic } from './deepen-p0-topics.mjs';
+import { getExtendedThemeSnippets } from './deepen-theme-snippet-extensions.mjs';
 
 const root = join(process.cwd(), 'data');
 const SCENARIO_TAGS = ['sqs-consumer', 'redis-cache', 'rabbitmq', 'auth-token', 'csv-import', 'high-concurrency'];
@@ -32,6 +33,14 @@ function isShallow(topic) {
   return (
     hook.includes('shows up in everyday') ||
     pitfalls.some((p) => typeof p === 'string' && p.includes('is just syntax'))
+  );
+}
+
+function needsDeepening(topic) {
+  const text = JSON.stringify(topic);
+  return (
+    isShallow(topic) ||
+    /exhausted retries|createClient\(cfg|Central mechanism behind/.test(text)
   );
 }
 
@@ -82,6 +91,7 @@ function pickAnimation(slug, senior) {
 
 function detectTheme(slug, title) {
   const s = `${slug} ${title}`.toLowerCase();
+  if (/guard|narrow|asserts|instanceof|control-flow|discriminat/.test(s)) return 'guards';
   if (/debounce|throttle/.test(s)) return 'events';
   if (/promise|async|await|microtask|abort|concurrency/.test(s)) return 'async';
   if (/garbage|gc|memory|heap|leak|weakref|closure-memory|allocation/.test(s)) return 'memory';
@@ -89,7 +99,7 @@ function detectTheme(slug, title) {
   if (/module|import|export|bundler|commonjs|esm|resolution/.test(s)) return 'modules';
   if (/decorator|metadata|reflect/.test(s)) return 'decorators';
   if (/compiler|tsconfig|eslint|strict|isolated|verbatim|project-reference/.test(s)) return 'compiler';
-  if (/infer|conditional|mapped|template-literal|distributive|utility|generic|variance/.test(s)) return 'types';
+  if (/infer|conditional|mapped|template-literal|distributive|utility|generic|variance|satisfies|returntype|parameters|partial|pick|omit|builder|recursive|ambient|declare-module|typing-javascript|ci-typecheck|complexity-budget|code-review-radar|type-level/.test(s)) return 'types';
   if (/null|undefined|optional|non-null|definite-assignment/.test(s)) return 'null';
   if (/class|prototype|inherit|oop|interface|abstract|implements/.test(s)) return 'oop';
   if (/array|map|set|iterator|generator|tuple|collection|readonly/.test(s)) return 'collections';
@@ -138,6 +148,8 @@ const THEME_HOOKS = {
     `${t.title} focuses on measurable idioms — memoization, batching, lazy init — and interview implementations senior engineers are expected to write from scratch.`,
   runtime: (t) =>
     `${t.title} differs between browser and Node.js hosts. globalThis, fetch, Buffer, and timer ordering are environment facts, not language spec trivia.`,
+  guards: (t) =>
+    `${t.title} lets TypeScript narrow unions after runtime checks — typeof, in, instanceof, user-defined predicates, and assert functions.`,
   general: (t) =>
     `${t.title} is a core ${t.language === 'typescript' ? 'TypeScript compile-time' : 'JavaScript run-time'} concept. Understanding mechanism — not memorizing syntax — separates senior engineers in interviews and on-call.`,
 };
@@ -148,8 +160,8 @@ function themeGlossary(theme, topic, language) {
     {
       term: topic.slug.split('-')[0],
       longForm: topic.title,
-      plainDefinition: `Central mechanism behind "${topic.title}" in ${codeLang}.`,
-      example: `See code walkthrough for runnable example.`,
+      plainDefinition: `Core ${codeLang} mechanism for ${topic.title.toLowerCase()}.`,
+      example: 'Runnable examples in the code walkthrough below.',
     },
   ];
   const extras = {
@@ -290,7 +302,11 @@ function themeSnippets(theme, topic, language, senior) {
       );
     }
   } else {
-    // general / functions / oop / errors / events / syntax / coercion / performance / runtime / decorators / workers
+    const extended = getExtendedThemeSnippets(theme, topic, language, senior, snippet);
+    if (extended) {
+      snippets.push(...extended);
+    } else {
+    // general fallback — last resort
     snippets.push(
       snippet(codeLang, `Core ${title} example`, language === 'typescript'
         ? `interface Config {\n  readonly retries: number;\n  endpoint: string;\n}\n\nfunction createClient(cfg: Config) {\n  return {\n    async call(path: string) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}`
@@ -310,6 +326,7 @@ function themeSnippets(theme, topic, language, senior) {
           : `function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}`,
           `Explicit unknown/error handling for ${title} — senior code paths always name failure modes.`),
       );
+    }
     }
   }
 
@@ -452,13 +469,19 @@ function buildDeepTopic(existing, moduleDoc, modulePlan, language) {
   const snippets = themeSnippets(theme, topic, language, senior);
   const compareLang = language === 'javascript' ? 'C# and TypeScript' : 'JavaScript and C#';
 
+  const themeHookFirst = hook.split(/(?<=[.!?])\s+/)[0];
+  const runtimeNote =
+    language === 'typescript'
+      ? 'TypeScript checks this at compile time; emitted JavaScript still runs with the same runtime rules as plain JS.'
+      : 'The engine enforces this on every execution path — not optional syntax sugar.';
+
   const sections = [
     {
       heading: `What is ${existing.title}?`,
       blocks: [
         {
           type: 'prose',
-          text: `**${existing.title}** ${language === 'typescript' ? 'is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript.' : 'is a run-time JavaScript mechanism enforced by the engine on every execution.'} ${THEME_HOOKS[theme](topic).split('.')[0]}. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console.`,
+          text: `**${existing.title}** — ${themeHookFirst}. ${runtimeNote} Read the glossary, study the snippets, then trace one example in DevTools or with \`tsc --emitDeclarationOnly\` / Node REPL.`,
         },
         {
           type: 'glossary',
@@ -472,13 +495,13 @@ function buildDeepTopic(existing, moduleDoc, modulePlan, language) {
       blocks: [
         {
           type: 'prose',
-          text: `Senior interviews and on-call debugging both test **${existing.title}** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know ${compareLang.split(' and ')[0]}, use the comparison table to transfer intuition instead of memorizing rules in isolation.`,
+          text: `Production bugs involving **${existing.title}** rarely look like syntax errors — they show up as wrong data, memory growth, flaky tests, or CI type failures. Senior engineers explain mechanism and tradeoffs, not definitions. Use the ${compareLang} comparison table to transfer intuition from languages you already know.`,
         },
         {
           type: 'callout',
           variant: 'tip',
           title: 'Interview trap',
-          body: `Interviewers ask "${existing.title}" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions.`,
+          body: `Can you name one concrete failure mode for ${existing.slug} and how you would prove the fix (test, heap snapshot, or metric)? Hand-waving loses senior loops.`,
         },
       ],
     },
@@ -713,7 +736,7 @@ for (const language of ['javascript', 'typescript']) {
       const existing = readJson(filePath);
       topicHooks.set(`${language}:${existing.slug}`, existing.hook);
 
-      if (!isShallow(existing)) continue;
+      if (!needsDeepening(existing)) continue;
 
       const deep = buildDeepTopic(existing, moduleDoc, modulePlan, language);
       writeJson(filePath, deep);
@@ -748,7 +771,7 @@ for (const language of ['javascript', 'typescript']) {
     const topicsDir = join(moduleDir, 'topics');
     for (const file of readdirSync(topicsDir).filter((f) => f.endsWith('.json'))) {
       const topic = readJson(join(topicsDir, file));
-      if (isShallow(topic)) remainingGeneric++;
+      if (needsDeepening(topic)) remainingGeneric++;
     }
     const mindmap = readJson(join(moduleDir, 'mindmap.json'));
     if (mindmap.conceptCards?.some((c) => c.summary?.includes('Core ideas for'))) remainingGeneric++;

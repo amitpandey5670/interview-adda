@@ -4,78 +4,78 @@
   "title": "WeakRef, FinalizationRegistry, and WeakMap cleanup",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 4,
-  "hook": "WeakRef, FinalizationRegistry, and WeakMap cleanup connects directly to V8 heap layout and GC pauses. Retained references — closures, timers, caches — keep objects in old generation until major GC, affecting tail latency.",
+  "hook": "WeakMap keys are weakly held — dropping the key object allows GC. WeakRef lets you peek at an object without preventing collection. FinalizationRegistry runs a callback after GC — useful for cache bookkeeping, not for critical cleanup.",
   "sections": [
     {
-      "heading": "What is WeakRef, FinalizationRegistry, and WeakMap cleanup?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**WeakRef, FinalizationRegistry, and WeakMap cleanup** is a run-time JavaScript mechanism enforced by the engine on every execution. WeakRef, FinalizationRegistry, and WeakMap cleanup connects directly to V8 heap layout and GC pauses. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**WeakMap**: keys must be objects; held weakly — no iteration API. When key is unreachable, entry disappears. **WeakSet** same for membership. **WeakRef**: `deref()` returns object or `undefined` if collected. **FinalizationRegistry**: register object → callback after GC (best-effort, may never run). Not a destructor — do not release file handles here."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "weakref",
-              "longForm": "WeakRef, FinalizationRegistry, and WeakMap cleanup",
-              "plainDefinition": "Central mechanism behind \"WeakRef, FinalizationRegistry, and WeakMap cleanup\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "WeakMap",
+              "longForm": "WeakMap",
+              "plainDefinition": "Map with weak object keys; no size/keys iteration.",
+              "example": "metadata.set(domNode, data)"
             },
             {
-              "term": "heap",
-              "longForm": "V8 heap",
-              "plainDefinition": "Region where objects live; split into young and old generations.",
-              "example": "process.memoryUsage().heapUsed"
+              "term": "WeakRef",
+              "longForm": "WeakRef",
+              "plainDefinition": "Non-owning reference; deref may return undefined.",
+              "example": "cacheRef.deref()?.compute()"
             },
             {
-              "term": "retention",
-              "longForm": "memory retention",
-              "plainDefinition": "Reachable reference prevents GC from reclaiming object.",
-              "example": "Closure holding large array"
+              "term": "FinalizationRegistry",
+              "longForm": "FinalizationRegistry",
+              "plainDefinition": "Post-GC callback notification.",
+              "example": "registry.register(obj, \"id\")"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why WeakRef, FinalizationRegistry, and WeakMap cleanup matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **WeakRef, FinalizationRegistry, and WeakMap cleanup** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Attach metadata to DOM nodes or ORM entities without leaking memory when nodes leave the tree. Redis connection pool side tables can use WeakMap keyed by request context. Misusing FinalizationRegistry for closing files races with process exit."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"WeakRef, FinalizationRegistry, and WeakMap cleanup\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Finalizers are unreliable",
+          "body": "GC may never run under memory pressure patterns — always use try/finally for resources."
         }
       ]
     },
     {
-      "heading": "How WeakRef, FinalizationRegistry, and WeakMap cleanup works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Weak collection lifecycle",
           "items": [
             {
-              "title": "Locate in code",
-              "body": "Find where WeakRef, FinalizationRegistry, and WeakMap cleanup appears — syntax, API call, or type annotation."
+              "title": "Strong ref exists",
+              "body": "WeakMap entry accessible via key."
             },
             {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
+              "title": "Strong refs gone",
+              "body": "Key unreachable — entry eligible."
             },
             {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
+              "title": "GC runs",
+              "body": "WeakMap entry removed; WeakRef deref undefined."
             },
             {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
+              "title": "Finalizer",
+              "body": "Registry callback may run later on microtask."
             }
           ]
         },
@@ -83,49 +83,49 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "WeakRef, FinalizationRegistry, and WeakMap cleanup flow",
-            "source": "flowchart TD\n  A[Allocate object] --> B[Young generation]\n  B --> C{Survives Scavenge?}\n  C -->|No| D[Freed]\n  C -->|Yes| E[Old generation]\n  E --> F[Major GC when needed]"
+            "title": "Weak vs strong references",
+            "source": "flowchart LR\n  K[Key object] -.weak.-> WM[WeakMap entry]\n  K -->|strong| App[App code]\n  App gone --> GC[GC removes WM entry]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: WeakRef, FinalizationRegistry, and WeakMap cleanup",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Heap usage snapshot",
-            "code": "const used = process.memoryUsage();\nconsole.log({\n  heapUsedMB: (used.heapUsed / 1024 / 1024).toFixed(1),\n  heapTotalMB: (used.heapTotal / 1024 / 1024).toFixed(1),\n  externalMB: (used.external / 1024 / 1024).toFixed(1),\n});",
-            "explanation": "heapUsed grows with retained objects; external tracks C++ bindings (Buffers)."
+            "label": "WeakMap DOM metadata",
+            "code": "const widgetData = new WeakMap();\nfunction mount(el, config) {\n  widgetData.set(el, config);\n}\nfunction handleClick(el) {\n  const cfg = widgetData.get(el);\n  if (cfg) fetch(cfg.apiUrl);\n}\n// When el removed from DOM and unreferenced, entry GC'd",
+            "explanation": "Line 2: no leak when DOM node discarded — unlike Map with same key."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Closure retention trap",
-            "code": "function createHandler() {\n  const large = new Array(1_000_000).fill('x');\n  return function onClick() {\n    console.log(large.length); // retains entire array\n  };\n}\nconst handler = createHandler(); // large stays in old gen",
-            "explanation": "Inner function closes over outer bindings — GC cannot collect large until handler released."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "C# IDisposable versus JS GC",
-            "code": "// C# explicit disposal\nusing var conn = new SqlConnection(cs);\nawait conn.OpenAsync();\n// IDisposable frees unmanaged resources promptly\n\n// JS: no IDisposable — release references, remove listeners",
-            "explanation": "JS relies on GC; use WeakRef/FinalizationRegistry only for optional caches, not critical cleanup."
+            "label": "WeakRef cache peek",
+            "code": "let cacheRef = new WeakRef(expensiveObject);\nfunction getExpensive() {\n  const obj = cacheRef.deref();\n  if (obj) return obj;\n  const fresh = buildExpensive();\n  cacheRef = new WeakRef(fresh);\n  return fresh;\n}",
+            "explanation": "Line 4: if collected, rebuild — cache does not prevent GC."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "WeakMap for private metadata",
-            "code": "const privateData = new WeakMap();\nclass Account {\n  constructor(id) { privateData.set(this, { id }); }\n  get id() { return privateData.get(this).id; }\n}",
-            "explanation": "WeakMap keys are objects collected when key is unreachable — no memory leak from metadata map."
+            "label": "FinalizationRegistry bookkeeping",
+            "code": "const reg = new FinalizationRegistry((id) => {\n  metrics.decrement(`cache.${id}`);\n});\nfunction track(obj, id) {\n  reg.register(obj, id);\n  metrics.increment(`cache.${id}`);\n}",
+            "explanation": "Line 2: metric cleanup when object collected — not for closing sockets."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure — expect immediate finalizer",
+            "code": "let obj = { data: new Array(1e6) };\nconst reg = new FinalizationRegistry(() => console.log(\"gone\"));\nreg.register(obj, \"x\");\nobj = null;\n// \"gone\" may run much later or under memory pressure only",
+            "explanation": "Finalizers are not deterministic — bad for resource cleanup."
           }
         }
       ]
@@ -135,44 +135,45 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "WeakRef, FinalizationRegistry, and WeakMap cleanup across languages",
+          "title": "Weak collections",
           "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
+            "Type",
+            "Keys",
+            "GC"
           ],
           "rows": [
             [
-              "Reclamation",
-              "V8 generational GC",
-              "CLR generational GC",
-              "No runtime GC"
+              "Map",
+              "Any",
+              "Strong — leaks if keys live"
             ],
             [
-              "Explicit free",
-              "Remove references only",
-              "IDisposable + GC",
-              "N/A"
+              "WeakMap",
+              "Objects only",
+              "Weak keys"
             ],
             [
-              "Diagnostics",
-              "Heap snapshot",
-              "dotMemory / PerfView",
-              "N/A"
+              "WeakRef",
+              "Single object",
+              "Weak peek"
+            ],
+            [
+              "C# WeakReference",
+              "Object",
+              "Similar deref pattern"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for WeakRef, FinalizationRegistry, and WeakMap cleanup",
-          "body": "Treating WeakRef, FinalizationRegistry, and WeakMap cleanup as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Using FinalizationRegistry to close DB connections. Expecting WeakMap.size. Storing primitives as WeakMap keys."
         }
       ]
     },
@@ -181,89 +182,88 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **WeakRef, FinalizationRegistry, and WeakMap cleanup** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "ECMAScript weak collections do not expose enumeration — prevents GC timing attacks. In Node 14+, FinalizationRegistry available. Pattern: WeakMap for instance metadata; strong Map only for IDs you control with TTL."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
+          "title": "Tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Tool",
+            "Use",
+            "Avoid"
           ],
           "rows": [
             [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
+              "WeakMap",
+              "DOM/instance metadata",
+              "Global string cache"
             ],
             [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
+              "WeakRef",
+              "Optional cache hit",
+              "Required object access"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
+              "FinalizationRegistry",
+              "Metrics",
+              "File/socket close"
+            ],
+            [
+              "Map + TTL",
+              "String cache",
+              "Unbounded growth"
             ]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to WeakRef, FinalizationRegistry, and WeakMap cleanup. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Uses finalizer for resource cleanup. Thinks WeakMap iterates keys. Cannot explain weak vs strong."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "WeakRef, FinalizationRegistry, and WeakMap cleanup: know definition plus one runnable example.",
-    "Production: validate external input before applying WeakRef, FinalizationRegistry, and WeakMap cleanup; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for weakref-and-finalization.",
-    "60s: WeakRef, FinalizationRegistry, and WeakMap cleanup — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "WeakMap keys weakly held — no enumeration.",
+    "WeakRef.deref() undefined after GC.",
+    "FinalizationRegistry is best-effort post-GC — not destructor.",
+    "60s: WeakMap for object-keyed metadata without leak. WeakRef non-owning peek. Finalizers unreliable — use try/finally for resources.",
+    "Follow-up: why no WeakMap.prototype.size?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses WeakRef, FinalizationRegistry, and WeakMap cleanup as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving weakref-and-finalization.",
-    "Strong: define WeakRef, FinalizationRegistry, and WeakMap cleanup, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: FinalizationRegistry to close files.",
+    "Weak: Map keyed by DOM nodes — leak.",
+    "Strong: WeakMap for per-element data + explain no iteration."
   ],
   "relatedTopicIds": [
-    "javascript-14-stack-heap-and-references",
-    "javascript-14-v8-garbage-collection",
-    "javascript-14-closure-memory-retention"
+    "javascript-08-map-set-weak-collections",
+    "javascript-14-memory-leak-patterns",
+    "javascript-14-detached-dom-and-leaks"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "WeakRef, FinalizationRegistry, and WeakMap cleanup",
-      "note": "WeakRef, FinalizationRegistry, and WeakMap cleanup in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/memory-and-garbage-collection/weakref-and-finalization"
+      "concept": "WeakMap typing",
+      "note": "WeakMap<object, T> — keys typed as object.",
+      "futureTopicSlug": "typescript/collections/weakmap"
     },
     {
-      "language": "javascript",
-      "concept": "C# correlation for WeakRef, FinalizationRegistry, and WeakMap cleanup",
-      "note": "C# developers: map WeakRef, FinalizationRegistry, and WeakMap cleanup to closest CLR concept (GC) and note differences.",
-      "futureTopicSlug": "csharp/modules/weakref-and-finalization"
+      "language": "typescript",
+      "concept": "C# WeakReference",
+      "note": "C# comparison: WeakReference<T>.TryGetTarget similar to deref.",
+      "futureTopicSlug": "csharp/memory-and-gc/weak-references"
     }
   ],
   "officialSources": [
     {
-      "title": "Memory management",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
+      "title": "MDN — WeakRef",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/WeakRef"
     },
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — FinalizationRegistry",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/FinalizationRegistry"
     }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "stack-heap"
 }
