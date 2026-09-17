@@ -4,30 +4,42 @@
   "title": "Implementing a Promise/A+ subset from scratch",
   "moduleId": "javascript-13-promises-async-event-loop",
   "order": 6,
-  "hook": "Implementing a Promise/A+ subset from scratch shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "LeetCode and Reddit senior threads ask you to implement Promise from scratch — not to ship it, but to prove you understand the state machine, then-chaining, and why callbacks run as microtasks. A minimal Promise/A+ subset is fifty lines; the bugs interviewers probe are double-resolution and missing return-value chaining.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Implementing a Promise/A+ subset from scratch is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A **Promise** is a state machine with three states: **pending**, **fulfilled**, and **rejected**. Once settled, it never changes again. The executor `(resolve, reject) => {}` runs synchronously when the Promise is constructed. **`.then(onFulfilled, onRejected)`** registers handlers and returns a new Promise that adopts the return value or rejection reason of the handler — this is **chaining**. Promise/A+ requires that `onFulfilled`/`onRejected` run asynchronously — in practice engines use the **microtask queue** (`queueMicrotask` or equivalent)."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "implementing",
-              "longForm": "Implementing a Promise/A+ subset from scratch",
-              "plainDefinition": "The central idea behind \"Implementing a Promise/A+ subset from scratch\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "executor",
+              "longForm": "Promise executor function",
+              "plainDefinition": "The (resolve, reject) => {} callback passed to new Promise — runs immediately, synchronously.",
+              "example": "new Promise((resolve) => resolve(1));"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "thenable",
+              "longForm": "thenable object",
+              "plainDefinition": "Any object with a .then method. Promises adopt thenable results.",
+              "example": "return { then(r) { r(42); } };"
+            },
+            {
+              "term": "Promise/A+",
+              "longForm": "Promise/A+ specification",
+              "plainDefinition": "Community spec that native Promise implements — chaining and assimilation rules.",
+              "example": "then must return a new Promise."
+            },
+            {
+              "term": "assimilation",
+              "longForm": "promise assimilation",
+              "plainDefinition": "When a handler returns a thenable, the returned Promise waits for it to settle.",
+              "example": "return fetch(url) — outer Promise waits for fetch Promise."
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Implementing a Promise/A+ subset from scratch beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Understanding the implementation explains real bugs: forgetting to return inside `.then` breaks chains, resolving twice is silently ignored in native Promise but breaks naive implementations, and throwing in a handler rejects the returned Promise. Libraries like axios and database drivers wrap callback APIs with `new Promise` — knowing the state machine helps you wrap Redis `get` or legacy `fs.readFile` correctly and test error paths."
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Implementing a Promise/A+ subset from scratch\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "variant": "remember",
+          "title": "Interview goal",
+          "body": "Implement resolve, reject, then with microtask scheduling and return-value chaining. Full Promise.all is a common follow-up — not required in the first five minutes."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "then() registration flow",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Implementing a Promise/A+ subset from scratch appears in real code — a function, type annotation, or runtime API."
+              "title": "Call then while pending",
+              "body": "Push onFulfilled/onRejected to a subscribers array."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Call then after fulfilled",
+              "body": "Schedule onFulfilled(value) on microtask queue immediately."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Handler runs",
+              "body": "If it returns a value, fulfill the child Promise. If it throws, reject child. If it returns a thenable, assimilate."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Return child Promise",
+              "body": "Caller can chain .then on the returned Promise."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Implementing a Promise/A+ subset from scratch flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Promise state machine",
+            "source": "stateDiagram-v2\n  [*] --> Pending\n  Pending --> Fulfilled: resolve(value)\n  Pending --> Rejected: reject(reason)\n  Fulfilled --> [*]\n  Rejected --> [*]"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Implementing a Promise/A+ subset from scratch",
-            "code": "// Implementing a Promise/A+ subset from scratch\nconst example = {\n  topic: 'implementing-promise-from-scratch',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Implementing a Promise/A+ subset from scratch. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Minimal MyPromise — core state machine",
+            "code": "class MyPromise {\n  #state = 'pending';\n  #value = undefined;\n  #handlers = [];\n\n  constructor(executor) {\n    const resolve = (value) => {\n      if (this.#state !== 'pending') return;\n      this.#state = 'fulfilled';\n      this.#value = value;\n      this.#handlers.forEach(h => this.#run(h));\n    };\n    const reject = (reason) => {\n      if (this.#state !== 'pending') return;\n      this.#state = 'rejected';\n      this.#value = reason;\n      this.#handlers.forEach(h => this.#run(h));\n    };\n    try { executor(resolve, reject); } catch (e) { reject(e); }\n  }\n\n  #run({ onFulfilled, onRejected, childResolve, childReject }) {\n    queueMicrotask(() => {\n      try {\n        const fn = this.#state === 'fulfilled' ? onFulfilled : onRejected;\n        const result = fn ? fn(this.#value) : this.#value;\n        if (this.#state === 'rejected' && !onRejected) { childReject(this.#value); return; }\n        childResolve(result);\n      } catch (err) { childReject(err); }\n    });\n  }\n\n  then(onFulfilled, onRejected) {\n    return new MyPromise((childResolve, childReject) => {\n      const handler = { onFulfilled, onRejected, childResolve, childReject };\n      if (this.#state === 'pending') this.#handlers.push(handler);\n      else this.#run(handler);\n    });\n  }\n}",
+            "explanation": "Lines 8–10: ignore double resolve. Line 27: microtask async requirement. Lines 31–33: pass-through rejection without onRejected. Line 37: then returns new Promise for chaining."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "Chaining and return-value adoption",
+            "code": "new MyPromise((resolve) => resolve(1))\n  .then((x) => x + 1)\n  .then((x) => { throw new Error(`fail at ${x}`); })\n  .catch((err) => err.message)\n  .then((msg) => console.log(msg));\n// 'fail at 2'",
+            "explanation": "Line 2: return value becomes next input. Line 3: throw rejects chain. Line 4: catch handler recovery returns string fulfilled to line 5."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Production — promisify Redis get",
+            "code": "function getFromRedis(key) {\n  return new Promise((resolve, reject) => {\n    redis.get(key, (err, value) => {\n      if (err) reject(err);\n      else resolve(value);\n    });\n  });\n}\n\nasync function loadProfile(userId) {\n  const cached = await getFromRedis(`profile:${userId}`);\n  if (cached) return JSON.parse(cached);\n  const res = await fetch(`/api/profile/${userId}`);\n  return res.json();\n}",
+            "explanation": "Lines 2–7: error-first callback → Promise wrapper is the daily pattern. Line 11: await uses native Promise microtasks even if getFromRedis uses custom wrapper."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — sync resolve in executor",
+            "code": "const p = new MyPromise((resolve) => {\n  resolve(1);\n  throw new Error('executor throw after resolve');\n});\n// Native Promise: throw is ignored after resolve\n// Naive impl without try/catch on executor: unhandled throw",
+            "explanation": "Line 4: executor throw after settle must not change state — native Promise ignores it. Line 12 in class: try/catch around executor handles throws before settle."
           }
         }
       ]
@@ -129,29 +141,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Implementing a Promise/A+ subset from scratch across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Promise vs Task completion",
+          "headers": ["Feature", "JavaScript Promise", "C# Task"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Manual completion", "resolve/reject in executor", "TaskCompletionSource.TrySetResult"],
+            ["Chaining", ".then returns new Promise", "ContinueWith / await"],
+            ["Async scheduling", "Microtask queue", "Thread pool"],
+            ["Double complete", "Silently ignored", "InvalidOperationException on second SetResult"],
+            ["TypeScript", "Promise<T> compile-time only", "Task<T> real CLR type"]
           ]
         }
       ]
@@ -162,8 +159,14 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Implementing a Promise/A+ subset from scratch as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Calling handlers synchronously",
+          "body": "Running onFulfilled immediately when resolve is called breaks ordering puzzles and fails Promise/A+. Always queueMicrotask."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Forgetting assimilation",
+          "body": "If onFulfilled returns a thenable, the child Promise must wait — returning it directly fulfills with the thenable object, not its value."
         }
       ]
     },
@@ -172,83 +175,74 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Implementing a Promise/A+ subset from scratch, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "Senior follow-ups: implement `catch` as `then(undefined, onRejected)`, add thenable assimilation with a `resolvePromise` helper, or implement `Promise.all`. In production, prefer native Promise — custom implementations appear in test mocks and embedded runtimes. The assimilation rule is what makes `return fetch(url)` inside then work. Interviewers reject answers that hand-wave 'it callbacks later' without naming microtasks."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Approach", "Pros", "Cons"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Native Promise", "Spec-compliant, optimized in V8", "Cannot hook internals"],
+            ["MyPromise for learning", "Proves understanding", "Missing spec edge cases"],
+            ["util.promisify (Node)", "Battle-tested callback bridge", "Node-specific"],
+            ["TaskCompletionSource (C#)", "Same manual-complete pattern", "Different scheduler"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Implementing a Promise/A+ subset from scratch just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Sync then callbacks. No return Promise from then. Cannot explain why resolve(2) then resolve(3) leaves value 2. Saying Promise.all is built into the constructor. Not connecting implementation to microtask ordering."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Implementing a Promise/A+ subset from scratch: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for implementing-promise-from-scratch.",
-    "Production: validate external input before applying Implementing a Promise/A+ subset from scratch; log failures with context.",
-    "60s: Implementing a Promise/A+ subset from scratch — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Promise = pending | fulfilled | rejected; settle once.",
+    "then registers handlers; returns new Promise; schedules handlers on microtasks.",
+    "Return value or thrown error in handler drives the child Promise.",
+    "60s: State machine plus subscriber list. resolve/reject once. queueMicrotask for then. then returns new Promise. promisify wraps error-first callbacks. C# uses TaskCompletionSource for manual complete.",
+    "Follow-up: implement Promise.all or thenable assimilation."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Implementing a Promise/A+ subset from scratch is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Implementing a Promise/A+ subset from scratch, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: synchronous then — breaks event-loop ordering.",
+    "Weak: no child Promise from then — chaining impossible.",
+    "Strong: 'Pending queues handlers. Settle fires microtasks. then returns new Promise adopting handler result or assimilation.'"
   ],
   "relatedTopicIds": [
-    "javascript-13-why-async-javascript",
     "javascript-13-promise-states-and-chaining",
-    "javascript-13-promise-combinators"
+    "javascript-13-microtasks-vs-macrotasks",
+    "javascript-13-promise-combinators",
+    "javascript-13-promises-vs-csharp-task"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Implementing a Promise/A+ subset from scratch",
-      "note": "Compare Implementing a Promise/A+ subset from scratch in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/promises-async-event-loop/implementing-promise-from-scratch"
+      "concept": "Generic Promise<T>",
+      "note": "TypeScript types resolve/reject values but implementation is identical at runtime. Return type of then is inferred from handler return.",
+      "futureTopicSlug": "typescript/async/promise-and-async-return-types"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Implementing a Promise/A+ subset from scratch to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/13/implementing-promise-from-scratch"
+      "language": "javascript",
+      "concept": "Promise combinators",
+      "note": "Promise.all builds on the same then-chaining — interview often follows scratch Promise with all implementation.",
+      "futureTopicSlug": "javascript/async/promise-combinators"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "Promise/A+ specification",
+      "url": "https://promisesaplus.com/"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — Promise",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise"
+    },
+    {
+      "title": "ECMAScript — Promise Objects",
+      "url": "https://tc39.es/ecma262/#sec-promise-objects"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "flow",
+  "scenarioTag": "redis-cache"
 }
