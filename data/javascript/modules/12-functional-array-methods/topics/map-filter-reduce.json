@@ -4,14 +4,14 @@
   "title": "map, filter, reduce, and chaining",
   "moduleId": "javascript-12-functional-array-methods",
   "order": 1,
-  "hook": "map, filter, reduce, and chaining covers built-in data structures and iteration protocols. Map versus Object, Set deduplication, and generator laziness affect performance and API design in hot paths.",
+  "hook": "map transforms each element, filter keeps some, reduce folds the array into one value — chained together they replace most explicit for-loops with declarative pipelines that interviewers expect you to implement from scratch.",
   "sections": [
     {
-      "heading": "What is map, filter, reduce, and chaining?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**map, filter, reduce, and chaining** is a run-time JavaScript mechanism enforced by the engine on every execution. map, filter, reduce, and chaining covers built-in data structures and iteration protocols. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Array.prototype.map** returns new array of same length with transformed elements. **filter** returns subset passing predicate. **reduce** accumulates left-to-right with `(acc, cur, index, array) =>` — initial value optional but recommended. **Chaining**: `arr.filter().map().reduce()`. All are **non-mutating** on source array (unless you mutate inside callback). **Sparse arrays**: map/filter skip holes; reduce may treat holes differently — know spec."
         },
         {
           "type": "glossary",
@@ -19,113 +19,107 @@
           "entries": [
             {
               "term": "map",
-              "longForm": "map, filter, reduce, and chaining",
-              "plainDefinition": "Central mechanism behind \"map, filter, reduce, and chaining\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "longForm": "Array.map",
+              "plainDefinition": "Transform each element — 1:1 length output array.",
+              "example": "users.map(u => u.email)"
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "filter",
+              "longForm": "Array.filter",
+              "plainDefinition": "Keep elements where predicate returns truthy.",
+              "example": "orders.filter(o => o.status === 'paid')"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "reduce",
+              "longForm": "Array.reduce",
+              "plainDefinition": "Fold array to single value — sum, group, max, compose pipeline.",
+              "example": "nums.reduce((a, n) => a + n, 0)"
+            },
+            {
+              "term": "lazy evaluation",
+              "longForm": "lazy evaluation",
+              "plainDefinition": "JS array methods are eager — each pass allocates. Generators/LINQ lazy differ.",
+              "example": "map then filter scans twice — fuse in one loop for perf if needed."
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why map, filter, reduce, and chaining matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **map, filter, reduce, and chaining** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Daily data transforms in frontend and Node — DTO mapping, totals, grouping. Interviews: implement map/filter/reduce without built-ins; discuss O(n) chain vs single loop. C# **LINQ Select/Where/Aggregate** is lazy on IEnumerable; JS array methods **always eager** and allocate intermediate arrays."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"map, filter, reduce, and chaining\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: reduce without initial value",
+          "body": "Empty array reduce without initial throws TypeError. On non-empty, first element becomes acc — risky for sum types. Always pass initial value in production."
         }
       ]
     },
     {
-      "heading": "How map, filter, reduce, and chaining works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Chained pipeline",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where map, filter, reduce, and chaining appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "filter", "body": "Narrow set — new array, smaller or equal length." },
+            { "title": "map", "body": "Transform each — new array, same length as filter output." },
+            { "title": "reduce", "body": "Aggregate to number, object, or array acc." },
+            { "title": "Single-loop alternative", "body": "One for with combined logic when profiling shows allocation cost." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "map, filter, reduce, and chaining flow",
-            "source": "flowchart TD\n  A[map, filter, reduce, and chaining] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "map → filter → reduce pipeline",
+            "source": "flowchart LR\n  A[Source array] --> F[filter]\n  F --> M[map]\n  M --> R[reduce]\n  R --> O[Single result]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: map, filter, reduce, and chaining",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Map versus Object for keys",
-            "code": "const cache = new Map();\ncache.set({ id: 1 }, 'payload'); // object keys by reference\ncache.get({ id: 1 }); // undefined — different object\n\nconst byId = new Map();\nbyId.set('user-42', { name: 'Ada' });",
-            "explanation": "Map allows any key type and preserves insertion order; Object keys are strings/symbols."
+            "label": "Chained order analytics",
+            "code": "const orders = [\n  { id: 1, status: 'paid', total: 120 },\n  { id: 2, status: 'pending', total: 80 },\n  { id: 3, status: 'paid', total: 200 }\n];\n\nconst paidRevenue = orders\n  .filter(o => o.status === 'paid')\n  .map(o => o.total)\n  .reduce((sum, n) => sum + n, 0);\n\nconsole.log(paidRevenue); // 320",
+            "explanation": "Declarative pipeline — each step pure on new arrays. Initial 0 on reduce for empty-safe sum."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Set deduplication",
-            "code": "const ids = ['a', 'b', 'a', 'c'];\nconst unique = [...new Set(ids)];\nconsole.log(unique); // ['a', 'b', 'c']",
-            "explanation": "Set for O(1) uniqueness checks — faster than array.includes for large lists."
+            "label": "reduce to groupBy object",
+            "code": "const users = [\n  { name: 'Ada', team: 'eng' },\n  { name: 'Lin', team: 'eng' },\n  { name: 'Sam', team: 'sales' }\n];\n\nconst byTeam = users.reduce((acc, user) => {\n  (acc[user.team] ??= []).push(user.name);\n  return acc;\n}, {});\n\nconsole.log(byTeam); // { eng: ['Ada','Lin'], sales: ['Sam'] }",
+            "explanation": "reduce builds accumulator object — pattern before Object.groupBy landed in ES2024."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "LINQ equivalent",
+            "code": "var paidRevenue = orders\n    .Where(o => o.Status == \"paid\")\n    .Select(o => o.Total)\n    .Sum();\n\n// IEnumerable lazy until Sum enumerates",
+            "explanation": "LINQ Where/Select chain lazy; JS filter/map create intermediate arrays eagerly."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Generator lazy sequence",
-            "code": "function* range(start, end) {\n  for (let i = start; i < end; i++) yield i;\n}\nfor (const n of range(0, 1_000_000)) {\n  if (n > 5) break; // no array allocated\n}",
-            "explanation": "Generators compute on demand — memory friendly versus eager array allocation."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "for-of versus for-in",
-            "code": "const arr = ['a', 'b'];\narr.extra = 'x';\nfor (const i in arr) console.log(i); // '0','1','extra'\nfor (const v of arr) console.log(v); // 'a','b'",
-            "explanation": "for-in enumerates keys including enumerable properties; for-of iterates values via Symbol.iterator."
+            "label": "Failure mode: reduce without initial on empty",
+            "code": "const empty = [];\ntry {\n  empty.reduce((acc, n) => acc + n); // no initial\n} catch (e) {\n  console.error(e.name); // TypeError\n}\n\nconst safe = empty.reduce((acc, n) => acc + n, 0); // 0",
+            "explanation": "Always provide initial value for sum/product/group accumulators."
           }
         }
       ]
@@ -135,44 +129,26 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "map, filter, reduce, and chaining across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
-          ],
+          "title": "map/filter/reduce vs LINQ",
+          "headers": ["Method", "JavaScript", "C# LINQ"],
           "rows": [
-            [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
-            ],
-            [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
-            ]
+            ["Transform", "map", "Select"],
+            ["Filter", "filter", "Where"],
+            ["Fold", "reduce", "Aggregate"],
+            ["Evaluation", "Eager", "Lazy on IEnumerable"],
+            ["Empty reduce", "Throws without initial", "Aggregate with seed"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for map, filter, reduce, and chaining",
-          "body": "Treating map, filter, reduce, and chaining as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Mutating acc or source elements inside callbacks unexpectedly. reduce without initial on possibly empty arrays. map when forEach was intended (ignoring return). Chaining three passes on huge arrays without profiling."
         }
       ]
     },
@@ -181,85 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **map, filter, reduce, and chaining** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Implement map/filter/reduce yourself for interviews. Fuse loops when hot path.allocation matters. **async** in map does not await — use for...of or Promise.all(arr.map(async ...)). **Object.groupBy** (ES2024) replaces some reduce grouping. Big-O still O(n) per pass — chain of k passes is O(kn)."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "title": "Tradeoffs at senior level",
+          "headers": ["Style", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
-            ]
+            ["Chain map/filter", "Readability, small/medium data", "Large data — extra allocations"],
+            ["Single for-loop", "Hot path perf", "Less declarative"],
+            ["reduce grouping", "Flexible accumulators", "Harder to read than groupBy"],
+            ["LINQ lazy", "Large IEnumerable", "JS arrays already materialized"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to map, filter, reduce, and chaining. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot implement map from scratch. Using async callback in map expecting sequential await. Unaware empty reduce throws without seed."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "map, filter, reduce, and chaining: know definition plus one runnable example.",
-    "Production: validate external input before applying map, filter, reduce, and chaining; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for map-filter-reduce.",
-    "60s: map, filter, reduce, and chaining — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "map/filter return new arrays; reduce folds to one value.",
+    "Always pass reduce initial value for empty-safe code.",
+    "JS chain is eager — LINQ IEnumerable is lazy until terminal.",
+    "60s: map transform, filter subset, reduce aggregate. Chain for clarity. Implement from scratch in interviews. async map needs Promise.all. C# Select/Where/Aggregate.",
+    "Follow-up: groupBy with reduce vs Object.groupBy."
   ],
   "commonPitfalls": [
-    "Weak: dismisses map, filter, reduce, and chaining as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving map-filter-reduce.",
-    "Strong: define map, filter, reduce, and chaining, show a 5-line example, name one pitfall and one C# difference."
+    "reduce without initial on arrays that may be empty.",
+    "async map without Promise.all — concurrent not sequential confusion.",
+    "Strong answer: implement map/filter/reduce, eager vs lazy LINQ, always seed reduce."
   ],
   "relatedTopicIds": [
-    "javascript-12-flat-flatmap-groupby",
-    "javascript-12-currying-and-composition",
-    "javascript-12-implementing-array-helpers"
+    "javascript-12-implementing-array-helpers",
+    "javascript-12-functional-vs-linq",
+    "javascript-12-flat-flatmap-groupby"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "map, filter, reduce, and chaining",
-      "note": "map, filter, reduce, and chaining in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/functional-array-methods/map-filter-reduce"
+      "concept": "Generic array callbacks",
+      "note": "map<T,U>(fn: (v:T)=>U): U[] preserves type flow — LINQ Select similar with generics.",
+      "futureTopicSlug": "typescript/arrays/map-types"
     },
     {
       "language": "javascript",
-      "concept": "C# correlation for map, filter, reduce, and chaining",
-      "note": "C# developers: map map, filter, reduce, and chaining to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/map-filter-reduce"
+      "concept": "Object.groupBy",
+      "note": "ES2024 groupBy replaces manual reduce for many grouping tasks — know both for interviews.",
+      "futureTopicSlug": "javascript/arrays/group-by"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "MDN — Array.map", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/map" },
+    { "title": "MDN — Array.reduce", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/reduce" }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "flow"
 }
