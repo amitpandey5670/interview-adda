@@ -1,0 +1,248 @@
+{
+  "id": "typescript-02-basic-types-vs-csharp",
+  "slug": "basic-types-vs-csharp",
+  "title": "TypeScript basic types versus C# built-in types",
+  "moduleId": "typescript-02-basic-types",
+  "order": 7,
+  "hook": "If you know C#'s `int`, `decimal`, `bool`, and `string`, TypeScript's type menu looks smaller — but the differences in null handling, number precision, and compile-time-only safety trip up mixed-stack teams daily.",
+  "sections": [
+    {
+      "heading": "What is different?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "C# offers a rich set of **built-in value types** (`int`, `long`, `double`, `decimal`, `bool`, `char`) plus **`string`** as a reference type. TypeScript collapses numerics into a single **`number`** (IEEE 754 double) and adds **`bigint`** for large integers. There is no `decimal` primitive. C# has one **`null`**; TypeScript/JavaScript has **`null`** and **`undefined`**. C# types exist at run time in the Common Language Runtime (CLR); TypeScript types are **erased** when compiled to JavaScript — only the JavaScript values remain."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "type erasure",
+              "longForm": "type erasure",
+              "plainDefinition": "TypeScript removes type annotations during compilation. No run-time type information remains.",
+              "example": "`const x: number = 42` compiles to `const x = 42`"
+            },
+            {
+              "term": "IEEE 754",
+              "longForm": "IEEE 754 double-precision",
+              "plainDefinition": "The floating-point standard used by JavaScript number and C# double. Cannot represent all decimals exactly.",
+              "example": "`0.1 + 0.2 !== 0.3` in both TS and C# double"
+            },
+            {
+              "term": "NRT",
+              "longForm": "Nullable Reference Types (C#)",
+              "plainDefinition": "C# compiler annotations for nullable strings and objects. Analogous to TypeScript strictNullChecks.",
+              "example": "`string?` vs `string` in C# 8+"
+            },
+            {
+              "term": "Nullable<T>",
+              "longForm": "Nullable<T> (C# value type wrapper)",
+              "plainDefinition": "A struct wrapping a value type to represent absence. TypeScript uses `number | undefined` instead.",
+              "example": "`int?` in C# = `Nullable<int>`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Mixed C#/TypeScript teams share APIs via JSON, gRPC, and OpenAPI. A C# backend serializes `decimal` fees and numeric enums; the TypeScript frontend receives `number` and must validate. A C# `string?` with null maps to JSON `null`, but TypeScript must decide whether that is `null`, `undefined`, or both. Understanding these mappings prevents silent data corruption and interview mistakes."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview one-liner",
+          "body": "\"C# picks numeric types at compile time with run-time enforcement. TypeScript has one number (double), types erase at emit, and null/undefined are two separate absent values.\""
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mapping C# types to TypeScript",
+          "items": [
+            {
+              "title": "int, long, byte → number or bigint",
+              "body": "Use `number` for values within `Number.MAX_SAFE_INTEGER`. Use `bigint` for larger IDs."
+            },
+            {
+              "title": "decimal → number (with caution) or string",
+              "body": "JSON has no decimal type. Serialize as string or integer cents. Parse with a decimal library on the TS side."
+            },
+            {
+              "title": "double, float → number",
+              "body": "Direct mapping. Same floating-point imprecision in both."
+            },
+            {
+              "title": "bool → boolean",
+              "body": "Direct mapping. Neither language treats bool as int."
+            },
+            {
+              "title": "string → string",
+              "body": "Direct mapping. C# string is a reference type; TS string is a primitive."
+            },
+            {
+              "title": "char → string",
+              "body": "TypeScript has no char type. Use a single-character string."
+            },
+            {
+              "title": "enum → union or number",
+              "body": "Numeric C# enums deserialize as numbers — validate range. String enums map to literal unions."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "C# to TypeScript type mapping",
+            "source": "flowchart LR\n  subgraph csharp [\"C#\"]\n    I[int / long]\n    D[decimal]\n    DB[double]\n    B[bool]\n    S[string]\n    E[enum]\n    N[int?]\n  end\n  subgraph ts [\"TypeScript\"]\n    N2[number / bigint]\n    N3[number or string cents]\n    N4[number]\n    B2[boolean]\n    S2[string]\n    U[union or number]\n    U2[number | undefined]\n  end\n  I --> N2\n  D --> N3\n  DB --> N4\n  B --> B2\n  S --> S2\n  E --> U\n  N --> U2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Deserializing C# decimal as number — risky",
+            "code": "interface InvoiceDto {\n  id: string;\n  fee: number;       // C# decimal serialized as JSON number\n  taxRate: number;\n}\n\nconst invoice: InvoiceDto = JSON.parse(raw);\nconst total = invoice.fee * (1 + invoice.taxRate);\n// Floating-point drift — same as C# double, not C# decimal",
+            "explanation": "Line 3: C# `decimal` becomes JSON number, typed as TS `number` (double). Line 8: multiplication uses IEEE 754 — not exact like C# decimal. Fix: serialize decimal as string or integer cents from the C# side."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Mapping C# nullable types",
+            "code": "// C# side: public string? Nickname { get; set; }\n// C# side: public int? RetryCount { get; set; }\n\ninterface UserDto {\n  nickname: string | null;          // JSON null\n  retryCount: number | null;        // JSON null (was int?)\n  email?: string;                     // property may be absent\n}\n\nconst user: UserDto = await res.json();\nconst retries = user.retryCount ?? 3;",
+            "explanation": "Lines 5–7: C# `string?` null maps to TS `string | null`. C# `int?` null maps to `number | null`. Optional property `email?` handles JSON absence (undefined). Line 10: `??` handles both null and undefined."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "C# numeric enum deserialized safely",
+            "code": "enum OrderStatus {\n  Pending = 0,\n  Shipped = 1,\n  Delivered = 2,\n}\n\nconst VALID = new Set<number>([\n  OrderStatus.Pending,\n  OrderStatus.Shipped,\n  OrderStatus.Delivered,\n]);\n\nfunction parseStatus(raw: number): OrderStatus {\n  if (!VALID.has(raw)) throw new Error(`Invalid status: ${raw}`);\n  return raw as OrderStatus;\n}",
+            "explanation": "Lines 1–5: C# numeric enum values. Lines 7–11: valid set for range checking. Lines 13–16: JSON can deliver any number — TypeScript types do not validate at run time. Always validate C# enum values at the boundary."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Side-by-side comparison",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Full basic type mapping",
+          "headers": ["C# type", "TypeScript equivalent", "Key difference"],
+          "rows": [
+            ["int, long, byte", "number or bigint", "TS has one number type (double)"],
+            ["decimal", "number (risky) or string/int cents", "No decimal primitive in TS"],
+            ["double, float", "number", "Same IEEE 754 behavior"],
+            ["bool", "boolean", "Neither treats bool as int"],
+            ["char", "string", "TS has no char type"],
+            ["string", "string", "C# is reference type; TS is primitive"],
+            ["null", "null", "TS also has undefined"],
+            ["int?", "number | null | undefined", "C# uses Nullable<T> struct"],
+            ["string?", "string | null", "NRT is compile-time; same CLR type"],
+            ["enum", "union or number + validation", "TS enums behave differently"],
+            ["object", "unknown (preferred) or object", "TS types erase; C# has CLR metadata"],
+            ["dynamic", "any (avoid) or unknown", "C# resolves at run time via DLR"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls for mixed-stack teams",
+          "body": "Assuming TypeScript types validate JSON at run time. Mapping C# decimal to number without a rounding strategy. Treating JSON null as undefined (or vice versa) inconsistently. Expecting TypeScript enum behavior to match C# enum serialization. Forgetting that TypeScript types vanish after compilation."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In production APIs between C# and TypeScript, define the wire contract explicitly (OpenAPI, protobuf). Serialize `decimal` as string or integer cents. Map C# `DateTime` to ISO 8601 strings (TypeScript `string`, parse with a date library). Use `unknown` + schema validation (Zod) on the TS side — the compiler cannot protect against malformed JSON. C# NRT and TS strictNullChecks are both compile-time overlays; both require boundary validation. For gRPC with protobuf, generated TS types are closer to C# types but still erase at run time."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Concern", "C# approach", "TypeScript approach"],
+          "rows": [
+            ["Money", "decimal type", "Integer cents or decimal.js library"],
+            ["Null safety", "NRT + Nullable<T>", "strictNullChecks + unions"],
+            ["Type at run time", "CLR metadata, reflection", "Erased — validate manually"],
+            ["Enum interop", "Numeric value in JSON", "Validate range, prefer string enums"],
+            ["Large integers", "long (64-bit)", "bigint (arbitrary precision)"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming TypeScript has decimal or int types. Saying types survive compilation. Not validating JSON enum values. Ignoring the null vs undefined distinction when deserializing C# nullable types."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "C# has int, long, decimal, double; TypeScript has number (double) and bigint.",
+    "TypeScript types erase at compile time — JSON validation is mandatory.",
+    "C# null maps to TS null; C# missing optional maps to undefined.",
+    "60s: One number type in TS. No decimal. Types erase. Two absent values. Validate enums and decimals at API boundaries.",
+    "Follow-up: how would you safely transfer decimal currency between C# and TypeScript?"
+  ],
+  "commonPitfalls": [
+    "Mapping decimal to number without mentioning precision loss.",
+    "Believing TypeScript types enforce JSON shape at run time.",
+    "Strong answer: 'Serialize decimal as string/cents. Validate enums. Use unknown + Zod at boundaries. strictNullChecks mirrors NRT but both are compile-time only.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-02-primitive-types",
+    "typescript-02-null-undefined-void-never",
+    "typescript-02-any-unknown-never",
+    "typescript-02-enums-and-const-enums"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "JSON.parse",
+      "note": "JavaScript JSON.parse returns plain objects with no type information. TypeScript annotations are a compile-time overlay on this untyped data.",
+      "futureTopicSlug": "javascript/json/parse"
+    },
+    {
+      "language": "csharp",
+      "concept": "built-in types",
+      "note": "C# built-in types map to CLR types with run-time presence. TypeScript types are erased — the mapping is conceptual, not automatic.",
+      "futureTopicSlug": "csharp/types/built-in-types"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Everyday types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/everyday-types.html"
+    },
+    {
+      "title": "Microsoft — C# built-in types",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/built-in-types"
+    }
+  ],
+  "scenarioTag": "csharp-api-interop"
+}

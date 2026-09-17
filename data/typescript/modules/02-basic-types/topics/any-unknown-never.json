@@ -1,0 +1,281 @@
+{
+  "id": "typescript-02-any-unknown-never",
+  "slug": "any-unknown-never",
+  "title": "any, unknown, and never — the safety ladder",
+  "moduleId": "typescript-02-basic-types",
+  "order": 3,
+  "hook": "`any` turns off the type checker. `unknown` accepts any value but forces you to narrow before use. `never` sits at the bottom — no value can exist. Together they form the safety ladder every senior TypeScript engineer must explain.",
+  "sections": [
+    {
+      "heading": "What is the safety ladder?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The **safety ladder** ranks TypeScript's top and bottom types by how much checking they enforce. **`any`** is the escape hatch — you can assign anything to it and use it as anything, effectively disabling type checking. **`unknown`** is the type-safe counterpart of `any`: it accepts any value but you must narrow (with `typeof`, `instanceof`, or custom guards) before calling methods or accessing properties. **`never`** is the opposite end — the type of values that never exist. Use `unknown` at API boundaries; avoid `any` in production code."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "any",
+              "longForm": "any (top type — unchecked)",
+              "plainDefinition": "Disables type checking for that value. Contagious — assigning any poisons inference.",
+              "example": "`const data: any = JSON.parse(raw);` // no safety"
+            },
+            {
+              "term": "unknown",
+              "longForm": "unknown (top type — safe)",
+              "plainDefinition": "Accepts any value but requires narrowing before use. Preferred at untyped boundaries.",
+              "example": "`const data: unknown = JSON.parse(raw);`"
+            },
+            {
+              "term": "never",
+              "longForm": "never (bottom type)",
+              "plainDefinition": "No value satisfies this type. Used for functions that always throw and exhaustive checks.",
+              "example": "`function assertNever(x: never): never { throw new Error(); }`"
+            },
+            {
+              "term": "type narrowing",
+              "longForm": "type narrowing",
+              "plainDefinition": "Refining a wider type to a narrower one through control-flow checks.",
+              "example": "`if (typeof data === \"string\") { ... }`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers ask about `any` vs `unknown` constantly. `any` is how untyped JavaScript leaks into typed code — one `any` parameter can silently break an entire call chain. `unknown` models the real world: JSON.parse, fetch responses, and third-party script tags all deliver untyped data. `never` proves you handled every case. C# has `object` (static) and `dynamic` (run-time binding) — TypeScript's `any` is closer to turning the checker off, while `unknown` is closer to `object` with mandatory casting."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Rule of thumb",
+          "body": "External data → `unknown` + validation. Legacy interop → isolate `any` behind a typed wrapper. Exhaustive switches → `never` in the default branch."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Climbing the ladder",
+          "items": [
+            {
+              "title": "Start with unknown at boundaries",
+              "body": "Type `JSON.parse` results, webhook payloads, and `fetch().json()` as `unknown`."
+            },
+            {
+              "title": "Narrow with guards",
+              "body": "Use `typeof`, `instanceof`, `in`, discriminant checks, or a schema validator (Zod, Valibot) to refine to a concrete type."
+            },
+            {
+              "title": "Avoid any contagion",
+              "body": "Once a variable is `any`, TypeScript stops checking downstream. Use `// @ts-expect-error` or explicit casts instead of widening to `any`."
+            },
+            {
+              "title": "Use never for proof",
+              "body": "After handling all union members, assign the remainder to `never` to get a compile error if a case is missing."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "The safety ladder",
+            "source": "flowchart TB\n  ANY[\"any — no checks\"] -->|\"assignable to everything\"| ALL[All types]\n  UNK[\"unknown — must narrow\"] -->|\"typeof / instanceof / guard\"| CONCRETE[Concrete type]\n  NEVER[\"never — no values\"] -->|\"assignable from nothing\"| BOTTOM[Bottom of ladder]\n  JSON[\"JSON.parse\"] --> UNK\n  LEGACY[\"Legacy JS lib\"] -.->|\"isolate\"| ANY"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "any vs unknown at the boundary",
+            "code": "const raw = '{\"name\":\"Ada\",\"score\":95}';\n\nconst unsafe: any = JSON.parse(raw);\nconsole.log(unsafe.name.toUpperCase()); // compiles — may crash\n\nconst safe: unknown = JSON.parse(raw);\n// safe.name;                        // compile error\nif (typeof safe === \"object\" && safe !== null && \"name\" in safe) {\n  const name = (safe as { name: string }).name;\n  console.log(name.toUpperCase());\n}",
+            "explanation": "Lines 3–4: `any` lets you access `.name` without checks — run-time crash if shape is wrong. Lines 6–10: `unknown` forces a guard before property access. Production code should use a schema validator instead of manual casts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "unknown narrowing with typeof",
+            "code": "function printLength(value: unknown): void {\n  if (typeof value === \"string\") {\n    console.log(value.length);     // value is string here\n  } else if (typeof value === \"number\") {\n    console.log(value.toFixed(2)); // value is number here\n  } else {\n    console.log(\"unsupported type\");\n  }\n}",
+            "explanation": "Line 1: `unknown` parameter accepts any caller input. Lines 2–7: `typeof` narrows the type in each branch. TypeScript tracks the narrowing through control flow. For objects, use `in` checks or a validation library."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "never in assertNever helper",
+            "code": "function assertNever(value: never, msg = \"Unexpected value\"): never {\n  throw new Error(`${msg}: ${JSON.stringify(value)}`);\n}\n\ntype Status = \"pending\" | \"done\";\n\nfunction handle(status: Status): string {\n  switch (status) {\n    case \"pending\": return \"wait\";\n    case \"done\": return \"ok\";\n    default: return assertNever(status);\n  }\n}",
+            "explanation": "Lines 1–3: `assertNever` accepts only `never` — if called, the switch missed a case. Lines 8–12: adding a new status without a case causes a compile error because `status` in default is not `never`. Standard pattern for discriminated unions."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — any contagion",
+            "code": "function parseConfig(raw: string): any {\n  return JSON.parse(raw);\n}\n\nfunction getTimeout(config: { timeout: number }): number {\n  return config.timeout;\n}\n\n// any poisons the chain — no error:\nconst cfg = parseConfig(\"{}\");\ngetTimeout(cfg);  // compiles, crashes at run time",
+            "explanation": "Line 1: returning `any` from a parser disables all downstream checking. Lines 9–10: `cfg` is `any`, so it silently passes to `getTimeout` which expects a typed object. Fix: return `unknown` and validate before use."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Top and bottom types across languages",
+          "headers": [
+            "Concept",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Accept anything, no checks",
+              "`any`",
+              "Untyped variables",
+              "No direct equivalent"
+            ],
+            [
+              "Accept anything, must narrow",
+              "`unknown`",
+              "N/A",
+              "`object` (requires cast)"
+            ],
+            [
+              "Run-time member binding",
+              "N/A (use any)",
+              "N/A",
+              "`dynamic` via DLR"
+            ],
+            [
+              "Impossible value",
+              "`never`",
+              "N/A",
+              "Unreachable code warning"
+            ],
+            [
+              "Disable checking project-wide",
+              "`\"noImplicitAny\": false`",
+              "Default",
+              "N/A"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `any` for JSON.parse because it is convenient. Not narrowing `unknown` before property access. Confusing `never` with `void` — void is \"no useful return\", never is \"this cannot happen.\" Spreading `any` through generics (`Array<any>`)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In production, ban `any` in new code via ESLint `@typescript-eslint/no-explicit-any`. Use `unknown` at every untyped boundary and validate with Zod or similar before the data enters your domain layer. `any` is assignable to and from everything, including `never` — it breaks the type lattice. `unknown` is only assignable to `unknown` and `any` without narrowing. The `satisfies` operator (TypeScript 4.9+) helps infer literal types while checking shape without widening to `any`."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Type",
+            "When to use",
+            "Rejection signal"
+          ],
+          "rows": [
+            [
+              "any",
+              "Legacy interop behind a typed facade",
+              "Default choice for new code"
+            ],
+            [
+              "unknown",
+              "JSON, webhooks, plugin APIs",
+              "Skipping validation after narrowing"
+            ],
+            [
+              "never",
+              "Exhaustiveness, throw helpers",
+              "Confusing with void or null"
+            ],
+            [
+              "object",
+              "Non-primitive only, still needs narrowing",
+              "Thinking it replaces unknown"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying any and unknown are the same. Not knowing that any disables checking for the entire chain. Claiming never means null or void. Unable to explain how to safely type JSON.parse."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "any disables checking; unknown requires narrowing — always prefer unknown at boundaries.",
+    "never is the bottom type for exhaustiveness and throw-only functions.",
+    "any is contagious — one any poisons downstream inference.",
+    "60s: unknown at API edges, narrow with typeof/guards/validators. never for exhaustive switches. Ban any in new code.",
+    "Follow-up: how does unknown compare to C# object and dynamic?"
+  ],
+  "commonPitfalls": [
+    "JSON.parse typed as any — weak; say unknown + validation.",
+    "Treating never as void or null.",
+    "Strong answer: 'unknown is the safe top type. Narrow before use. never proves exhaustiveness. any is a last resort behind wrappers.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-02-null-undefined-void-never",
+    "typescript-02-literal-types",
+    "typescript-02-basic-types-vs-csharp"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "untyped variables",
+      "note": "Plain JavaScript variables behave like `any`. TypeScript's `unknown` adds a safe layer that JS lacks entirely.",
+      "futureTopicSlug": "javascript/types/dynamic"
+    },
+    {
+      "language": "typescript",
+      "concept": "object vs dynamic",
+      "note": "C# `object` requires casting before member access. `dynamic` defers to run time. TypeScript `unknown` is like `object` but with flow-based narrowing; `any` is like disabling the checker entirely.",
+      "futureTopicSlug": "csharp/types/object-dynamic"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — any and unknown",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html#unknown"
+    }
+  ]
+}

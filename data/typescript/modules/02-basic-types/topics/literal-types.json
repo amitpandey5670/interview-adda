@@ -1,0 +1,222 @@
+{
+  "id": "typescript-02-literal-types",
+  "slug": "literal-types",
+  "title": "Literal types and const assertions (as const)",
+  "moduleId": "typescript-02-basic-types",
+  "order": 4,
+  "hook": "A literal type is not just `string` — it is the exact value `\"pending\"` or `42`. Combined with `as const`, literals become the foundation for type-safe constants, discriminated unions, and configuration objects.",
+  "sections": [
+    {
+      "heading": "What are literal types?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A **literal type** narrows a primitive to one specific value: `\"circle\"` instead of `string`, `200` instead of `number`, `true` instead of `boolean`. TypeScript infers literal types from `const` declarations automatically. **`as const`** (const assertion) freezes an entire object or array to its deepest literal values, making properties `readonly` and types exact. Literal unions like `\"pending\" | \"done\" | \"failed\"` replace enums in many modern codebases."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "string literal type",
+              "longForm": "string literal type",
+              "plainDefinition": "A type that allows only one specific string value.",
+              "example": "`type Theme = \"light\" | \"dark\";`"
+            },
+            {
+              "term": "as const",
+              "longForm": "const assertion",
+              "plainDefinition": "A postfix assertion that tells TypeScript to infer the narrowest literal types and mark properties readonly.",
+              "example": "`const ROLES = [\"admin\", \"user\"] as const;`"
+            },
+            {
+              "term": "widening",
+              "longForm": "type widening",
+              "plainDefinition": "When TypeScript expands a literal to its base type (e.g. `\"hello\"` → `string`) on `let` reassignment.",
+              "example": "`let x = \"hello\";` // type is string, not \"hello\""
+            },
+            {
+              "term": "discriminated union",
+              "longForm": "discriminated union (tagged union)",
+              "plainDefinition": "A union of object types sharing a common literal property (the discriminant) for safe narrowing.",
+              "example": "`{ kind: \"circle\"; r: number } | { kind: \"square\"; s: number }`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Literal types power discriminated unions — the most important pattern for modeling state machines, API responses, and Redux actions in TypeScript. Without `as const`, configuration objects widen to `string` and lose their exact keys. C# has `const` for compile-time constants but no literal type system — the closest analogue is enums or `nameof` string constants."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "const vs as const",
+          "body": "`const x = \"ada\"` infers the literal type `\"ada\"`. `const config = { port: 3000 }` widens to `{ port: number }`. Add `as const` to freeze the object: `{ readonly port: 3000 }`."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From literals to unions",
+          "items": [
+            {
+              "title": "const infers literals",
+              "body": "`const status = \"pending\"` → type `\"pending\"`. `let status = \"pending\"` → type `string` (widened)."
+            },
+            {
+              "title": "Build unions manually",
+              "body": "`type Status = \"pending\" | \"done\" | \"failed\"` — a closed set of allowed strings."
+            },
+            {
+              "title": "Freeze with as const",
+              "body": "`const ROUTES = { home: \"/\", about: \"/about\" } as const` — keys and values become readonly literals."
+            },
+            {
+              "title": "Derive types from values",
+              "body": "`type Route = typeof ROUTES[keyof typeof ROUTES]` extracts `\"/\" | \"/about\"` from the object."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Literal type inference flow",
+            "source": "flowchart LR\n  VAL[\"const x = 'pending'\"] --> LIT[\"type: 'pending'\"]\n  LET[\"let x = 'pending'\"] --> WIDE[\"type: string\"]\n  OBJ[\"{ port: 3000 }\"] --> WOBJ[\"port: number\"]\n  AS[\"as const\"] --> ROBJ[\"readonly port: 3000\"]\n  LIT --> UNION[\"'pending' | 'done'\"]\n  ROBJ --> DERIVE[\"typeof ROUTES[keyof typeof ROUTES]\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "const vs let widening",
+            "code": "const fixed = \"pending\";\n// type of fixed: \"pending\"\n\nlet mutable = \"pending\";\n// type of mutable: string\nmutable = \"done\";  // OK — widened to string\n\n// fixed = \"done\";  // error — literal \"pending\" only",
+            "explanation": "Line 1: `const` without reassignment keeps the literal type. Line 4: `let` widens to `string` because reassignment is allowed. Line 7: literal `const` cannot be reassigned to a different string."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "as const for configuration objects",
+            "code": "const HTTP_STATUS = {\n  OK: 200,\n  NOT_FOUND: 404,\n  SERVER_ERROR: 500,\n} as const;\n\ntype StatusCode = typeof HTTP_STATUS[keyof typeof HTTP_STATUS];\n// StatusCode = 200 | 404 | 500\n\n// HTTP_STATUS.OK = 201;  // error — readonly",
+            "explanation": "Lines 1–5: `as const` makes each value a literal number and the object readonly. Line 7: `keyof typeof` gets the keys, indexed access extracts the union of values. Line 10: readonly prevents mutation."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Discriminated union with literal discriminant",
+            "code": "type ApiResult =\n  | { status: \"success\"; data: string }\n  | { status: \"error\"; message: string };\n\nfunction handle(result: ApiResult): string {\n  switch (result.status) {\n    case \"success\": return result.data;\n    case \"error\": return result.message;\n  }\n}",
+            "explanation": "Lines 1–3: `status` is a literal discriminant — TypeScript narrows `result` in each case branch. Lines 5–9: after handling both literals, the switch is exhaustive. Adding a third status without a case triggers a `never` error (see any-unknown-never topic)."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Literal types across languages",
+          "headers": ["Need", "TypeScript", "JavaScript", "C#"],
+          "rows": [
+            ["Exact string set", "Literal union `\"a\" | \"b\"`", "No compile-time check", "`enum` or `const string`"],
+            ["Frozen config object", "`as const`", "Object.freeze (run time only)", "`static readonly` fields"],
+            ["Derive type from value", "`typeof x[keyof typeof x]`", "N/A", "N/A (no literal types)"],
+            ["Closed set of numbers", "`200 | 404 | 500`", "No check", "`enum` with int backing"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `let` when you need a literal type — widen to `string`/`number`. Forgetting `as const` on config objects. Building huge literal unions manually instead of deriving from `as const`. Confusing `as const` with `const` keyword — they serve different purposes."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Literal types are the backbone of discriminated unions, Redux action types, and event handler maps. `as const` plus `satisfies` (TS 4.9+) lets you validate object shape while preserving literal inference. Tuple `as const` produces readonly tuples with exact element types — useful for route definitions and test fixtures. In interviews, prefer `as const` objects over enums for tree-shaking and no reverse-mapping surprises."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Advantage", "Trap"],
+          "rows": [
+            ["Literal union", "No run-time code, tree-shakeable", "Manual maintenance without as const"],
+            ["as const object", "Single source of truth for values + types", "Deep readonly can surprise mutation attempts"],
+            ["satisfies", "Checks shape without widening", "Confusing with type annotation"],
+            ["enum alternative", "Better DX than numeric enum", "Not a drop-in for reverse mapping"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing the difference between const and as const. Unable to derive a union type from a const object. Saying literal types exist at run time."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "const infers literal types; let widens to string/number/boolean.",
+    "as const freezes objects and arrays to readonly literal types.",
+    "Derive unions with typeof OBJ[keyof typeof OBJ].",
+    "60s: Literals are exact values as types. as const for config. Build discriminated unions with literal discriminants. Prefer over enums for tree-shaking.",
+    "Follow-up: when would you use satisfies instead of as const?"
+  ],
+  "commonPitfalls": [
+    "Using let and wondering why the type widened to string.",
+    "Forgetting as const on configuration objects.",
+    "Strong answer: 'const keeps literals. as const deep-freezes objects. Derive unions from const objects for single source of truth.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-02-primitive-types",
+    "typescript-02-any-unknown-never",
+    "typescript-02-enums-and-const-enums"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Object.freeze",
+      "note": "JavaScript `Object.freeze` prevents mutation at run time. TypeScript `as const` adds compile-time readonly and literal inference — both can be used together.",
+      "futureTopicSlug": "javascript/objects/freeze"
+    },
+    {
+      "language": "csharp",
+      "concept": "const and enum",
+      "note": "C# `const` is compile-time only for primitives. TypeScript literal types are type-level only. C# enums generate run-time objects; TS literal unions do not.",
+      "futureTopicSlug": "csharp/types/enums"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Literal types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#literal-types"
+    }
+  ],
+  "scenarioTag": "state-machine"
+}
