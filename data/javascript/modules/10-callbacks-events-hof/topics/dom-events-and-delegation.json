@@ -4,128 +4,122 @@
   "title": "DOM events, bubbling, capturing, and delegation",
   "moduleId": "javascript-10-callbacks-events-hof",
   "order": 3,
-  "hook": "DOM events, bubbling, capturing, and delegation patterns decouple producers and consumers via callbacks, EventEmitter, or DOM events. Debounce and throttle control event storm rates on the main thread.",
+  "hook": "A click on a button travels through the DOM in three phases — capture down, target, bubble up. Event delegation attaches one listener on a parent and handles children dynamically, which is how large lists stay fast.",
   "sections": [
     {
-      "heading": "What is DOM events, bubbling, capturing, and delegation?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**DOM events, bubbling, capturing, and delegation** is a run-time JavaScript mechanism enforced by the engine on every execution. DOM events, bubbling, capturing, and delegation patterns decouple producers and consumers via callbacks, EventEmitter, or DOM events. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "The **DOM event model** dispatches **Event** objects through ancestors. **Capture phase** runs root→target; **target phase** at the element; **bubble phase** target→root. **addEventListener(type, handler, { capture: true })** listens during capture. **stopPropagation** halts further travel; **preventDefault** blocks default browser action (not propagation). **Event delegation** listens on a stable ancestor and uses **event.target** to identify which child was clicked."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "dom",
-              "longForm": "DOM events, bubbling, capturing, and delegation",
-              "plainDefinition": "Central mechanism behind \"DOM events, bubbling, capturing, and delegation\" in JavaScript.",
-              "example": "See code walkthrough for runnable example."
+              "term": "bubbling",
+              "longForm": "event bubbling",
+              "plainDefinition": "Event propagates from target up through ancestors after target handlers run.",
+              "example": "Click on <li> bubbles to <ul> then document."
             },
             {
-              "term": "structural typing",
-              "longForm": "structural typing",
-              "plainDefinition": "Types compatible if shape matches — unlike C# nominal types.",
-              "example": "{ id: string } assignable to interface User"
+              "term": "capturing",
+              "longForm": "event capturing",
+              "plainDefinition": "Propagation from window down to target before bubble phase.",
+              "example": "document.addEventListener('click', fn, true);"
             },
             {
-              "term": "type erasure",
-              "longForm": "type erasure",
-              "plainDefinition": "TypeScript types removed at emit — run time is plain JS.",
-              "example": "interface User erases completely"
+              "term": "event delegation",
+              "longForm": "event delegation",
+              "plainDefinition": "Single listener on parent handles events from many dynamic children.",
+              "example": "tbody.onclick = e => { if (e.target.matches('button.delete')) ... };"
+            },
+            {
+              "term": "event.target",
+              "longForm": "event.target",
+              "plainDefinition": "Deepest element that triggered the event — may differ from currentTarget (listener owner).",
+              "example": "List item click: target is button, currentTarget is ul."
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why DOM events, bubbling, capturing, and delegation matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **DOM events, bubbling, capturing, and delegation** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know C#, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "Tables with 10,000 rows cannot attach 10,000 listeners — delegation plus one handler scales. React's synthetic event system historically delegated to document (legacy) — understanding native phases explains stopPropagation bugs. Shadow DOM retargets events — senior web question. C# UI (WPF/Blazor) routes events differently; browser capture/bubble is unique to DOM."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"DOM events, bubbling, capturing, and delegation\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Interview trap: stopPropagation vs preventDefault",
+          "body": "preventDefault stops form submit or link navigation — does not stop bubbling. stopPropagation stops other listeners on ancestors — does not cancel default action unless default is cancelable."
         }
       ]
     },
     {
-      "heading": "How DOM events, bubbling, capturing, and delegation works step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Three-phase dispatch",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where DOM events, bubbling, capturing, and delegation appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Step with debugger or console.log — watch call stack and event loop if async."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Capture", "body": "Window → … → parent of target (capture listeners)." },
+            { "title": "Target", "body": "Listeners on target element (both capture and bubble order rules apply)." },
+            { "title": "Bubble", "body": "Target → … → window (bubble listeners)." },
+            { "title": "Delegation handler", "body": "On ancestor: if (target.closest('.row')) handle row action." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "DOM events, bubbling, capturing, and delegation flow",
-            "source": "flowchart TD\n  A[DOM events, bubbling, capturing, and delegation] --> B[Read / parse]\n  B --> C[Execute]\n  C --> D[Observable behavior]"
+            "title": "Click propagation phases",
+            "source": "flowchart TD\n  W[window capture] --> D[document capture]\n  D --> U[ul capture]\n  U --> LI[li TARGET]\n  LI --> U2[ul bubble]\n  U2 --> D2[document bubble]\n  D2 --> W2[window bubble]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: DOM events, bubbling, capturing, and delegation",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Core DOM events, bubbling, capturing, and delegation example",
-            "code": "function createClient(cfg) {\n  return {\n    async call(path) {\n      for (let i = 0; i < cfg.retries; i++) {\n        const res = await fetch(cfg.endpoint + path);\n        if (res.ok) return res.json();\n      }\n      throw new Error('exhausted retries');\n    },\n  };\n}\n\nconst client = createClient({ retries: 3, endpoint: 'https://api.example.com' });",
-            "explanation": "Demonstrates DOM events, bubbling, capturing, and delegation in a realistic API client — retries, fetch, and configuration."
+            "label": "Event delegation on dynamic list",
+            "code": "const list = document.querySelector('#todo-list');\n\nlist.addEventListener('click', (event) => {\n  const btn = event.target.closest('button[data-action]');\n  if (!btn || !list.contains(btn)) return;\n\n  const id = btn.dataset.id;\n  if (btn.dataset.action === 'delete') removeTodo(id);\n  if (btn.dataset.action === 'done') completeTodo(id);\n});\n\n// New rows appended later — no new listeners needed",
+            "explanation": "closest finds button even if click hit inner SVG. contains guards clicks outside list that bubbled."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Boundary validation",
-            "code": "function isRecord(v) {\n  return typeof v === 'object' && v !== null;\n}\n\nfunction getString(obj, key) {\n  const val = obj[key];\n  return typeof val === 'string' ? val : undefined;\n}",
-            "explanation": "Type guards narrow unknown before access — essential at JSON and message queue boundaries."
+            "label": "Capture vs bubble order demo",
+            "code": "const outer = document.querySelector('#outer');\nconst inner = document.querySelector('#inner');\n\nouter.addEventListener('click', () => console.log('outer bubble'));\nouter.addEventListener('click', () => console.log('outer capture'), true);\ninner.addEventListener('click', () => console.log('inner target'));\n\n// Click inner → outer capture, inner target, outer bubble",
+            "explanation": "Capture listeners on ancestors run before target; bubble listeners after."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "C# transfer learning",
-            "code": "// C# pattern for DOM events, bubbling, capturing, and delegation\npublic sealed record Config(int Retries, string Endpoint);\n\npublic async Task<JsonDocument> CallAsync(Config cfg, string path) {\n    for (var i = 0; i < cfg.Retries; i++) {\n        var res = await _http.GetAsync(cfg.Endpoint + path);\n        if (res.IsSuccessStatusCode) return await JsonDocument.ParseAsync(await res.Content.ReadAsStreamAsync());\n    }\n    throw new InvalidOperationException(\"exhausted retries\");\n}",
-            "explanation": "Maps DOM events, bubbling, capturing, and delegation idioms to C# — note compile-time types versus JS run-time checks."
+            "label": "C# Blazor event routing contrast",
+            "code": "// Blazor: @onclick on component — framework wires DOM events\n// No capture/bubble API exposed by default in Razor markup\n// WPF has Preview tunnel + bubble routed events — closer to DOM phases",
+            "explanation": "Browser DOM phases are explicit in addEventListener; C# UI frameworks wrap or remap them."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode diagnostic",
-            "code": "function diagnose(error) {\n  if (error instanceof Error) return error.message;\n  if (typeof error === 'string') return error;\n  return 'unknown failure';\n}",
-            "explanation": "Explicit unknown/error handling for DOM events, bubbling, capturing, and delegation — senior code paths always name failure modes."
+            "label": "Failure mode: listener per row",
+            "code": "function renderRows(items) {\n  const tbody = document.querySelector('tbody');\n  tbody.innerHTML = items.map(i => `<tr><td>${i.name}</td></tr>`).join('');\n\n  // BAD: re-binds N listeners every render\n  tbody.querySelectorAll('tr').forEach(row => {\n    row.addEventListener('click', () => selectRow(row));\n  });\n}\n\n// Fix: one delegated listener on tbody, use event.target.closest('tr')",
+            "explanation": "Re-render + per-node listeners = leaks and O(n) bind cost each update."
           }
         }
       ]
@@ -135,44 +129,26 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "DOM events, bubbling, capturing, and delegation across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C#",
-            "TypeScript"
-          ],
+          "title": "Event routing comparison",
+          "headers": ["Concept", "DOM", "C# UI"],
           "rows": [
-            [
-              "When checked",
-              "Run time",
-              "Compile + CLR",
-              "Run time"
-            ],
-            [
-              "Type model",
-              "Dynamic",
-              "Nominal",
-              "Structural"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion / undefined",
-              "Null reference",
-              "== versus ==="
-            ]
+            ["Phases", "Capture, target, bubble", "WPF Preview + Bubble; Blazor simplified"],
+            ["Delegation", "Native via bubbling", "RoutedCommand, parent handlers"],
+            ["Dynamic children", "One parent listener", "Re-hook on ItemsControl changes"],
+            ["Default actions", "preventDefault", "Handled = true (WPF)"],
+            ["Shadow DOM", "composed, retargeting", "N/A"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for DOM events, bubbling, capturing, and delegation",
-          "body": "Treating DOM events, bubbling, capturing, and delegation as pure syntax without run-time behavior. Skipping validation at API/JSON boundaries. Ignoring browser versus Node differences. Hand-waving in design review without a test or metric."
+          "title": "Pitfalls to avoid",
+          "body": "Confusing target with currentTarget. stopPropagation breaking unrelated delegated handlers. Forgetting closest() null check. Attaching duplicate listeners on every render without removing old ones."
         }
       ]
     },
@@ -181,85 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Prove mastery of **DOM events, bubbling, capturing, and delegation** with a failing test that captures the edge case, a DevTools or heap snapshot showing the bug, and a clear tradeoff statement in design review. Senior interviewers want mechanism — what the engine actually do — plus when the simple explicit version beats the clever abstraction."
+          "text": "Passive event listeners `{ passive: true }` for touch/wheel — browser can scroll without waiting for JS. **pointer-events** and hit testing for overlays. For SPAs, use delegation at stable root; in React 17+ events attach to root container — know your framework's delegation model. Measure listener count in DevTools Performance → Event Listeners."
         },
         {
           "type": "comparisonTable",
-          "title": "Senior tradeoffs",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Explicit / verbose",
-              "On-call clarity, junior-friendly",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short examples",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Bundle size, hidden behavior"
-            ]
+            ["Delegation on static parent", "Large dynamic lists", "Events that do not bubble (focus, blur)"],
+            ["Direct listener", "Single permanent control", "Frequent DOM rebuilds"],
+            ["Capture intercept", "Global shortcuts, analytics", "Surprising order for team"],
+            ["AbortSignal + once", "One-shot setup", "Not a delegation replacement"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "What fails senior loops",
-          "body": "Cannot trace a production bug to DOM events, bubbling, capturing, and delegation. Says \"it just works\" without naming run-time checks, error paths, or C# and TypeScript differences."
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot draw capture vs bubble order. Saying preventDefault stops propagation. Not knowing which events do not bubble (focus, blur, scroll on elements)."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "DOM events, bubbling, capturing, and delegation: know definition plus one runnable example.",
-    "Production: validate external input before applying DOM events, bubbling, capturing, and delegation; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for dom-events-and-delegation.",
-    "60s: DOM events, bubbling, capturing, and delegation — explain mechanism, one pitfall, one C#/TS comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "DOM events: capture down, target, bubble up — default listeners are bubble phase.",
+    "Delegation: one parent listener + event.target.closest selector.",
+    "preventDefault ≠ stopPropagation — different axes.",
+    "60s: Three phases. Delegate on stable ancestor for dynamic lists. target vs currentTarget. focus/blur do not bubble — use focusin/focusout.",
+    "Follow-up: how would you handle 10k row table clicks without 10k listeners?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses DOM events, bubbling, capturing, and delegation as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using implicit coercion at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving dom-events-and-delegation.",
-    "Strong: define DOM events, bubbling, capturing, and delegation, show a 5-line example, name one pitfall and one C# difference."
+    "Binding new listeners on every re-render without cleanup.",
+    "Using stopPropagation when preventDefault was needed for form submit.",
+    "Strong answer: three phases diagram, delegation with closest, non-bubbling events list."
   ],
   "relatedTopicIds": [
-    "javascript-10-callback-patterns",
     "javascript-10-event-emitter",
-    "javascript-10-callback-hell-and-composition"
+    "javascript-10-debounce-throttle-implementations",
+    "javascript-14-detached-dom-and-leaks"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "DOM events, bubbling, capturing, and delegation",
-      "note": "DOM events, bubbling, capturing, and delegation in typescript — same programmer mental model, compile-time enforcement differs.",
-      "futureTopicSlug": "typescript/callbacks-events-hof/dom-events-and-delegation"
+      "concept": "Event listener typing",
+      "note": "HTMLElementEventMap gives typed event.currentTarget in strict handlers — still same capture/bubble runtime.",
+      "futureTopicSlug": "typescript/dom/event-types"
     },
     {
       "language": "javascript",
-      "concept": "C# correlation for DOM events, bubbling, capturing, and delegation",
-      "note": "C# developers: map DOM events, bubbling, capturing, and delegation to closest CLR concept (idiomatic C#) and note differences.",
-      "futureTopicSlug": "csharp/modules/dom-events-and-delegation"
+      "concept": "EventEmitter vs DOM",
+      "note": "Node EventEmitter has no capture/bubble — DOM delegation is a tree-propagation feature unique to browsers.",
+      "futureTopicSlug": "javascript/events/dom-vs-node"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "MDN — Event bubbling", "url": "https://developer.mozilla.org/en-US/docs/Learn_web_development/Core/Scripting/Event_bubbling" },
+    { "title": "DOM Standard — dispatch flag propagation", "url": "https://dom.spec.whatwg.org/#concept-event-dispatch" }
   ],
-  "animationHint": "timeline",
-  "scenarioTag": "high-concurrency"
+  "animationHint": "flow"
 }

@@ -4,119 +4,102 @@
   "title": "Optional, default, and rest parameters",
   "moduleId": "typescript-04-functions-overloads",
   "order": 2,
-  "hook": "Optional, default, and rest parameters enforces null safety at compile time in TypeScript and defensive patterns at run time in JavaScript. JSON and third-party APIs still deliver null — narrow before use.",
+  "hook": "Optional parameters, default values, and rest parameters are real JavaScript features — TypeScript adds rules about which parameters can be omitted and how they appear in the emitted code.",
   "sections": [
     {
-      "heading": "What is Optional, default, and rest parameters?",
+      "heading": "What are optional and rest parameters?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Optional, default, and rest parameters** is a compile-time TypeScript concept that erases at emit — the run-time behavior is still JavaScript. Optional, default, and rest parameters enforces null safety at compile time in TypeScript and defensive patterns at run time in JavaScript. This section defines terms before code — read the glossary, then run the snippets in Node or the browser console."
+          "text": "**Optional parameters** use `?`: `function f(x?: number)` — callers may omit the argument; inside the function it is `number | undefined`. **Default parameters** assign when `undefined` is passed: `function f(x = 10)`. **Rest parameters** collect trailing args: `function f(...ids: string[])`. Unlike C# `params`, rest must be last. TypeScript checks arity at compile time; JavaScript applies defaults and packs rest at **runtime** — the behavior you debug in production."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            {
-              "term": "optional",
-              "longForm": "Optional, default, and rest parameters",
-              "plainDefinition": "Central mechanism behind \"Optional, default, and rest parameters\" in TypeScript.",
-              "example": "See code walkthrough for runnable example."
-            },
-            {
-              "term": "strictNullChecks",
-              "longForm": "strictNullChecks",
-              "plainDefinition": "null and undefined are distinct types not assignable to T by default.",
-              "example": "\"strictNullChecks\": true"
-            },
-            {
-              "term": "narrowing",
-              "longForm": "type narrowing",
-              "plainDefinition": "Control flow refines union after null check.",
-              "example": "if (x !== null) x.length"
-            }
+            { "term": "optional parameter", "longForm": "optional parameter (?)", "plainDefinition": "Parameter callers may omit — typed as T | undefined inside.", "example": "timeout?: number" },
+            { "term": "default parameter", "longForm": "default parameter value", "plainDefinition": "Used when argument is undefined (not other falsy unless explicit).", "example": "retries = 3" },
+            { "term": "rest parameter", "longForm": "rest parameter (...args)", "plainDefinition": "Collects remaining arguments into an array.", "example": "...parts: string[]" },
+            { "term": "arity", "longForm": "function arity", "plainDefinition": "Number of required parameters — TS enforces at call sites.", "example": "f(a, b?) requires at least one arg" }
           ]
         }
       ]
     },
     {
-      "heading": "Why Optional, default, and rest parameters matters in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and on-call debugging both test **Optional, default, and rest parameters** beyond one-line definitions. Production failures here look like silent data corruption, memory growth, type errors at CI, or async ordering bugs — not syntax errors. If you know JavaScript, use the comparison table to transfer intuition instead of memorizing rules in isolation."
+          "text": "API design: optional config objects vs many positional params. Default parameters enable **optional trailing args without overloads**. Rest replaces `arguments` object (typed). C# optional params use `[Optional]` or default values at call site — similar ergonomics, different overload resolution. Misordering optional before required is a compile error in TS."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers ask \"Optional, default, and rest parameters\" as a follow-up to system design or debugging exercises. They want mechanism, tradeoffs, and a concrete failure you have seen — not textbook definitions."
+          "title": "Prefer options object for 3+ optional params",
+          "body": "function fetch(url: string, opts?: FetchOpts) — clearer than positional optional chain."
         }
       ]
     },
     {
-      "heading": "How Optional, default, and rest parameters works step by step",
+      "heading": "Parameter rules step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Ordering and semantics",
           "items": [
-            {
-              "title": "Locate in code",
-              "body": "Find where Optional, default, and rest parameters appears — syntax, API call, or type annotation."
-            },
-            {
-              "title": "Trace behavior",
-              "body": "Hover types in the editor, emit JS, verify what survives at run time."
-            },
-            {
-              "title": "Test edge cases",
-              "body": "Null input, empty collections, network failure, wrong types from JSON."
-            },
-            {
-              "title": "Connect neighbors",
-              "body": "Follow related topics at the bottom for closures, types, or async context."
-            }
+            { "title": "Required first", "body": "Required params before optional and rest." },
+            { "title": "Default = optional", "body": "x = 5 implies optional — no ? needed." },
+            { "title": "undefined triggers default", "body": "f(undefined) uses default; null does not." },
+            { "title": "Rest is array", "body": "...args: T[] — spread at call site unpacks." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Optional, default, and rest parameters flow",
-            "source": "flowchart TD\n  A[unknown / JSON] --> B{Validated?}\n  B -->|No| C[Runtime crash risk]\n  B -->|Yes| D[Narrowed type]\n  D --> E[Safe property access]"
+            "title": "Parameter kinds",
+            "source": "flowchart LR\n  REQ[required] --> OPT[optional ?]\n  OPT --> DEF[default =]\n  DEF --> REST[...rest]"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: Optional, default, and rest parameters",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Null guard at API boundary",
-            "code": "function parseUser(raw: unknown): User {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof (raw as User).id !== 'string') {\n    throw new Error('id required');\n  }\n  return raw as User;\n}",
-            "explanation": "JSON.parse returns any shape — validate before trusting; TS strictNullChecks does not help at boundary."
+            "label": "Optional and default",
+            "code": "function connect(host: string, port = 5432, ssl?: boolean) {\n  console.log({ host, port, ssl: ssl ?? false });\n}\n\nconnect('db.example.com');\nconnect('db.example.com', 3306);\nconnect('db.example.com', undefined, true);",
+            "explanation": "Line 1: port has default, ssl optional. Line 6: omit port uses 5432. Line 8: pass undefined to port to get default, set ssl."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Optional chaining and nullish coalescing",
-            "code": "const city = user?.address?.city ?? 'Unknown';\nconst count = config.retries ?? 3; // 0 is kept unlike ||\nif (user?.isActive) send(user.email ?? 'noreply@x.com');",
-            "explanation": "?. short-circuits on null/undefined; ?? defaults only nullish values — not 0 or \"\"."
+            "label": "Rest parameters",
+            "code": "function sum(...nums: number[]): number {\n  return nums.reduce((a, b) => a + b, 0);\n}\n\nsum(1, 2, 3);\nconst values = [4, 5];\nsum(...values);",
+            "explanation": "Line 1: rest collects any number of numbers. Line 7: spread unpacks array at call site — same runtime as JS."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "csharp",
-            "label": "C# nullable reference types",
-            "code": "// C# NRT\nstring? FindName(int id) => cache.TryGetValue(id, out var n) ? n : null;\nstring GetName(int id) => FindName(id) ?? throw new InvalidOperationException();\n\n// TS: string | null + strictNullChecks similar intent",
-            "explanation": "C# NRT is compile-time warnings; TS strictNullChecks is compile-time errors. Both need runtime validation at JSON edges."
+            "language": "typescript",
+            "label": "Options object pattern",
+            "code": "interface FetchOpts {\n  timeout?: number;\n  retries?: number;\n  headers?: Record<string, string>;\n}\n\nfunction apiGet(path: string, opts: FetchOpts = {}) {\n  const timeout = opts.timeout ?? 5000;\n  return fetch(path, { signal: AbortSignal.timeout(timeout) });\n}",
+            "explanation": "Line 8: default empty object — all options optional without long parameter list."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — null vs default",
+            "code": "function greet(name = 'Guest') {\n  return `Hello, ${name}`;\n}\n\ngreet(undefined); // 'Hello, Guest'\ngreet(null);        // 'Hello, null' — null does NOT trigger default",
+            "explanation": "Default applies only for undefined missing args — null is passed through. Validate at API boundary."
           }
         }
       ]
@@ -126,88 +109,74 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Optional, default, and rest parameters across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "C#",
-            "JavaScript emit"
-          ],
+          "title": "Parameter features",
+          "headers": ["Feature", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "Null safety",
-              "Runtime checks only",
-              "NRT warnings",
-              "strictNullChecks errors"
-            ],
-            [
-              "Optional access",
-              "?. and ??",
-              "?. and ??",
-              "Same as JS emit"
-            ],
-            [
-              "JSON boundary",
-              "Always validate",
-              "Deserialize attributes",
-              "Parse as unknown"
-            ]
+            ["Optional", "? or default", "undefined arg", "optional param / default"],
+            ["Rest/varargs", "...args: T[]", "...args", "params T[]"],
+            ["Default trigger", "undefined only", "undefined only", "omitted at call"],
+            ["Compile arity check", "Yes", "No", "Yes"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
+        { "type": "callout", "variant": "warning", "title": "Optional before required", "body": "function f(x?: number, y: string) — compile error. Reorder or use options object." }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Default parameter expressions evaluate left-to-right at call time — later defaults can reference earlier params. Destructuring in params: function f({ a, b = 1 }: Opt). Tuple rest for fixed-prefix variadic: (head: string, ...tail: number[]). For overload-like arity, use overload signatures or union rest tuples."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "API design tradeoffs",
+          "headers": ["Style", "Pros", "Cons"],
+          "rows": [
+            ["Positional optional", "Short calls", "Hard to read with many opts"],
+            ["Options object", "Extensible", "Always pass {} or default"],
+            ["Overloads", "Precise arity types", "Verbose implementation"]
+          ]
+        },
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls for Optional, default, and rest parameters",
-          "body": "Treating Optional, default, and rest parameters as pure syntax without compile-time or run-time behavior. Skipping validation at API/JSON boundaries. Ignoring strict compiler flags differences. Hand-waving in design review without a test or metric."
+          "title": "What gets you rejected",
+          "body": "Thinking default handles null. Putting required after optional. Using arguments instead of typed rest."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Optional, default, and rest parameters: know definition plus one runnable example.",
-    "Production: validate external input before applying Optional, default, and rest parameters; log failures with context.",
-    "Tradeoff: prefer explicit debuggable code over clever shortcuts for optional-default-rest-params.",
-    "60s: Optional, default, and rest parameters — explain mechanism, one pitfall, one JS/C# comparison, and when not to use the advanced variant.",
-    "Follow-up: trace a bug or extend the example to async/error/null paths."
+    "Optional ? and default = both allow omission; default applies on undefined only.",
+    "Rest ...args: T[] must be last — replaces arguments.",
+    "Options object scales better than many optional positionals.",
+    "60s: Required first, then optional/default, rest last. Default not null. TS checks arity. C# params similar. Runtime is plain JS.",
+    "Follow-up: destructured parameters?"
   ],
   "commonPitfalls": [
-    "Weak: dismisses Optional, default, and rest parameters as syntax-only — fails when interviewer asks for run-time or compile-time mechanism.",
-    "Weak: using any at boundaries without validation.",
-    "Weak: cannot name a concrete production failure involving optional-default-rest-params.",
-    "Strong: define Optional, default, and rest parameters, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: null triggers default parameter — only undefined does.",
+    "Weak: optional param before required — compile error.",
+    "Strong: Options object for 3+ opts. Rest for variadic. Destructure with defaults in signature."
   ],
   "relatedTopicIds": [
-    "typescript-04-function-type-signatures",
     "typescript-04-function-overloads",
-    "typescript-04-this-parameter-types"
+    "typescript-04-function-type-signatures",
+    "typescript-07-optional-properties",
+    "typescript-08-array-and-tuple-types"
   ],
   "jsTsCorrelations": [
-    {
-      "language": "javascript",
-      "concept": "Optional, default, and rest parameters",
-      "note": "Optional, default, and rest parameters in javascript — same programmer mental model, run-time enforcement differs.",
-      "futureTopicSlug": "javascript/functions-overloads/optional-default-rest-params"
-    }
+    { "language": "javascript", "concept": "default and rest parameters", "note": "ES2015 defaults and rest are runtime features — TypeScript adds arity and type checking.", "futureTopicSlug": "javascript/functions/parameters" },
+    { "language": "typescript", "concept": "function overloads", "note": "When arity changes return type, overloads complement optional params.", "futureTopicSlug": "typescript/functions/function-overloads" }
   ],
   "officialSources": [
-    {
-      "title": "strictNullChecks",
-      "url": "https://www.typescriptlang.org/tsconfig#strictNullChecks"
-    },
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
-    }
+    { "title": "TypeScript — Optional and Default Parameters", "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html#optional-parameters" },
+    { "title": "MDN — Rest parameters", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/rest_parameters" }
   ],
-  "animationHint": "stack-heap",
-  "scenarioTag": "sqs-consumer"
+  "animationHint": "flow"
 }

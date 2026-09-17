@@ -4,14 +4,14 @@
   "title": "Implementing debounce and throttle from scratch",
   "moduleId": "javascript-10-callbacks-events-hof",
   "order": 5,
-  "hook": "Debounce waits for a pause in events before firing — ideal for search-as-you-type. Throttle caps execution rate — ideal for scroll and resize handlers. Both are closure patterns that control how often expensive work runs.",
+  "hook": "Search boxes fire input on every keystroke; scroll handlers fire hundreds of times per second. Debounce waits for quiet; throttle caps execution rate — both are classic whiteboard implementations tied to timers and closure state.",
   "sections": [
     {
-      "heading": "What are debounce and throttle?",
+      "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "**Debounce** delays invocation until the caller stops triggering for `wait` milliseconds — only the last call in a burst runs. **Throttle** allows at most one call per `wait` window — first or last in the window depending on options. Both return a wrapped function preserving `this` and arguments via closures. They solve **rate limiting** without blocking the main thread — unlike C# timers on a thread pool, JS timers schedule macrotasks on the event loop."
+          "text": "**Debounce** delays invoking `fn` until `wait` ms pass without another call — only the last burst runs (search autocomplete). **Throttle** ensures `fn` runs at most once per `wait` ms during continuous events (scroll, resize). Both are **higher-order functions** returning wrapped functions that close over timer IDs and last-run timestamps. **Leading edge** debounce/throttle fires immediately then suppresses; **trailing** waits until window end."
         },
         {
           "type": "glossary",
@@ -20,118 +20,106 @@
             {
               "term": "debounce",
               "longForm": "debounce",
-              "plainDefinition": "Coalesce rapid calls; execute after quiet period.",
-              "example": "Search input — wait 300ms after last keystroke"
+              "plainDefinition": "Reset timer on each call; invoke after quiet period.",
+              "example": "debounce(saveDraft, 500) on input events."
             },
             {
               "term": "throttle",
               "longForm": "throttle",
-              "plainDefinition": "Limit execution frequency to once per interval.",
-              "example": "Scroll handler — at most every 100ms"
+              "plainDefinition": "Allow at most one call per interval while events stream.",
+              "example": "throttle(updateParallax, 16) ~ 60fps on scroll."
             },
             {
               "term": "leading edge",
-              "longForm": "leading edge invocation",
-              "plainDefinition": "Throttle/debounce fires immediately on first call in window.",
-              "example": "Button click throttle with { leading: true }"
+              "longForm": "leading edge",
+              "plainDefinition": "Invoke on first call in window, ignore rest until window resets.",
+              "example": "Submit button debounce leading — instant first click."
             },
             {
               "term": "trailing edge",
-              "longForm": "trailing edge invocation",
-              "plainDefinition": "Fires after window ends — default debounce behavior.",
-              "example": "Resize debounce fires when user stops dragging"
+              "longForm": "trailing edge",
+              "plainDefinition": "Invoke after last event in window — default debounce behavior.",
+              "example": "Search API call after user stops typing."
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why debounce and throttle matter in production",
+      "heading": "Why does it matter?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Unbounded event handlers cause jank and API storms. **Debounce** protects backends from one request per keystroke. **Throttle** keeps scroll animations at 60fps budget. Always **cancel** pending timers on unmount (React useEffect cleanup, AbortController for fetch inside). Pass stable function references or accept recreation on deps change."
+          "text": "FAANG interviews ask you to **implement debounce from scratch** without lodash. Production: unthrottled scroll handlers jank the main thread; undebounced search hammers your API. **requestAnimationFrame** throttles paint-aligned work — related but not identical. C# has no built-in debounce — you'd use DispatcherTimer or Reactive Extensions throttle/debounce operators with same semantics."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "C# comparison",
-          "body": "C# uses DispatcherTimer or Task.Delay with CancellationToken for similar patterns. JS setTimeout/setInterval are not precise — drift under load. C# Reactive Extensions Throttle/ThrottleFirst map closely to debounce/throttle."
+          "title": "Interview trap: debounce vs throttle",
+          "body": "Debounce: wait for pause (resize end). Throttle: steady sampling during stream (scroll position). Wrong choice = laggy UI or API spam."
         }
       ]
     },
     {
-      "heading": "How implementations work step by step",
+      "heading": "How it works step by step",
       "blocks": [
         {
           "type": "steps",
           "title": "Debounce algorithm",
           "items": [
-            {
-              "title": "Call wrapper",
-              "body": "Clear any pending timeout id."
-            },
-            {
-              "title": "Schedule",
-              "body": "setTimeout for wait ms with latest args and this."
-            },
-            {
-              "title": "Burst ends",
-              "body": "Timer fires — invoke original fn once."
-            },
-            {
-              "title": "Cancel",
-              "body": "Expose cancel() for cleanup on unmount."
-            }
+            { "title": "Call wrapped fn", "body": "Clear existing setTimeout if any." },
+            { "title": "Schedule new timeout", "body": "After wait ms, invoke fn with latest args." },
+            { "title": "Repeat call before fire", "body": "Clear and reschedule — only last args win." },
+            { "title": "Optional cancel/flush", "body": "Expose .cancel() for component unmount." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Debounce versus throttle timing",
-            "source": "sequenceDiagram\n  participant U as User events\n  participant D as Debounced fn\n  participant T as Throttled fn\n  U->>D: key key key (pause)\n  D->>D: execute once\n  U->>T: scroll scroll scroll\n  T->>T: execute at interval cap"
+            "title": "Debounce vs throttle timeline",
+            "source": "sequenceDiagram\n  participant E as Events\n  participant D as Debounce\n  participant T as Throttle\n  E->>D: key key key pause\n  D->>D: fire once after pause\n  E->>T: scroll scroll scroll\n  T->>T: fire at most every N ms"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough: debounce and throttle from scratch",
+      "heading": "Code walkthrough",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "debounce with cancel",
-            "code": "function debounce(fn, wait) {\n  let timeoutId = null;\n  function debounced(...args) {\n    clearTimeout(timeoutId);\n    timeoutId = setTimeout(() => fn.apply(this, args), wait);\n  }\n  debounced.cancel = () => {\n    clearTimeout(timeoutId);\n    timeoutId = null;\n  };\n  return debounced;\n}\n\nconst onSearch = debounce((q) => fetch('/api?q=' + q), 300);",
-            "explanation": "Each call resets the timer — only the last query fires after 300ms quiet."
+            "label": "Debounce from scratch (trailing)",
+            "code": "function debounce(fn, wait) {\n  let timerId = undefined;\n\n  function debounced(...args) {\n    clearTimeout(timerId);\n    timerId = setTimeout(() => fn.apply(this, args), wait);\n  }\n\n  debounced.cancel = () => {\n    clearTimeout(timerId);\n    timerId = undefined;\n  };\n\n  return debounced;\n}\n\nconst search = debounce(q => fetch(`/api?q=${q}`), 300);\ninput.addEventListener('input', e => search(e.target.value));",
+            "explanation": "clearTimeout + setTimeout resets quiet window. cancel() prevents fire after unmount. preserve this with apply."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "throttle (trailing)",
-            "code": "function throttle(fn, wait) {\n  let last = 0;\n  let timeoutId = null;\n  return function throttled(...args) {\n    const now = Date.now();\n    const remaining = wait - (now - last);\n    if (remaining <= 0) {\n      last = now;\n      fn.apply(this, args);\n    } else if (!timeoutId) {\n      timeoutId = setTimeout(() => {\n        last = Date.now();\n        timeoutId = null;\n        fn.apply(this, args);\n      }, remaining);\n    }\n  };\n}",
-            "explanation": "Ensures at most one call per wait window; schedules trailing call if invoked during cooldown."
+            "label": "Throttle from scratch (time-since-last-run)",
+            "code": "function throttle(fn, wait) {\n  let last = 0;\n  let trailingTimer = undefined;\n\n  return function throttled(...args) {\n    const now = Date.now();\n    const remaining = wait - (now - last);\n\n    if (remaining <= 0) {\n      if (trailingTimer) { clearTimeout(trailingTimer); trailingTimer = undefined; }\n      last = now;\n      fn.apply(this, args);\n    } else if (!trailingTimer) {\n      trailingTimer = setTimeout(() => {\n        last = Date.now();\n        trailingTimer = undefined;\n        fn.apply(this, args);\n      }, remaining);\n    }\n  };\n}",
+            "explanation": "Leading immediate when gap elapsed; schedules trailing call for end of window — lodash-style hybrid."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# Reactive throttle/debounce",
+            "code": "var throttled = Observable\n    .FromEventPattern<TextChangedEventArgs>(textBox, nameof(TextBox.TextChanged))\n    .Throttle(TimeSpan.FromMilliseconds(300))\n    .Select(_ => textBox.Text)\n    .Subscribe(query => SearchAsync(query));",
+            "explanation": "Rx Throttle ≈ debounce on event stream. Same semantics, different syntax — know mapping for cross-language interviews."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "React cleanup pattern",
-            "code": "useEffect(() => {\n  const onResize = debounce(() => setWidth(window.innerWidth), 150);\n  window.addEventListener('resize', onResize);\n  return () => {\n    onResize.cancel?.();\n    window.removeEventListener('resize', onResize);\n  };\n}, []);",
-            "explanation": "Cancel pending debounced calls on unmount — prevents setState on unmounted component."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Leading debounce for button spam",
-            "code": "function debounceLeading(fn, wait) {\n  let timeoutId = null;\n  return function (...args) {\n    if (!timeoutId) fn.apply(this, args);\n    clearTimeout(timeoutId);\n    timeoutId = setTimeout(() => { timeoutId = null; }, wait);\n  };\n}",
-            "explanation": "First click fires immediately; subsequent clicks ignored until wait elapses — UX for submit buttons."
+            "label": "Failure mode: debounce without cancel on SPA route change",
+            "code": "const save = debounce(async data => {\n  await fetch('/api/save', { method: 'POST', body: JSON.stringify(data) });\n}, 500);\n\n// User navigates away — component unmounts\n// 200ms later debounced save still fires → wrong page / memory leak\n\n// Fix: save.cancel() in useEffect cleanup or AbortController in fetch",
+            "explanation": "Timers survive component lifecycle unless cleared — pair debounce with cancel and abort signal."
           }
         }
       ]
@@ -141,50 +129,26 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Rate limiting patterns",
-          "headers": [
-            "Pattern",
-            "JavaScript",
-            "C#",
-            "TypeScript"
-          ],
+          "title": "Rate limiting UI handlers",
+          "headers": ["Tool", "JavaScript", "C#"],
           "rows": [
-            [
-              "Debounce",
-              "setTimeout + closure",
-              "Rx Throttle / custom timer",
-              "Typed wrappers around JS impl"
-            ],
-            [
-              "Throttle",
-              "timestamp + setTimeout",
-              "DispatcherTimer interval",
-              "Same runtime as JS"
-            ],
-            [
-              "Cleanup",
-              "cancel() + removeListener",
-              "CancellationToken",
-              "Return type includes cancel"
-            ],
-            [
-              "Precision",
-              "Event loop drift",
-              "Thread pool timers",
-              "No change at emit"
-            ]
+            ["Debounce implementation", "setTimeout closure", "Rx.Debounce / custom timer"],
+            ["Throttle implementation", "timestamp + timer", "Rx.Throttle / DispatcherTimer"],
+            ["Paint-aligned", "requestAnimationFrame", "CompositionTarget.Rendering"],
+            ["Library", "lodash.debounce", "System.Reactive"],
+            ["Cleanup", ".cancel(), clearTimeout", "Dispose subscription"]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes to avoid",
+      "heading": "Common mistakes",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Event handler pitfalls",
-          "body": "Forgetting to remove listeners and cancel timers. Debouncing scroll when throttle is correct. Creating new debounced fn every render without useMemo. Not preserving this binding. Using debounce for button double-submit without leading edge."
+          "title": "Pitfalls to avoid",
+          "body": "Using debounce for scroll position (use throttle or rAF). Forgetting cancel on unmount. Not preserving this/args. Confusing lodash debounce options (leading, trailing, maxWait) in interview without clarifying."
         }
       ]
     },
@@ -193,62 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Interviewers ask you to implement both from scratch, explain leading vs trailing, and discuss requestAnimationFrame for scroll versus setTimeout throttle. Mention lodash debounce options: maxWait, leading, trailing. For Node, debounce file watchers; for browsers, passive event listeners with throttle."
+          "text": "Interview extensions: implement **maxWait** (guarantee fire during long burst), **flush** (invoke pending immediately), and **async debounce** (ignore stale results with incrementing request id). In production measure: debounce 300ms search saves 90% API calls; throttle scroll to rAF for layout reads (getBoundingClientRect batching)."
         },
         {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "requestAnimationFrame throttle for scroll",
-            "code": "function rafThrottle(fn) {\n  let ticking = false;\n  return function (...args) {\n    if (!ticking) {\n      requestAnimationFrame(() => {\n        fn.apply(this, args);\n        ticking = false;\n      });\n      ticking = true;\n    }\n  };\n}",
-            "explanation": "Syncs with paint cycle — preferred for visual scroll updates over arbitrary ms throttle."
-          }
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "When it wins", "When it fails"],
+          "rows": [
+            ["Debounce trailing", "Search, form autosave", "Needs instant first response"],
+            ["Debounce leading", "Submit double-click guard", "Misses final state"],
+            ["Throttle", "Scroll, mousemove", "May skip final event — add trailing"],
+            ["requestAnimationFrame", "Visual updates", "Not wall-clock throttle for API"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot write debounce without lodash. Swap definitions of debounce and throttle. No mention of cancel/flush or stale async responses."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Debounce: execute after quiet period; throttle: cap rate per interval.",
-    "Always expose cancel() and call it on component unmount.",
-    "Scroll/resize: throttle or rAF; search input: debounce.",
-    "60s: Debounce coalesces bursts; throttle limits frequency. Closure + setTimeout. C# Rx Throttle analog. Cleanup prevents memory leaks and stale setState.",
-    "Follow-up: implement debounce with maxWait option."
+    "Debounce: reset timer — fire after quiet period (search).",
+    "Throttle: cap rate during continuous events (scroll).",
+    "Expose cancel() — timers outlive components without cleanup.",
+    "60s: Debounce trailing uses setTimeout reset. Throttle uses last-run timestamp. rAF for paint. Rx Throttle in C#. Cancel on unmount; AbortController for stale fetch.",
+    "Follow-up: add leading option and maxWait to your debounce."
   ],
   "commonPitfalls": [
-    "Weak: 'debounce and throttle are the same' — debounce waits for pause; throttle caps rate.",
-    "Weak: 'no cleanup needed' — pending timers fire after unmount.",
-    "Weak: 'use debounce for scroll' — throttle or rAF fits scroll better.",
-    "Strong: 'Implement both with cancel; pick by event semantics; cleanup listeners; compare to Rx Throttle.'"
+    "Using debounce where throttle is needed and vice versa.",
+    "No cancel on route change causing stray API calls.",
+    "Strong answer: write both from scratch, explain leading/trailing, cancel/flush, C# Rx mapping."
   ],
   "relatedTopicIds": [
+    "javascript-10-dom-events-and-delegation",
     "javascript-10-callback-patterns",
-    "javascript-10-event-emitter",
-    "javascript-10-dom-events-and-delegation"
+    "javascript-18-interview-utility-implementations"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Typing debounce/throttle",
-      "note": "Generic (...args: Parameters<F>) => void preserves callback signature. Return Debounced<F> with cancel method.",
-      "futureTopicSlug": "typescript/functions/higher-order-function-types"
+      "concept": "Generic HOF typing",
+      "note": "debounce<T extends (...args: any[]) => void>(fn: T): T & { cancel(): void } preserves parameter types of wrapped function.",
+      "futureTopicSlug": "typescript/functions/hof-typing"
     },
     {
-      "language": "typescript",
-      "concept": "React hook typing",
-      "note": "useMemo for stable debounced reference; useEffect cleanup typed with void return.",
-      "futureTopicSlug": "typescript/react-hooks"
+      "language": "javascript",
+      "concept": "requestAnimationFrame",
+      "note": "Alternative to throttle for visual work — tied to display refresh not wall clock.",
+      "futureTopicSlug": "javascript/browser/animation-frame"
     }
   ],
   "officialSources": [
-    {
-      "title": "setTimeout",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/API/setTimeout"
-    },
-    {
-      "title": "Event loop",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop"
-    }
+    { "title": "MDN — setTimeout", "url": "https://developer.mozilla.org/en-US/docs/Web/API/setTimeout" },
+    { "title": "lodash debounce docs", "url": "https://lodash.com/docs/#debounce" }
   ],
-  "animationHint": "timeline",
-  "scenarioTag": "high-concurrency"
+  "animationHint": "timeline"
 }
