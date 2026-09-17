@@ -4,31 +4,23 @@
   "title": "TypeScript collections versus C# generics collections",
   "moduleId": "typescript-08-collections-and-typed-data",
   "order": 6,
-  "hook": "TypeScript collections versus C# generics collections shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "TypeScript arrays and Map/Set erase at compile time — C# List<T> and Dictionary<K,V> enforce generics at runtime through the CLR. Knowing where types disappear prevents false confidence at JSON and API boundaries.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "TypeScript collections versus C# generics collections is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "TypeScript collection types (`T[]`, `Map<K,V>`, `Set<T>`) describe **compile-time** shapes only — emitted JavaScript uses plain Array and ES2015 Map/Set with no generic metadata. C# **List<T>**, **Dictionary<K,V>**, **HashSet<T>**, and **IReadOnlyList<T>** carry runtime type information via generics, with **where** constraints on keys and values. TypeScript uses **structural typing** — if it looks like an array, it is `T[]`. C# uses **nominal typing** — only declared implementations satisfy interfaces."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            {
-              "term": "collections",
-              "longForm": "TypeScript collections versus C# generics collections",
-              "plainDefinition": "The central idea behind \"TypeScript collections versus C# generics collections\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
-            },
-            {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
-            }
+            { "term": "type erasure", "longForm": "type erasure", "plainDefinition": "TS generics vanish on emit — no T at runtime.", "example": "const xs: number[] = [1]; // runtime: Array" },
+            { "term": "CLR generics", "longForm": "CLR generic collections", "plainDefinition": "C# runtime retains type args — List<int> vs List<string> are different types.", "example": "Dictionary<string, User>" },
+            { "term": "structural typing", "longForm": "structural typing", "plainDefinition": "TS matches by shape — duck typing at compile time.", "example": "{ length: number } usable where array-like expected" },
+            { "term": "IReadOnlyList", "longForm": "IReadOnlyList<T>", "plainDefinition": "C# read-only collection interface with runtime wrapper.", "example": "void Sum(IReadOnlyList<int> xs)" }
           ]
         }
       ]
@@ -38,14 +30,9 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand TypeScript collections versus C# generics collections beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "C# developers moving to TypeScript often assume `List<User>` safety extends to runtime — it does not. `JSON.parse` returns `any` or `unknown`, not `User[]`. `fetch` does not deserialize to `Dictionary`. Interop between .NET APIs and TS frontends requires explicit validation (Zod, manual guards). Senior interviews compare covariance (`IReadOnlyList` vs `readonly T[]`), nullability (`T?` vs `T | undefined`), and when to mirror C# patterns with TS utility types."
         },
-        {
-          "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"TypeScript collections versus C# generics collections\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
-        }
+        { "type": "callout", "variant": "remember", "title": "Boundary rule", "body": "TS types end at the wire — validate JSON into typed collections at every API boundary." }
       ]
     },
     {
@@ -53,32 +40,20 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Mapping C# collections to TypeScript",
           "items": [
-            {
-              "title": "Read the syntax",
-              "body": "Find where TypeScript collections versus C# generics collections appears in real code — a function, type annotation, or runtime API."
-            },
-            {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
-            },
-            {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
-            },
-            {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
-            }
+            { "title": "List<T> → T[]", "body": "Dynamic array — same amortized O(1) push." },
+            { "title": "Dictionary<K,V> → Map<K,V> or Record", "body": "Map for any keys; Record for string JSON keys." },
+            { "title": "HashSet<T> → Set<T>", "body": "Unique values — SameValueZero vs IEqualityComparer." },
+            { "title": "IReadOnlyList<T> → readonly T[]", "body": "Compile-time only in TS — no runtime wrapper." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "TypeScript collections versus C# generics collections flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Compile-time vs runtime collection typing",
+            "source": "flowchart TD\n  TS[TypeScript T[]] -->|emit| JS[JavaScript Array]\n  CS[C# List T] -->|JIT| CLR[CLR List T runtime generic]"
           }
         }
       ]
@@ -90,36 +65,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic TypeScript collections versus C# generics collections",
-            "code": "// TypeScript collections versus C# generics collections\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'collections-vs-csharp',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to TypeScript collections versus C# generics collections. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "JSON boundary — types do not survive wire",
+            "code": "interface User { id: string; name: string; }\n\nasync function loadUsers(): Promise<User[]> {\n  const res = await fetch('/api/users');\n  const raw: unknown = await res.json();\n  if (!Array.isArray(raw)) throw new Error('expected array');\n  return raw.filter(isUser);\n}\n\nfunction isUser(x: unknown): x is User {\n  return typeof x === 'object' && x !== null &&\n    'id' in x && typeof (x as User).id === 'string' &&\n    'name' in x && typeof (x as User).name === 'string';\n}",
+            "explanation": "C# Web API might return List<UserDto> with runtime type — TS fetch gets unknown JSON. Must validate each element into User[]."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Dictionary vs Map interop",
+            "code": "// C# serializes Dictionary<string, int> as JSON object\nconst json = '{\"ada\": 95, \"linus\": 88}';\n\n// Record for JSON-shaped dict\ntype ScoreMap = Record<string, number>;\nconst scores: ScoreMap = JSON.parse(json); // still unsafe — validate\n\n// Map for runtime mutations with non-string keys\nconst cache = new Map<object, ScoreMap>();",
+            "explanation": "JSON objects map to Record<string, T> in TS. C# Dictionary string keys deserialize to plain object — not Map instance."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "readonly vs IReadOnlyList semantics",
+            "code": "function sum(nums: readonly number[]): number {\n  return nums.reduce((a, b) => a + b, 0);\n}\n\n// C# IReadOnlyList<int> would throw on Add at runtime\n// TS readonly — caller can still mutate original if they keep mutable ref:\nconst data = [1, 2, 3];\nsum(data);\ndata.push(4); // still works at runtime",
+            "explanation": "TS readonly is not a runtime guard. C# IReadOnlyList wrapper can enforce on mutation attempts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — trusting API generic type",
+            "code": "type OrderDto = { items: { sku: string; qty: number }[] };\n\n// Anti-pattern — cast without validation:\nasync function bad(): Promise<OrderDto> {\n  const res = await fetch('/orders/1');\n  return res.json() as OrderDto; // lies to compiler\n}",
+            "explanation": "as OrderDto provides zero runtime safety. Same mistake as casting dynamic in C# without validation."
           }
         }
       ]
@@ -129,29 +104,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "TypeScript collections versus C# generics collections across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Collection type systems",
+          "headers": ["Aspect", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Runtime generics", "No — erased", "No", "Yes — CLR"],
+            ["List type", "T[]", "Array", "List<T>, T[]"],
+            ["Dictionary", "Map / Record", "Object", "Dictionary<K,V>"],
+            ["Read-only", "readonly (compile)", "freeze optional", "IReadOnlyList<T>"],
+            ["Null safety", "strictNullChecks", "undefined/null", "Nullable reference types"]
           ]
         }
       ]
@@ -159,12 +119,8 @@
     {
       "heading": "Common mistakes",
       "blocks": [
-        {
-          "type": "callout",
-          "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating TypeScript collections versus C# generics collections as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
-        }
+        { "type": "callout", "variant": "warning", "title": "Assuming deserialized JSON is typed", "body": "List<User> in OpenAPI docs does not make fetch return User[] — validate." },
+        { "type": "callout", "variant": "warning", "title": "Record for object-keyed Map", "body": "C# reference-type keys need Map in TS — Record only supports string | number | symbol keys as properties." }
       ]
     },
     {
@@ -172,83 +128,40 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around TypeScript collections versus C# generics collections, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "OpenAPI/Swagger codegen generates TS interfaces — still no runtime guarantee unless paired with validators. C# source generators and TS satisfy different layers. For shared DTOs in monorepos, consider JSON Schema or protobuf as the contract. Covariance: C# IEnumerable<out T> vs TS readonly array covariance. Performance: C# Span<T> has no TS equivalent — use TypedArray for numeric buffers."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Strategy", "Wins", "Fails"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Zod parse at boundary", "Runtime + inferred TS type", "Duplication with C# models"],
+            ["OpenAPI codegen", "Sync API contract", "No runtime validation alone"],
+            ["Shared JSON Schema", "Cross-language truth", "Tooling overhead"],
+            ["Manual guards", "No dependency", "Maintenance burden"]
           ]
         },
-        {
-          "type": "callout",
-          "variant": "warning",
-          "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"TypeScript collections versus C# generics collections just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
-        }
+        { "type": "callout", "variant": "warning", "title": "What gets you rejected in interviews", "body": "Believing TS generics exist at runtime. Casting fetch.json() to interface. Cannot map Dictionary/List/HashSet to TS equivalents." }
       ]
     }
   ],
   "interviewTakeaways": [
-    "TypeScript collections versus C# generics collections: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for collections-vs-csharp.",
-    "Production: validate external input before applying TypeScript collections versus C# generics collections; log failures with context.",
-    "60s: TypeScript collections versus C# generics collections — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "TS collection generics erase — CLR keeps them at runtime.",
+    "List<T>→T[], Dictionary→Map/Record, HashSet→Set, IReadOnlyList→readonly T[].",
+    "JSON boundaries need validation — types do not cross the wire.",
+    "60s: TS types are compile-time contracts on JS runtime collections. C# enforces at CLR. Always validate API JSON. readonly ≠ IReadOnlyList runtime guard.",
+    "Follow-up: OpenAPI codegen limits, Zod at boundaries, covariance comparison."
   ],
   "commonPitfalls": [
-    "Weak answer: \"TypeScript collections versus C# generics collections is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define TypeScript collections versus C# generics collections, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: \"TypeScript List<T> like C#\" — no runtime List type.",
+    "res.json() as User[] without validation.",
+    "Strong: \"Generics erase on emit. Validate unknown into T[]. Map C# collections to TS equivalents by behavior not runtime type.\""
   ],
-  "relatedTopicIds": [
-    "typescript-08-array-and-tuple-types",
-    "typescript-08-map-set-typed",
-    "typescript-08-satisfies-operator"
-  ],
+  "relatedTopicIds": ["typescript-08-map-set-typed", "typescript-11-narrowing-at-api-boundaries", "typescript-01-erasable-types-and-runtime"],
   "jsTsCorrelations": [
-    {
-      "language": "javascript",
-      "concept": "TypeScript collections versus C# generics collections",
-      "note": "Compare TypeScript collections versus C# generics collections in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/collections-and-typed-data/collections-vs-csharp"
-    },
-    {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map TypeScript collections versus C# generics collections to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/8/collections-vs-csharp"
-    }
+    { "language": "javascript", "concept": "JSON.parse", "note": "JS JSON.parse returns plain objects/arrays — TS types are annotations only unless validated.", "futureTopicSlug": "javascript/data/json" },
+    { "language": "typescript", "concept": "List<T>", "note": "C# List<T> is a runtime generic type with capacity semantics; TS T[] is a compile-time view over JS Array.", "futureTopicSlug": "csharp/collections/list" }
   ],
-  "officialSources": [
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
-    }
-  ],
-  "animationHint": "flow"
+  "officialSources": [{ "title": "TypeScript handbook — Type Erasure", "url": "https://www.typescriptlang.org/docs/handbook/2/generics.html" }],
+  "animationHint": "compare"
 }
