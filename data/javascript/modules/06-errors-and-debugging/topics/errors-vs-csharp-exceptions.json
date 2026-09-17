@@ -1,0 +1,317 @@
+{
+  "id": "javascript-06-errors-vs-csharp-exceptions",
+  "slug": "errors-vs-csharp-exceptions",
+  "title": "JavaScript errors versus C# exceptions",
+  "moduleId": "javascript-06-errors-and-debugging",
+  "order": 5,
+  "hook": "Both languages signal failure with throw and try/catch, but C# enforces typed Exception objects and multiple catch clauses. JavaScript accepts any thrown value and handles async failures through promises — a different second channel.",
+  "sections": [
+    {
+      "heading": "Two models of failure",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**C# exceptions** are objects derived from `System.Exception`. The **Common Language Runtime (CLR)** unwinds the stack until a compatible **catch** runs or the thread dies. **JavaScript errors** use the same keywords — throw, try, catch, finally — but the language places almost no restrictions on what you throw. TypeScript adds compile-time honesty (`catch (e: unknown)`) without changing runtime. Async C# uses **Task** with await in try/catch; JavaScript uses **Promise** rejections that require **await** or `.catch()` — unhandled rejections are not caught by a bare try around a non-awaited call."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": ".NET runtime that enforces Exception types and unwinds the call stack on throw.",
+              "example": "catch (IOException ex) — CLR matches thrown type"
+            },
+            {
+              "term": "Exception",
+              "longForm": "System.Exception",
+              "plainDefinition": "C# base type for all thrown failures. JavaScript has no single required base — Error is conventional.",
+              "example": "throw new ArgumentException(\"bad id\");"
+            },
+            {
+              "term": "unknown",
+              "longForm": "unknown in catch",
+              "plainDefinition": "TypeScript type for catch parameter — reflects that anything might be thrown at runtime.",
+              "example": "catch (e: unknown) { if (e instanceof Error) ... }"
+            },
+            {
+              "term": "IDisposable",
+              "longForm": "IDisposable",
+              "plainDefinition": "C# interface for deterministic cleanup via using. JavaScript uses try/finally or explicit close() — no language using statement.",
+              "example": "using var stream = File.OpenRead(path);"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Engineers moving between C# backends and JavaScript frontends or Node services hit the same bugs: throwing strings in JS because C# would not compile it; forgetting that fetch + promises need await in try; expecting multiple catch blocks in JS. Mapping concepts explicitly — when filter ↔ if inside catch, InnerException ↔ cause, using ↔ try/finally — speeds code review and interview answers."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Same keywords, different guarantees",
+          "body": "finally always runs in both languages. Typed catch, when filters, and throw; versus throw ex only exist in C#. JS adds unhandledRejection as a parallel to unobserved Tasks."
+        }
+      ]
+    },
+    {
+      "heading": "Side-by-side mental model",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Translate C# habits to JavaScript",
+          "items": [
+            {
+              "title": "throw new ArgumentException → throw new Error or custom class",
+              "body": "Use Error subclasses and instanceof checks. No compiler enforcement."
+            },
+            {
+              "title": "catch (IOException ex) when (...) → single catch + if",
+              "body": "Inspect err.status, err.code, or err.name inside one catch block."
+            },
+            {
+              "title": "throw; rethrow → throw err",
+              "body": "Rethrow the same object. Wrap with new Error(msg, { cause: err }) like InnerException."
+            },
+            {
+              "title": "using / await using → try/finally with close()",
+              "body": "Call stream.close(), db.release(), or AbortController.abort() in finally."
+            },
+            {
+              "title": "Task unobserved → unhandledRejection",
+              "body": "Always await or attach .catch at async boundaries."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "C# vs JavaScript failure channels",
+            "source": "flowchart TB\n  subgraph CSHARP[C#]\n    T1[throw Exception] --> CLR[CLR unwind]\n    CLR --> C1[typed catch / when]\n    C1 --> F1[finally / using Dispose]\n  end\n  subgraph JS[JavaScript]\n    T2[throw any value] --> SYNC[sync unwind]\n    SYNC --> C2[single catch + if]\n    C2 --> F2[finally]\n    P[Promise reject] --> UR[unhandledRejection if no handler]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "JavaScript equivalent of C# when filter",
+            "code": "// C#: catch (HttpRequestException ex) when (ex.StatusCode == TooManyRequests)\n\ntry {\n  await callApi();\n} catch (err) {\n  if (err instanceof HttpError && err.status === 429) {\n    await backoff();\n    return;\n  }\n  if (err instanceof HttpError) {\n    logger.error(err);\n    throw err;\n  }\n  throw err;\n}",
+            "explanation": "Line 1: comment documents the C# source pattern. Line 6: manual when — type check plus property filter in one catch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# reference — typed catch and when",
+            "code": "try\n{\n    await CallApiAsync();\n}\ncatch (HttpRequestException ex) when (ex.StatusCode == TooManyRequests)\n{\n    await BackoffAsync();\n}\ncatch (HttpRequestException ex)\n{\n    _logger.LogError(ex, \"API failed\");\n    throw;\n}",
+            "explanation": "Line 5: compiler-enforced type plus when filter. JavaScript cannot express this as two catch clauses — branch inside one catch instead."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "cause versus InnerException",
+            "code": "// C#: throw new InvalidOperationException(\"config bad\", inner);\n\ntry {\n  JSON.parse(raw);\n} catch (parseErr) {\n  throw new Error('invalid config', { cause: parseErr });\n}\n\n// logging boundary:\nfunction logError(err) {\n  console.error(err.message);\n  if (err.cause) console.error('caused by', err.cause);\n}",
+            "explanation": "Line 5: cause carries the root SyntaxError. Line 11: walk the chain like logging ex.InnerException in C#."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "using versus try/finally in JS",
+            "code": "// C#: using var conn = new SqlConnection(cs);\n\nconst conn = await pool.acquire();\ntry {\n  await conn.query(sql);\n} finally {\n  conn.release(); // manual Dispose equivalent\n}\n\n// ES2024+ Explicit Resource Management (when available):\n// using disposer = acquire();\n// disposer[Symbol.dispose]() runs at end of block",
+            "explanation": "Line 6: finally releases the connection — same guarantee as C# using. Line 10: JS is adding using via Symbol.dispose — know it for interviews but verify runtime support."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Full comparison table",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "JavaScript errors vs C# exceptions",
+          "headers": [
+            "Topic",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Thrown value",
+              "Any value; Error is conventional",
+              "Must inherit System.Exception"
+            ],
+            [
+              "Catch typing",
+              "One catch; runtime instanceof",
+              "Multiple catches; most-derived first"
+            ],
+            [
+              "Filter",
+              "if inside catch",
+              "when clause"
+            ],
+            [
+              "finally",
+              "Always runs",
+              "Always runs"
+            ],
+            [
+              "Deterministic cleanup",
+              "try/finally, Symbol.dispose (emerging)",
+              "using / await using → Dispose"
+            ],
+            [
+              "Rethrow preserve stack",
+              "throw same err; throw; N/A",
+              "throw; preserves StackTrace"
+            ],
+            [
+              "Wrap root cause",
+              "Error(message, { cause })",
+              "new Outer(msg, inner)"
+            ],
+            [
+              "Async unhandled",
+              "unhandledRejection",
+              "UnobservedTaskException"
+            ],
+            [
+              "Expected failure pattern",
+              "Return null / { ok: false }",
+              "TryParse / Result<T>"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Porting C# catch order to JavaScript",
+          "body": "Multiple catch blocks for different exception types do not exist in JS. One catch with if/else instanceof branches is the idiomatic translation."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming TypeScript catch types are enforced",
+          "body": "catch (e: TypeError) does not make runtime only throw TypeError. Narrow with instanceof like you would treat catch as unknown."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: polyglot teams should document boundary contracts — HTTP APIs return JSON errors; internal JS throws HttpError; C# services throw ProblemDetails-mapped exceptions. Neither language makes Result versus throw free — measure exception rates and rejection counts. C# compiler prevents throw \"text\"; JS needs lint rules (no-throw-literal ESLint). Cross-language OpenTelemetry links spans across Node and .NET with exception events on both sides. Senior answer: choose throw for invariant breaks and unrecoverable I/O; return Result or error objects for expected validation — in both ecosystems."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Decision",
+            "JavaScript approach",
+            "C# approach"
+          ],
+          "rows": [
+            [
+              "API 400 validation",
+              "Return { error: fields }",
+              "return BadRequest(ValidationProblemDetails)"
+            ],
+            [
+              "Library bug",
+              "throw TypeError",
+              "throw ArgumentException"
+            ],
+            [
+              "Transient HTTP 429",
+              "catch + backoff in JS",
+              "catch when StatusCode == 429"
+            ],
+            [
+              "Resource cleanup",
+              "finally release()",
+              "using statement"
+            ],
+            [
+              "Observability",
+              "err.stack + source maps",
+              "ex.StackTrace + PDB"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming JS and C# exception models are identical. Not knowing JS can throw non-Error values. Missing the async rejection channel. Saying TypeScript enforces catch types at runtime."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "C# requires Exception types; JS throws anything — discipline is conventional Error.",
+    "C# multiple catch + when → JS single catch with instanceof/if.",
+    "InnerException ↔ cause; using ↔ try/finally; unobserved Task ↔ unhandledRejection.",
+    "60s: Same keywords, different rules. Typed catch only in C#. await for async. cause and finally map cleanly.",
+    "Follow-up: how would you port a C# when filter to JavaScript?"
+  ],
+  "commonPitfalls": [
+    "Multiple catch blocks in JS — syntax does not exist.",
+    "TypeScript catch type annotation trusted at runtime.",
+    "Strong answer: 'Map when to if in catch. cause to InnerException. Result/Try for expected in both. await promise errors.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-06-error-types-and-throwing",
+    "javascript-06-try-catch-finally",
+    "javascript-06-unhandled-rejections",
+    "javascript-06-stack-traces-and-debugging"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "exception handling model",
+      "note": "C# comparison: Full C# module 06 covers hierarchy, throw;, and using. This topic is the Rosetta stone for JS engineers interviewing on both stacks.",
+      "futureTopicSlug": "csharp/exceptions/overview"
+    },
+    {
+      "language": "typescript",
+      "concept": "errors at type level only",
+      "note": "TypeScript never changes what can be thrown — use unknown in catch and custom type guards.",
+      "futureTopicSlug": "typescript/errors/vs-exceptions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Exception handling — C# docs",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/exceptions/"
+    },
+    {
+      "title": "Error handling — MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Control_flow_and_error_handling"
+    }
+  ],
+  "animationHint": "compare"
+}

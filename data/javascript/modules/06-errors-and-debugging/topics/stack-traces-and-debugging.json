@@ -1,0 +1,295 @@
+{
+  "id": "javascript-06-stack-traces-and-debugging",
+  "slug": "stack-traces-and-debugging",
+  "title": "Stack traces, breakpoints, and source maps",
+  "moduleId": "javascript-06-errors-and-debugging",
+  "order": 4,
+  "hook": "A stack trace lists which functions were running when an error happened. Browser DevTools and Node inspect let you pause on breakpoints, step through code, and map minified bundles back to TypeScript with source maps.",
+  "sections": [
+    {
+      "heading": "What is a stack trace?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "When an **Error** is thrown, the JavaScript engine captures a **stack trace** — a list of function calls from the throw site up to the entry point. On V8 (Chrome and Node), it lives on the `stack` property as a multi-line string. Each line typically shows the function name, file, and line number. **Source maps** are separate files that map bundled/minified code back to original TypeScript so DevTools displays the correct lines. Without source maps, debugging production builds means reading one-letter variable names in line 1 of bundle.js."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "stack trace",
+              "longForm": "stack trace",
+              "plainDefinition": "Ordered list of call frames at the moment an error was created or thrown.",
+              "example": "Error: boom\\n    at loadUser (app.js:42:11)"
+            },
+            {
+              "term": "breakpoint",
+              "longForm": "breakpoint",
+              "plainDefinition": "A debugger marker that pauses execution before a specific line runs.",
+              "example": "Click line 42 in Chrome Sources panel"
+            },
+            {
+              "term": "source map",
+              "longForm": "source map",
+              "plainDefinition": "JSON file linking compiled output lines to original source files for debugging.",
+              "example": "//# sourceMappingURL=app.js.map"
+            },
+            {
+              "term": "debugger",
+              "longForm": "debugger statement",
+              "plainDefinition": "JavaScript keyword that triggers a breakpoint when DevTools is open.",
+              "example": "debugger; // pauses here if inspector attached"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Production incidents are won or lost on stack quality. Throwing strings erases frames. Wrapping without `cause` hides the root line. Source maps must ship to your error tracker (Sentry, Datadog) but not necessarily to public users — balance debuggability with exposing source. C# StackTrace on Exception is the same idea; both ecosystems punish `throw ex` / resetting stacks."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Stack is captured at creation time",
+          "body": "new Error('x') captures stack when constructed, not when thrown. Reusing one Error object across throws can show a misleading origin — create a fresh Error per failure."
+        }
+      ]
+    },
+    {
+      "heading": "Debugging workflow",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Browser and Node debugging",
+          "items": [
+            {
+              "title": "Reproduce with DevTools open",
+              "body": "Chrome/Edge/Firefox Sources panel or Node --inspect / node inspect script.js."
+            },
+            {
+              "title": "Set breakpoints or use debugger",
+              "body": "Pause before suspicious lines. Inspect locals, call stack, and scope chain."
+            },
+            {
+              "title": "Step over, into, out",
+              "body": "F10 step over, F11 step into, Shift+F11 step out — same mental model as Visual Studio."
+            },
+            {
+              "title": "Enable source maps",
+              "body": "DevTools Settings → enable JavaScript source maps. Build tools emit .map files alongside bundles."
+            },
+            {
+              "title": "Read the stack on failure",
+              "body": "Console shows err.stack. Copy to error tracker with source map resolution for original filenames."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "From throw to readable frame",
+            "source": "flowchart LR\n  THROW[throw new Error] --> V8[V8 captures stack frames]\n  V8 --> BUNDLE[bundle.js line 1 col 9000]\n  BUNDLE --> MAP[source map lookup]\n  MAP --> TS[user.service.ts line 42]\n  TS --> DEV[DevTools displays original file]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Reading and logging stack traces",
+            "code": "function loadUser(id) {\n  if (!id) throw new Error('id required');\n  return { id, name: 'Ada' };\n}\n\nfunction handleRequest(params) {\n  return loadUser(params.id);\n}\n\ntry {\n  handleRequest({});\n} catch (err) {\n  console.error(err.message); // 'id required'\n  console.error(err.stack);\n  // Error: id required\n  //     at loadUser (app.js:2:18)\n  //     at handleRequest (app.js:7:10)\n  //     at ...\n}",
+            "explanation": "Line 2: throw site appears at the top of the stack (below the message). Line 12: log stack in production — message alone loses call context."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "debugger statement and conditional breakpoints",
+            "code": "function processRows(rows) {\n  for (const row of rows) {\n    debugger; // remove before commit — or use conditional breakpoint: row.id === 'bad-1'\n    validate(row);\n  }\n}\n\n// Node: node --inspect-brk server.js\n// then attach Chrome DevTools via chrome://inspect",
+            "explanation": "Line 3: debugger pauses only when inspector is attached. Line 7: --inspect-brk pauses on first line — useful for startup debugging."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Error.captureStackTrace (V8 / Node)",
+            "code": "class AppError extends Error {\n  constructor(code, message) {\n    super(message);\n    this.code = code;\n    // Hide constructor frames from stack — cleaner top frame\n    if (Error.captureStackTrace) {\n      Error.captureStackTrace(this, AppError);\n    }\n  }\n}\n\nthrow new AppError('E_AUTH', 'token expired');\n// stack starts at throw site, not inside AppError constructor",
+            "explanation": "Line 6: Node/V8 API trims internal frames — similar to skipping infrastructure in C# stack traces. Not available in all browsers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Source map comment in bundled output",
+            "code": "// webpack / esbuild / vite output (simplified)\n(()=>{throw new Error('fail')})();\n//# sourceMappingURL=main.js.map\n\n// tsconfig / build: \"sourceMap\": true\n// Upload main.js.map to error tracker — not always to public CDN",
+            "explanation": "Line 2: sourceMappingURL tells DevTools where to find the map. Line 5: enable in build config. Line 6: security — maps expose original source; restrict access in production."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Debugging stacks across ecosystems",
+          "headers": [
+            "Aspect",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Stack on object",
+              "err.stack string (V8)",
+              "ex.StackTrace property"
+            ],
+            [
+              "IDE debugging",
+              "Chrome DevTools, VS Code attach",
+              "Visual Studio / VS Code debugger"
+            ],
+            [
+              "PDB / source maps",
+              ".map files for JS bundles",
+              ".pdb for compiled assemblies"
+            ],
+            [
+              "Preserve on rethrow",
+              "throw same err object",
+              "throw; preserves, throw ex; resets"
+            ],
+            [
+              "Async stacks",
+              "async/await stacks include await frames",
+              "async stacks with Task names"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Logging only err.message",
+          "body": "Production alerts without stack cannot tell which code path failed. Always log stack (or use a library that serializes it)."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Missing source maps in production",
+          "body": "Stack points to bundle.js:1:40000. Upload maps to your monitoring tool even if you do not serve them publicly."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Sentry release + source map upload resolves frames to original paths. V8 stack trace limit defaults to 10 frames — Error.stackTraceLimit = 50 for deep async chains. console.trace() prints current stack without throwing. Cross-realm errors (iframe) break instanceof and sometimes stack formatting. Node --enable-source-maps (stable in recent Node) applies maps without DevTools. Performance: collecting stack is relatively expensive — do not create Error in hot loops for control flow. C# PDB and JS source maps solve the same problem: symbolic debugging of optimized output."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Technique",
+            "Use for",
+            "Avoid for"
+          ],
+          "rows": [
+            [
+              "debugger statement",
+              "Local repro",
+              "Committed production code"
+            ],
+            [
+              "conditional breakpoint",
+              "Rare row in big loop",
+              "Logging every iteration"
+            ],
+            [
+              "Error.captureStackTrace",
+              "Library custom errors in Node",
+              "Portable browser library code"
+            ],
+            [
+              "Public source maps",
+              "Open source demos",
+              "Proprietary logic on CDN"
+            ],
+            [
+              "console.trace",
+              "Quick where-am-I",
+              "Permanent logging"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain difference between message and stack. Never heard of source maps. Thinking minified production stacks are sufficient without maps. Saying throw new Error() and throw err reset stack the same way C# throw ex does."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "err.stack shows call frames; log it in production, not just message.",
+    "Source maps link bundles to TypeScript — upload to error trackers.",
+    "debugger and DevTools breakpoints mirror VS debugging.",
+    "60s: Stack on Error. Source maps for bundles. captureStackTrace in Node. throw same err preserves stack.",
+    "Follow-up: when is stack captured — at new Error or at throw?"
+  ],
+  "commonPitfalls": [
+    "Production logs with message only — no stack.",
+    "No source maps — unreadable bundle line numbers.",
+    "Strong answer: 'Error.stack at creation. Maps to TS in Sentry. captureStackTrace for clean library stacks. Never throw strings.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-06-error-types-and-throwing",
+    "javascript-06-try-catch-finally",
+    "javascript-06-errors-vs-csharp-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "StackTrace and PDB",
+      "note": "C# StackTrace on Exception maps to compiled IL with PDB symbols. JavaScript uses source maps for the same debugging experience on transpiled code.",
+      "futureTopicSlug": "csharp/exceptions/stack-trace"
+    },
+    {
+      "language": "typescript",
+      "concept": "sourceMap compiler option",
+      "note": "TypeScript sourceMap: true emits .js.map files. DevTools and Node --enable-source-maps consume them.",
+      "futureTopicSlug": "typescript/tooling/source-maps"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Stack trace — MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error/stack"
+    },
+    {
+      "title": "Chrome DevTools — JavaScript debugging",
+      "url": "https://developer.chrome.com/docs/devtools/javascript"
+    }
+  ],
+  "animationHint": "flow"
+}

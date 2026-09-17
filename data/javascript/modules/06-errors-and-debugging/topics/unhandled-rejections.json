@@ -1,0 +1,291 @@
+{
+  "id": "javascript-06-unhandled-rejections",
+  "slug": "unhandled-rejections",
+  "title": "Unhandled promise rejections and process.on",
+  "moduleId": "javascript-06-errors-and-debugging",
+  "order": 3,
+  "hook": "A rejected promise with no .catch handler becomes an unhandled rejection — not the same as a synchronous throw. Node.js can exit; browsers log to the console. You must attach handlers at process and promise boundaries.",
+  "sections": [
+    {
+      "heading": "What is an unhandled rejection?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "When a **Promise** rejects and nothing handles that rejection — no `.catch()`, no `await` inside `try/catch`, no `.then(_, onRejected)` — the runtime emits an **unhandledrejection** event (browser) or **unhandledRejection** on `process` (Node.js). This is separate from a synchronous **throw**: `try/catch` around code that *returns* a rejected promise without `await` will not catch it. Unhandled rejections are the async equivalent of an uncaught exception and often indicate a missing `.catch` at a boundary."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Promise rejection",
+              "longForm": "rejected Promise",
+              "plainDefinition": "A Promise settled with a failure reason via reject() or throw inside an async executor.",
+              "example": "Promise.reject(new Error('timeout'))"
+            },
+            {
+              "term": "unhandledrejection",
+              "longForm": "unhandledrejection event",
+              "plainDefinition": "Browser event when a promise rejects with no handler attached by the time the microtask queue drains.",
+              "example": "window.addEventListener('unhandledrejection', e => { ... })"
+            },
+            {
+              "term": "unhandledRejection",
+              "longForm": "process unhandledRejection",
+              "plainDefinition": "Node.js process event for the same situation. Default behavior may exit the process with a non-zero code.",
+              "example": "process.on('unhandledRejection', (reason, promise) => { ... })"
+            },
+            {
+              "term": "uncaughtException",
+              "longForm": "uncaught synchronous exception",
+              "plainDefinition": "A throw that never hits catch — different channel from unhandled rejection but both need top-level handlers in servers.",
+              "example": "process.on('uncaughtException', err => { ... })"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Server processes that leave rejections unhandled can exit mid-request, corrupt in-flight work, or succeed HTTP responses while background tasks fail silently. C# has a parallel story with **unobserved Task exceptions** — module 13 covers async deeply; here the rule is simple: every promise chain needs a terminal handler at the worker boundary, and Node services register `process.on('unhandledRejection')` for last-resort logging."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "try/catch does not catch bare promises",
+          "body": "try { doAsync(); } catch — useless if doAsync returns a promise. You need try { await doAsync(); } catch or doAsync().catch(...)."
+        }
+      ]
+    },
+    {
+      "heading": "How unhandled rejections propagate",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From reject to crash or log",
+          "items": [
+            {
+              "title": "Promise rejects",
+              "body": "async function throw, Promise.reject, or failed await inside async propagates a rejection."
+            },
+            {
+              "title": "Microtask schedules handlers",
+              "body": "Attached .catch or awaiting parent gets a chance to run in the same tick or soon after."
+            },
+            {
+              "title": "No handler found",
+              "body": "Runtime emits unhandledrejection / unhandledRejection with the reason (often an Error)."
+            },
+            {
+              "title": "Host policy",
+              "body": "Browser: console error (may not kill the tab). Node 15+: default may terminate. Always handle at boundaries in production servers."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Sync throw vs unhandled rejection",
+            "source": "flowchart TD\n  SYNC[throw in sync code] --> TC{try/catch?}\n  TC -->|yes| HANDLED[Handled]\n  TC -->|no| UNCAUGHT[uncaughtException]\n  ASYNC[Promise rejects] --> AW{await or .catch?}\n  AW -->|yes| HANDLED2[Handled]\n  AW -->|no| UNH[unhandledRejection]\n  UNH --> NODE[Node may exit]\n  UNCAUGHT --> NODE2[Node may exit]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "try/catch only works with await",
+            "code": "async function flaky() {\n  throw new Error('boom');\n}\n\n// BUG: rejection is unhandled\nfunction broken() {\n  try {\n    flaky(); // returns a Promise — does not throw synchronously\n  } catch (err) {\n    console.log('never runs', err);\n  }\n}\n\n// FIX:\nasync function fixed() {\n  try {\n    await flaky();\n  } catch (err) {\n    console.log('caught', err.message);\n  }\n}",
+            "explanation": "Line 8: calling async function without await returns a pending promise — try/catch sees no throw. Line 17: await transfers rejection into catch as a synchronous-looking flow."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Node.js process-level handlers",
+            "code": "process.on('unhandledRejection', (reason, promise) => {\n  console.error('Unhandled rejection at:', promise, 'reason:', reason);\n  // log to observability — do not assume the process is healthy\n});\n\nprocess.on('uncaughtException', (err) => {\n  console.error('Uncaught exception:', err);\n  // graceful shutdown — close server, flush logs, then exit\n  process.exit(1);\n});\n\n// Express route — still catch per request:\napp.get('/users/:id', async (req, res, next) => {\n  try {\n    const user = await loadUser(req.params.id);\n    res.json(user);\n  } catch (err) {\n    next(err); // forward to error middleware\n  }\n});",
+            "explanation": "Line 1: last-resort net for stray promises. Line 6: sync throws that escape. Line 12: per-request try/catch still required — process handlers are not a substitute for boundary handling."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Browser unhandledrejection",
+            "code": "window.addEventListener('unhandledrejection', (event) => {\n  console.error('Unhandled promise rejection:', event.reason);\n  event.preventDefault(); // may suppress default console noise — still fix the root cause\n});\n\nfunction fireAndForget() {\n  fetch('/api/metrics').then(r => {\n    if (!r.ok) throw new Error(`metrics ${r.status}`);\n  }); // missing .catch — triggers unhandledrejection if fetch fails\n}",
+            "explanation": "Line 1: global listener for debugging. Line 9: fire-and-forget fetch without .catch is a classic unhandled rejection source."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode: forEach with async callbacks",
+            "code": "const ids = ['a', 'b', 'c'];\n\n// BUG: rejections inside async callback are unhandled\nids.forEach(async (id) => {\n  const row = await loadRow(id); // if this throws, outer try cannot catch\n  processRow(row);\n});\n\n// FIX: collect promises and handle once\nasync function processAll() {\n  await Promise.all(ids.map(async (id) => {\n    const row = await loadRow(id);\n    processRow(row);\n  }));\n}",
+            "explanation": "Line 5: forEach ignores returned promises — async throws become unhandled. Line 12: Promise.all surfaces the first rejection to an outer await/catch."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Async failure channels",
+          "headers": [
+            "Channel",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Sync uncaught",
+              "uncaughtException (Node)",
+              "Unhandled exception on thread"
+            ],
+            [
+              "Async unhandled",
+              "unhandledRejection",
+              "Unobserved Task exception (TaskScheduler)"
+            ],
+            [
+              "Local handling",
+              "await in try/catch or .catch()",
+              "await try/catch on Task"
+            ],
+            [
+              "HTTP framework",
+              "Express next(err) middleware",
+              "ASP.NET exception middleware"
+            ],
+            [
+              "Default server behavior",
+              "Node may exit on unhandled rejection",
+              "Host logs; process may continue or stop"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Relying only on process.on",
+          "body": "Global handlers are for logging and graceful shutdown — not normal control flow. Every route, job, and event listener should catch and forward errors."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Swallowing in unhandledRejection",
+          "body": "Calling event.preventDefault() or returning without fixing the missing .catch hides symptoms. Fix the promise chain, then optionally suppress duplicate console noise."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: APM tools and Node --unhandled-rejections=strict catch missing handlers in CI. rejectionHandled event fires if a late .catch attaches — rare race in dynamic code. Promise.all vs allSettled: all rejects fast on first failure; allSettled never rejects — choose based on whether partial success is valid. In worker threads, unhandled rejections in the worker emit error on the parent Worker object. Domains (deprecated) and AsyncLocalStorage help correlate request context in logs. C# Task unobserved exceptions surface on finalizer thread unless TaskScheduler hooks observe them — different timing, same class of bug: fire-and-forget async."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Safe when",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "await in try/catch",
+              "Async route handlers",
+              "Forgotten await on inner call"
+            ],
+            [
+              ".catch at chain end",
+              "Fire-and-forget with logging",
+              "Silent swallow without rethrow"
+            ],
+            [
+              "process.on unhandledRejection",
+              "Central logging + shutdown",
+              "Used as only error strategy"
+            ],
+            [
+              "Promise.all",
+              "All must succeed",
+              "One failure rejects entire batch"
+            ],
+            [
+              "void promiseFn()",
+              "Explicit intentional fire-and-forget",
+              "Hides missing handler intent"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying try/catch around async() without await catches rejections. Not knowing Node exit policy on unhandledRejection. Using forEach with async without Promise.all. Confusing unhandled rejection with uncaughtException."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Rejected promises need await in try or .catch — sync try/catch alone is not enough.",
+    "Node: process.on('unhandledRejection') and uncaughtException for last-resort handling.",
+    "Browser: window unhandledrejection event.",
+    "60s: Async errors are promises. await in try. Boundary .catch. Never forEach async without Promise.all.",
+    "Follow-up: what is the difference between unhandledRejection and uncaughtException in Node?"
+  ],
+  "commonPitfalls": [
+    "try { asyncFn(); } catch — never catches rejection.",
+    "forEach with async callback — unhandled rejections.",
+    "Strong answer: 'await in try. Terminal catch at boundary. process.on for logging only. Promise.all to aggregate async work.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-06-try-catch-finally",
+    "javascript-06-error-types-and-throwing",
+    "javascript-06-errors-vs-csharp-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "unobserved Task exceptions",
+      "note": "C# Tasks that fault without await or .ContinueWith can raise UnobservedTaskException. JavaScript unhandledRejection is the direct parallel.",
+      "futureTopicSlug": "csharp/async/unobserved-tasks"
+    },
+    {
+      "language": "typescript",
+      "concept": "Promise rejection typing",
+      "note": "TypeScript does not track unhandled rejections. Explicit void or .catch documents fire-and-forget intent.",
+      "futureTopicSlug": "typescript/async/unhandled-rejections"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "unhandledrejection event — MDN",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Window/unhandledrejection_event"
+    },
+    {
+      "title": "Node.js process unhandledRejection",
+      "url": "https://nodejs.org/api/process.html#event-unhandledrejection"
+    }
+  ],
+  "animationHint": "flow"
+}
