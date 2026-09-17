@@ -1,0 +1,240 @@
+{
+  "id": "javascript-01-event-loop-overview",
+  "slug": "event-loop-overview",
+  "title": "The event loop, tasks, and why JavaScript is single-threaded",
+  "moduleId": "javascript-01-runtime-and-execution",
+  "order": 5,
+  "hook": "JavaScript runs one call stack at a time. Timers, promises, and I/O callbacks wait in queues until the stack clears. The event loop is how a single thread stays responsive — and the number-one source of output-tracing interview questions.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The event loop is the scheduling algorithm in browser and Node.js hosts that coordinates JavaScript execution with asynchronous work. While synchronous code runs on the call stack, the host places callbacks in queues. When the stack is empty, the loop takes the next task: macrotasks (timer callbacks, I/O, `setImmediate` in Node) and microtasks (promise reactions, `queueMicrotask`, `MutationObserver`). Microtasks drain completely before the next macrotask or rendering step. JavaScript language semantics are single-threaded — no two functions run on the same stack simultaneously. C# on the CLR uses multiple threads, a thread pool, and `Task` scheduling; `async`/`await` frees threads during I/O rather than blocking one thread on a loop."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Macrotask",
+              "shortForm": "Macrotask",
+              "longForm": "Macrotask (task)",
+              "plainDefinition": "A scheduled callback from the host task queue — `setTimeout`, `setInterval`, I/O completion, UI events.",
+              "example": "`setTimeout(fn, 0)` queues `fn` as a macrotask, not immediately."
+            },
+            {
+              "term": "Microtask",
+              "shortForm": "Microtask",
+              "longForm": "Microtask",
+              "plainDefinition": "A high-priority job that runs after the current script and before the next macrotask. Promise `.then` handlers are microtasks.",
+              "example": "`Promise.resolve().then(() => console.log('micro'));`"
+            },
+            {
+              "term": "Event loop",
+              "shortForm": "Loop",
+              "longForm": "Event loop",
+              "plainDefinition": "The loop that checks: is the call stack empty? Run microtasks. Then take the next macrotask. Repeat.",
+              "example": "After `fetch` resolves, its `.then` runs as a microtask before the next timer fires."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Long synchronous work blocks the UI, delays timers, and stalls promise handlers — the page freezes because nothing else runs until the stack clears. Understanding microtask vs macrotask order explains classic console output puzzles. Node.js server code that CPU-spins on the main thread starves I/O callbacks even though I/O is \"async.\" C# `Task.Run` offloads CPU work to the thread pool; JavaScript needs Web Workers or `worker_threads` for parallel CPU. Misattributing parallelism to `async`/`await` in JavaScript is a common senior interview miss — `await` only yields control back to the loop, not a new OS thread."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Sync code first. Then all microtasks (promises). Then one macrotask. Repeat. `setTimeout(0)` is not instant — it waits for the stack and microtasks."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "One turn of the event loop",
+          "items": [
+            {
+              "title": "Run synchronous script",
+              "body": "Execute until the call stack is empty."
+            },
+            {
+              "title": "Drain microtask queue",
+              "body": "Run all pending promise reactions and `queueMicrotask` jobs. New microtasks scheduled during this phase run in the same turn."
+            },
+            {
+              "title": "Run one macrotask",
+              "body": "Dequeue the oldest timer, I/O, or message event callback and execute it."
+            },
+            {
+              "title": "Rendering (browser)",
+              "body": "Browser may paint between macrotasks. Node has no render step but follows the same task ordering."
+            },
+            {
+              "title": "Repeat",
+              "body": "Loop continues for the life of the process or tab."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Event loop turn order",
+            "source": "flowchart LR\n  Sync[Sync JS on stack] --> Micro[Drain microtasks]\n  Micro --> Macro[One macrotask]\n  Macro --> Render[Render optional]\n  Render --> Sync"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Classic output order puzzle",
+            "code": "console.log('1');\n\nsetTimeout(() => console.log('2'), 0);\n\nPromise.resolve().then(() => console.log('3'));\n\nconsole.log('4');\n\n// Output: 1, 4, 3, 2\n// Sync first, then microtask (promise), then macrotask (timer)",
+            "explanation": "`1` and `4` run synchronously. Promise `.then` is a microtask before `setTimeout` macrotask. This pattern appears constantly on Reddit and LeetCode discussions."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "async/await desugars to promises",
+            "code": "async function main() {\n  console.log('A');\n  await null;\n  console.log('B');\n}\n\nmain();\nconsole.log('C');\n\n// A, C, B\n// await splits the function: code after await is a microtask",
+            "explanation": "`await` pauses the async function and schedules continuation as a microtask. Same ordering rules as `.then`. C# `await` resumes on a thread pool or sync context — different scheduling model."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Blocking the loop",
+            "code": "const start = Date.now();\nwhile (Date.now() - start < 3000) {\n  // busy-wait — blocks everything\n}\nconsole.log('done');\n// Timers and clicks queued during this wait fire only after",
+            "explanation": "No amount of `async` syntax helps if you occupy the stack synchronously. Offload CPU to Web Workers or chunk work with `setTimeout(0)` / `queueMicrotask` strategically."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Nested microtasks",
+            "code": "Promise.resolve()\n  .then(() => {\n    console.log('a');\n    Promise.resolve().then(() => console.log('b'));\n  })\n  .then(() => console.log('c'));\n\n// a, b, c — inner microtask drains before outer chain continues",
+            "explanation": "Microtask queue drains fully each turn. Nested promise scheduling still completes before the next macrotask."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Concurrency models",
+          "headers": [
+            "Aspect",
+            "JavaScript event loop",
+            "C# Task/async",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Parallel threads",
+              "One JS thread per isolate; Workers separate",
+              "Thread pool + multiple threads",
+              "Same as JS"
+            ],
+            [
+              "I/O model",
+              "Non-blocking host APIs + callbacks",
+              "async I/O completes on thread pool",
+              "Same as JS"
+            ],
+            [
+              "CPU-bound work",
+              "Blocks the loop unless Worker",
+              "`Task.Run` to thread pool",
+              "Same as JS"
+            ],
+            [
+              "Scheduling order",
+              "Microtasks before macrotasks",
+              "Task continuations + sync context",
+              "Same as JS"
+            ],
+            [
+              "UI thread",
+              "Browser main thread = JS thread",
+              "UI dispatcher / SynchronizationContext",
+              "Same as JS in browser"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Thinking `setTimeout(fn, 0)` runs before `Promise.then`. Assuming `async` means multi-threaded in JavaScript. Running heavy sync JSON parsing on the main thread and blaming \"slow promises.\" Confusing Node `process.nextTick` (runs before microtasks in Node) with browser microtask rules in cross-environment answers. Saying JavaScript has no concurrency — it has async concurrency on one thread, plus Workers."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Order: synchronous code → all microtasks → one macrotask → (render) → repeat.",
+    "`setTimeout(0)` and I/O callbacks are macrotasks; promise `.then` and `await` continuations are microtasks.",
+    "Blocking sync work stalls timers, UI, and network callbacks — offload CPU to Workers.",
+    "60s: JS is single-threaded per realm. Event loop runs stack, drains microtasks, then one macrotask. Promises before timers. async/await is promise scheduling. C# uses threads and Task pool.",
+    "Follow-up: predict output of sync + Promise + setTimeout + async/await mix."
+  ],
+  "commonPitfalls": [
+    "Placing setTimeout before Promise in expected output — microtasks always win over macrotasks.",
+    "Claiming async/await creates new threads in JavaScript.",
+    "Strong answer: 'One stack. Microtasks drain fully. setTimeout is macrotask. CPU blocks loop. Workers for parallel CPU.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-01-execution-context-and-call-stack",
+    "javascript-01-engines-and-v8",
+    "javascript-01-javascript-vs-csharp-ts"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Task vs Promise scheduling",
+      "note": "C# `await` on `Task` may resume on any thread pool thread. JavaScript `await` resumes as a microtask on the same thread — no thread hop.",
+      "futureTopicSlug": "csharp/13-promises-vs-tasks"
+    },
+    {
+      "language": "typescript",
+      "concept": "async/await typing",
+      "note": "TypeScript types `async` functions as returning `Promise<T>`. Runtime behavior is identical to JavaScript — still single-threaded event loop.",
+      "futureTopicSlug": "typescript/async/async-await"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Event loop",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop"
+    },
+    {
+      "title": "javascript.info — Event loop: microtasks and macrotasks",
+      "url": "https://javascript.info/event-loop"
+    }
+  ]
+}

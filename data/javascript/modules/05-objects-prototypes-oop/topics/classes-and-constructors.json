@@ -1,0 +1,293 @@
+{
+  "id": "javascript-05-classes-and-constructors",
+  "slug": "classes-and-constructors",
+  "title": "class, constructor, extends, and super",
+  "moduleId": "javascript-05-objects-prototypes-oop",
+  "order": 3,
+  "hook": "The class keyword looks like C# or Java, but under the hood JavaScript still wires prototype links and constructor functions. Interviews test whether you know the sugar versus the runtime mechanics.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A **class declaration** is syntactic sugar over constructor functions and prototype objects. `class AuthHandler { constructor(id) { this.id = id; } parse(raw) { return raw; } }` creates a function `AuthHandler` with a `.prototype` object holding `parse`. **`extends`** sets the subclass prototype's [[Prototype]] to the superclass prototype. **`super`** in a constructor calls the parent constructor; in methods it refers to the parent's prototype for `super.method()` calls."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "class sugar",
+              "longForm": "class syntactic sugar",
+              "plainDefinition": "class syntax that desugars to functions and prototype wiring — no separate class type in the engine.",
+              "example": "`typeof AuthHandler === 'function'` even when declared with class."
+            },
+            {
+              "term": "constructor",
+              "longForm": "class constructor",
+              "plainDefinition": "Special method that runs on new. Initializes own properties on this.",
+              "example": "`constructor(provider) { this.provider = provider; }`"
+            },
+            {
+              "term": "extends",
+              "longForm": "class extends",
+              "plainDefinition": "Sets up prototype chain between subclass and superclass prototypes and provides super binding.",
+              "example": "`class LtiHandler extends AuthHandler`"
+            },
+            {
+              "term": "super",
+              "longForm": "super keyword",
+              "plainDefinition": "In constructors: calls parent constructor. In methods: parent prototype for super calls.",
+              "example": "`super(id);` in constructor; `super.parse(raw)` in method."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Teams use `class` for readable hierarchies — React components, domain models, test doubles. TypeScript compiles classes to the same prototype pattern. When debugging, stack traces show class names because constructors retain the `name` property. But **private fields**, **static** blocks, and **extends** have spec rules that differ from C# — especially around `super()` order and `this` before `super()` in derived constructors."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Classes are not hoisted like functions",
+          "body": "Class declarations are in the temporal dead zone until initialized — referencing `AuthHandler` before its declaration throws ReferenceError. Function declarations hoist."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "What new class() does",
+          "items": [
+            {
+              "title": "Create object with correct [[Prototype]]",
+              "body": "The runtime creates an object whose [[Prototype]] is `ClassName.prototype`."
+            },
+            {
+              "title": "Call constructor with this bound",
+              "body": "The constructor runs with `this` as the new object. In derived classes, you must call `super(...)` before using `this`."
+            },
+            {
+              "title": "Return the object",
+              "body": "If the constructor returns a non-object, that return value becomes the result of `new`. Returning an object replaces the default instance — rare but valid."
+            },
+            {
+              "title": "Methods live on prototype",
+              "body": "Instance methods are non-enumerable properties on `ClassName.prototype`, not copied per instance."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "class desugars to prototypes",
+            "source": "flowchart LR\n  SRC[class Lti extends Auth] --> CTOR[Lti function]\n  CTOR --> PROTO[Lti.prototype]\n  PROTO --> LINK[[Prototype]] Auth.prototype\n  NEW[new Lti] --> INST[instance]\n  INST --> LINK2[[Prototype]] Lti.prototype"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Basic class — equivalent mental model",
+            "code": "class AuthHandler {\n  constructor(provider) {\n    this.provider = provider;\n  }\n\n  parse(raw) {\n    return { provider: this.provider, raw };\n  }\n\n  static create(provider) {\n    return new AuthHandler(provider);\n  }\n}\n\nconst h = AuthHandler.create(\"lti\");\nconsole.log(h.parse(\"tok\")); // { provider: 'lti', raw: 'tok' }\nconsole.log(typeof AuthHandler); // function",
+            "explanation": "Line 1–8: class body defines constructor and instance method on prototype. Line 10–12: static method on constructor function itself. Line 15: static factory. Line 17: typeof is function — confirms desugaring."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "extends and super",
+            "code": "class AuthHandler {\n  constructor(provider) {\n    this.provider = provider;\n  }\n  parse(raw) {\n    return raw;\n  }\n}\n\nclass LtiHandler extends AuthHandler {\n  constructor(provider, version) {\n    super(provider); // must run before this.version\n    this.version = version;\n  }\n  parse(raw) {\n    const base = super.parse(raw);\n    return { kind: \"lti\", v: this.version, raw: base };\n  }\n}\n\nconst h = new LtiHandler(\"lti\", 1);\nconsole.log(h instanceof AuthHandler); // true",
+            "explanation": "Line 12: derived constructor must call super before accessing this. Line 16–18: super.parse invokes parent prototype method with same this. Line 22: instanceof follows prototype chain set by extends."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Rough desugaring (conceptual)",
+            "code": "// class AuthHandler { constructor(p) { this.p = p; } m() {} }\n// roughly becomes:\nfunction AuthHandler(p) {\n  this.p = p;\n}\nAuthHandler.prototype.m = function () {};\n\n// class Lti extends AuthHandler { constructor(p) { super(p); } }\n// extends helper sets:\n// Object.setPrototypeOf(Lti.prototype, AuthHandler.prototype);\n// Object.setPrototypeOf(Lti, AuthHandler); // static inheritance",
+            "explanation": "Line 1–6: constructor function plus prototype method — the pre-ES6 pattern. Line 9–11: extends adjusts both instance and static prototype chains — why Lti inherits static methods from AuthHandler."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "class keyword across languages",
+          "headers": [
+            "Feature",
+            "JavaScript class",
+            "C# class",
+            "TypeScript class"
+          ],
+          "rows": [
+            [
+              "Runtime type",
+              "Function + prototypes",
+              "CLR metadata type",
+              "Erased to JS class emit"
+            ],
+            [
+              "super in ctor",
+              "Must call before this in derived",
+              "base(...) initializer",
+              "Same rule; compile-time check"
+            ],
+            [
+              "Multiple inheritance",
+              "No — extends one class",
+              "One base class",
+              "Same as JS emit"
+            ],
+            [
+              "Static members",
+              "On constructor function",
+              "On type metadata",
+              "Erased to JS static"
+            ],
+            [
+              "Private",
+              "# fields (runtime)",
+              "CLR access modifiers",
+              "private erased unless # in JS output"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using this before super() in derived constructor",
+          "body": "In a derived class constructor, accessing `this` before `super()` throws ReferenceError. C# allows different ordering rules with field initializers — do not assume parity."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Arrow functions as class fields versus prototype methods",
+          "body": "Class field `handler = () => {}` creates an own property per instance (lexical this). Prototype method shares one function. Memory and binding differ — pick intentionally."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Class bodies** are evaluated in strict mode. **Method definitions** on the prototype are non-enumerable and use `.name` inference. **extends** copies static own properties and sets `Symbol.hasInstance` behavior on the subclass. **super** inside methods uses the **home object** algorithm — it is not just AuthHandler.prototype.parse; it respects the current class's [[Prototype]] slot in the inheritance tree. **Returning from constructor**: if you `return { ok: true }` from a class constructor, `new` yields that object instead of the instance — breaks instanceof expectations. TypeScript **parameter properties** and **abstract** classes do not exist in emitted JS unless you emulate them."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Class sugar tradeoffs",
+          "headers": [
+            "Pattern",
+            "Pros",
+            "Cons"
+          ],
+          "rows": [
+            [
+              "Prototype methods",
+              "Shared memory; fast",
+              "this binding depends on call site"
+            ],
+            [
+              "Class field arrow functions",
+              "Lexical this for callbacks",
+              "Per-instance function objects"
+            ],
+            [
+              "extends hierarchies",
+              "Familiar OOP shape",
+              "Deep trees fragile — prefer composition in services"
+            ],
+            [
+              "static factory methods",
+              "Clear construction API",
+              "Still just properties on the function object"
+            ]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — constructor return hijacks new",
+            "code": "class CacheEntry {\n  constructor(key) {\n    this.key = key;\n    return { hijacked: true }; // replaces instance!\n  }\n}\n\nconst e = new CacheEntry(\"k1\");\nconsole.log(e.key);              // undefined\nconsole.log(e.hijacked);         // true\nconsole.log(e instanceof CacheEntry); // false",
+            "explanation": "Line 4: returning a plain object from constructor overrides default instance. Line 8–10: new does not produce CacheEntry instance — rare but valid JS behavior unlike C# constructors."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying class introduces a new object model separate from prototypes — it does not. Claiming TypeScript private fields exist at runtime without # emit — they do not. Assuming super works like C# base in all contexts — JS super is tied to prototype slots and has restrictions in arrow functions in some cases."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "class desugars to constructor functions plus prototype objects — typeof MyClass is function.",
+    "extends links Lti.prototype's [[Prototype]] to AuthHandler.prototype; super calls parent constructor or prototype methods.",
+    "Derived constructors must call super() before using this — ReferenceError otherwise.",
+    "60s: class is sugar over prototypes. new creates object, runs constructor, methods on prototype. extends sets chain. super in ctor calls parent; in methods calls parent prototype. Static methods live on the constructor function. Not the same as C# CLR types.",
+    "Follow-up: difference between prototype method and class field arrow function for this binding."
+  ],
+  "commonPitfalls": [
+    "Weak: 'JavaScript classes are like C# classes at runtime.' Strong: they are functions with prototype links — no CLR metadata or nominal typing.",
+    "Using this before super in derived constructor — throws ReferenceError.",
+    "Class field arrows for every method — allocates per instance; use prototype methods when lexical this is not required."
+  ],
+  "relatedTopicIds": [
+    "javascript-05-prototype-chain",
+    "javascript-05-inheritance-vs-composition",
+    "javascript-05-this-binding",
+    "javascript-05-private-fields-and-encapsulation"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "class emit",
+      "note": "TS access modifiers and parameter properties erase; only # private survives as real runtime privacy in modern emit.",
+      "futureTopicSlug": "typescript/class-emit"
+    },
+    {
+      "language": "typescript",
+      "concept": "base constructor",
+      "note": "C# base(...) chains before derived body; JS requires super() before this — similar intent, different rules.",
+      "futureTopicSlug": "csharp/inheritance"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Classes",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes"
+    },
+    {
+      "title": "javascript.info — Class inheritance",
+      "url": "https://javascript.info/class-inheritance"
+    }
+  ],
+  "animationHint": "flow"
+}

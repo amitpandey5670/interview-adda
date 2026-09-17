@@ -1,0 +1,291 @@
+{
+  "id": "javascript-04-closures-and-capture",
+  "slug": "closures-and-capture",
+  "title": "Closures, capture, and the loop-with-var trap",
+  "moduleId": "javascript-04-functions-scope-closures",
+  "order": 4,
+  "hook": "A closure is a function that remembers the variables from the place it was created, even after that outer function has finished. That power drives factories and callbacks — and the loop-with-var trap breaks production code when you confuse scope chain with call stack.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A **closure** is the combination of a function plus the lexical environment it closes over. When an inner function references an outer variable, the engine keeps that binding alive in the outer environment as long as any inner function might still run. **Capture** means the inner function reads (and often mutates) a variable from an enclosing scope. Closures are not a special syntax — every nested function that touches an outer local is a closure."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "closure",
+              "longForm": "closure",
+              "plainDefinition": "A function that retains access to its outer lexical environment after the outer function returns.",
+              "example": "function counter() { let n = 0; return () => ++n; }"
+            },
+            {
+              "term": "capture",
+              "longForm": "variable capture",
+              "plainDefinition": "When an inner function references a binding from an outer scope, keeping that binding reachable.",
+              "example": "const threshold = 10; arr.filter(x => x > threshold);"
+            },
+            {
+              "term": "loop-with-var trap",
+              "longForm": "loop-with-var closure trap",
+              "plainDefinition": "Creating closures in a for loop with var shares one binding; all callbacks see the final value.",
+              "example": "for (var i=0; i<3; i++) setTimeout(() => console.log(i), 0); // 3,3,3"
+            },
+            {
+              "term": "scope chain",
+              "longForm": "scope chain",
+              "plainDefinition": "Linked outer environments used for lookup — distinct from the call stack of executing frames.",
+              "example": "Callback resolves i via the loop's shared var binding, not via call order."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Closures power module patterns, event handlers, React hooks, debounce/throttle, and partial application. They also cause memory leaks when a long-lived callback captures a large DOM subtree or request object. The **loop-with-var trap** is the most cited JavaScript interview puzzle on Reddit: three `setTimeout` callbacks all log `3` because `var i` is one function-scoped binding mutated each iteration. `let` creates a per-iteration binding; an IIFE (Immediately Invoked Function Expression) snapshot works too."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Scope chain vs call stack — again",
+          "body": "When the timeout fires, the call stack shows the timer callback. Variable lookup still walks the scope chain to the environment where the arrow was created — often a shared loop binding if you used var."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Closure creation and lifetime",
+          "items": [
+            {
+              "title": "Define inner function",
+              "body": "The engine records [[Environment]] pointing at the current outer lexical environment."
+            },
+            {
+              "title": "Reference outer binding",
+              "body": "Any free variable resolves through the scope chain at run time, not at definition time for const/let values."
+            },
+            {
+              "title": "Outer function returns",
+              "body": "If the inner function is still reachable, the outer environment stays alive in the heap."
+            },
+            {
+              "title": "Invoke later",
+              "body": "Call stack pushes the inner frame; scope chain still links to captured environments."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Loop-with-var vs let — bindings per iteration",
+            "source": "flowchart TD\n  subgraph VAR_TRAP[var loop — one binding]\n    V1[i shared] --> V2[3 closures same i]\n    V2 --> V3[all log 3]\n  end\n  subgraph LET_FIX[let loop — per-iteration env]\n    L1[i0 i1 i2] --> L2[3 closures distinct]\n    L2 --> L3[log 0 1 2]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Factory closure — private state",
+            "code": "function makeLimiter(max) {\n  let count = 0;\n  return function tryConsume() {\n    if (count >= max) return false;\n    count += 1;\n    return true;\n  };\n}\n\nconst gate = makeLimiter(2);\ngate(); // true\ngate(); // true\ngate(); // false — count lives in closure",
+            "explanation": "Line 2: count is not global — only tryConsume can access it via closure. Line 9: outer makeLimiter finished but its environment survives."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "The loop-with-var trap (failure mode)",
+            "code": "for (var i = 0; i < 3; i++) {\n  setTimeout(() => console.log(\"var:\", i), 0);\n}\n// var: 3\n// var: 3\n// var: 3\n\nfor (let j = 0; j < 3; j++) {\n  setTimeout(() => console.log(\"let:\", j), 0);\n}\n// let: 0, let: 1, let: 2",
+            "explanation": "Lines 1–4: one var i binding; callbacks run after loop ends at i===3. Lines 7–9: let creates a fresh binding per iteration captured by each arrow."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "IIFE snapshot fix and call-stack vs scope-chain trace",
+            "code": "// Classic fix before let was common\nfor (var k = 0; k < 3; k++) {\n  (function (snapshot) {\n    setTimeout(() => console.log(\"iife:\", snapshot), 0);\n  })(k);\n}\n\n// Mental model when timeout runs:\n// Call stack:  [ timer callback ]\n// Scope chain: callback env → IIFE env snapshot=1 → global",
+            "explanation": "Line 3: IIFE copies k into parameter snapshot per iteration — separate environment each time. Comment block: at fire time, lookup uses scope chain, not who scheduled the timeout."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Closures across languages",
+          "headers": [
+            "Feature",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Capture mechanism",
+              "[[Environment]] on function object",
+              "Compiler display class",
+              "Same as JS at runtime"
+            ],
+            [
+              "Loop capture bug",
+              "var shares one binding",
+              "foreach captures loop variable per iteration (since C# 5)",
+              "Same var/let rules as JS"
+            ],
+            [
+              "Memory risk",
+              "Long-lived listeners hold DOM/graph",
+              "Capturing lambda pins request object",
+              "Same leak patterns"
+            ],
+            [
+              "No-capture escape",
+              "Do not reference outer locals",
+              "static lambda (C# 9)",
+              "No static lambda; discipline only"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Closures in loops with var",
+          "body": "Event listeners, setTimeout, and Promise factories inside for (var i...) almost always need let, an IIFE parameter, or a factory function call per iteration."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Accidental memory retention",
+          "body": "A debounce handler that closes over a 5 MB parsed JSON tree keeps that tree alive until the handler is garbage-collected. Pass IDs, not whole graphs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Chrome DevTools Memory → take heap snapshot → filter Closure or search retained size after navigating away. Detached DOM nodes with click handlers that captured `element` or `componentState` are the classic leak. For the loop trap, paste the var version in a live coding pad — interviewers expect you to draw two columns: **call stack** (who executes now) vs **scope chain** (where `i` lives). V8 allocates a context object per closure; capturing three locals in one inner function typically shares one context, not three separate copies of the function."
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Diagnostics — shared mutable capture in async handlers",
+            "code": "const handlers = [];\nlet id = 0;\n\nfor (var i = 0; i < 3; i++) {\n  handlers.push(() => fetch(`/api/item/${i}`)); // all hit /api/item/3\n}\n\n// Fix: per-iteration binding\nconst fixed = [];\nfor (let i = 0; i < 3; i++) {\n  fixed.push(() => fetch(`/api/item/${i}`));\n}",
+            "explanation": "Line 5: production bug — three registered handlers share i. Line 11: let gives each arrow its own i binding; network tab shows /0, /1, /2."
+          }
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Pros",
+            "Cons"
+          ],
+          "rows": [
+            [
+              "let in for-loop",
+              "Idiomatic, per-iteration binding",
+              "Requires ES2015+ awareness"
+            ],
+            [
+              "IIFE snapshot",
+              "Works in legacy var codebases",
+              "Noisier; easy to forget parameter"
+            ],
+            [
+              "Factory fn per iter",
+              "Explicit API: makeHandler(i)",
+              "More allocations if not careful"
+            ],
+            [
+              "Closure for private state",
+              "Encapsulation without classes",
+              "Harder to inspect; leak risk if long-lived"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying closures copy variable values at creation time for let/var loop counters — they close over bindings, and var shares one. Claiming scope chain and call stack are the same structure. Answering the loop puzzle with 'use bind' without explaining why var fails. Not mentioning memory leaks when asked where closures hurt production."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "A closure = function + retained lexical environment; capture keeps outer bindings alive on the heap.",
+    "loop-with-var: one shared binding → callbacks see final i; let creates per-iteration environments.",
+    "Scope chain resolves variables; call stack orders execution — draw both when explaining async loop output.",
+    "60s: Inner function closes over outer vars via [[Environment]]. var in loops shares one i. let or IIFE snapshot fixes it. Long-lived closures can leak DOM and large objects.",
+    "Follow-up: implement once() or a counter using closure — no global state."
+  ],
+  "commonPitfalls": [
+    "Weak: 'closures copy values' — they close over bindings; mutating a captured object is visible to all closures sharing it.",
+    "Weak: blaming setTimeout for the loop bug — the bug is var scope, not the timer.",
+    "Strong: 'Walk scope chain at callback time. var is function-scoped so one i. let is per-iteration. Profile heap for retained closures on SPAs.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-04-lexical-scope-and-scope-chain",
+    "javascript-04-iife-and-module-pattern",
+    "javascript-04-higher-order-functions",
+    "javascript-04-recursion-and-call-stack-limits"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Closure display classes",
+      "note": "C# compiler emits a display class for captured locals. JavaScript engines use context objects similarly. C# foreach fixed loop capture in C# 5; JavaScript needs let.",
+      "futureTopicSlug": "csharp/delegates/lambdas-and-closures"
+    },
+    {
+      "language": "typescript",
+      "concept": "Closure typing",
+      "note": "TypeScript infers closure types from outer const/let. Captured mutable state needs careful typing when returning handlers from hooks.",
+      "futureTopicSlug": "typescript/types/function-types"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Closures",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures"
+    },
+    {
+      "title": "javascript.info — Closure",
+      "url": "https://javascript.info/closure"
+    },
+    {
+      "title": "ECMAScript — Lexical Environments",
+      "url": "https://tc39.es/ecma262/#sec-lexical-environments"
+    }
+  ],
+  "animationHint": "stack-heap"
+}

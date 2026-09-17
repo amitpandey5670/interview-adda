@@ -1,0 +1,286 @@
+{
+  "id": "javascript-05-inheritance-vs-composition",
+  "slug": "inheritance-vs-composition",
+  "title": "Inheritance versus composition in JavaScript",
+  "moduleId": "javascript-05-objects-prototypes-oop",
+  "order": 4,
+  "hook": "Prototype chains make inheritance easy to write and hard to change. Most production JavaScript favors composition — wiring behavior through objects and functions instead of deep class trees.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Inheritance** (is-a) links types through the prototype chain: `class LtiHandler extends AuthHandler`. **Composition** (has-a) builds objects by combining collaborators: an `AttemptWorker` holds an `attemptStore` and a `clock` rather than extending a `BaseWorker` mega-class. JavaScript supports both; module boundaries and testability usually favor composition."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "composition",
+              "longForm": "composition",
+              "plainDefinition": "Building behavior by combining objects or functions rather than subclassing.",
+              "example": "`const worker = { store, clock, run() { ... } };`"
+            },
+            {
+              "term": "mixin",
+              "longForm": "mixin",
+              "plainDefinition": "Copying or delegating methods from one object onto another — simulated multiple inheritance.",
+              "example": "`Object.assign(User.prototype, SerializableMixin);`"
+            },
+            {
+              "term": "delegation",
+              "longForm": "prototype delegation",
+              "plainDefinition": "Forwarding property lookup to another object via [[Prototype]] or explicit forwarding.",
+              "example": "`Object.create(baseBehavior)` — lookup delegates to baseBehavior."
+            },
+            {
+              "term": "is-a",
+              "longForm": "is-a relationship",
+              "plainDefinition": "Subtype relationship — LtiHandler is an AuthHandler. Use sparingly when behavior truly specializes.",
+              "example": "`lti instanceof AuthHandler`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Deep inheritance hierarchies in JavaScript share the same fragility as in C#: base class changes ripple to all descendants, and shared prototype mutation affects every instance. Microservice workers, React hooks, and Node middleware stacks compose small units. **Mixins** and **factory functions** avoid the diamond problem JavaScript never had for classes — but create naming collisions instead."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Prefer composition at application boundaries",
+          "body": "Inject stores, clients, and clocks through constructors or parameters. Reserve extends for genuine shared polymorphic behavior with a small, stable surface — not for code reuse alone."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing composition over extends",
+          "items": [
+            {
+              "title": "Identify shared behavior",
+              "body": "If two types need the same helper, extract a function or small module — not a BaseService class."
+            },
+            {
+              "title": "Wire collaborators in constructor",
+              "body": "`this.store = store` — the instance has-a store. Tests pass mock stores without subclassing."
+            },
+            {
+              "title": "Use inheritance only for polymorphic overrides",
+              "body": "When callers hold a base reference and need runtime-specific parse logic, a shallow class hierarchy can fit."
+            },
+            {
+              "title": "Avoid prototype mutation in libraries",
+              "body": "Patching `Array.prototype` or shared `.prototype` objects is composition's evil twin — global side effects."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Inheritance versus composition",
+            "source": "flowchart TD\n  NEED[Need shared behavior] --> Q{True is-a?}\n  Q -->|yes small surface| EXT[extends + super\\nprototype chain]\n  Q -->|no| COMP[composition\\ninject deps]\n  COMP --> FN[plain functions]\n  COMP --> FACT[factory objects]\n  EXT --> RISK[fragile base changes]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Composition — worker with injected dependencies",
+            "code": "function createAttemptWorker(attemptStore, clock) {\n  return {\n    async save(attempt) {\n      const saved = { ...attempt, savedAt: clock.now() };\n      await attemptStore.save(saved);\n      return saved;\n    },\n  };\n}\n\nconst worker = createAttemptWorker(\n  { save: async (a) => console.log(\"db\", a) },\n  { now: () => Date.now() }\n);\n\nawait worker.save({ id: \"a-1\" });",
+            "explanation": "Line 1: factory accepts collaborators — no class hierarchy. Line 3–6: behavior uses injected store and clock. Line 10–13: tests swap mocks without subclassing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Shallow inheritance when polymorphism fits",
+            "code": "class AuthHandler {\n  constructor(issuer) { this.issuer = issuer; }\n  parse(raw) { throw new Error(\"override\"); }\n}\n\nclass LtiHandler extends AuthHandler {\n  parse(raw) {\n    return { issuer: this.issuer, kind: \"lti\", raw };\n  }\n}\n\nfunction process(handler, raw) {\n  return handler.parse(raw); // polymorphic — runtime type wins\n}\n\nprocess(new LtiHandler(\"school\"), \"jwt\");",
+            "explanation": "Line 1–4: small abstract-ish base with required override. Line 6–10: specialized parse. Line 12–14: function accepts any AuthHandler — prototype lookup dispatches to LtiHandler.parse."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Mixin pattern — copy methods onto prototype",
+            "code": "const Loggable = {\n  log(msg) {\n    console.log(`[${this.constructor.name}]`, msg);\n  },\n};\n\nclass Service {\n  constructor(name) { this.name = name; }\n}\n\nObject.assign(Service.prototype, Loggable);\n\nconst s = new Service(\"cache\");\ns.log(\"ready\"); // [Service] ready",
+            "explanation": "Line 1–5: reusable method bundle. Line 11: mixin copies log onto Service.prototype — shared function, not subclass. Line 14: this refers to instance; constructor.name from class."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# patterns",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "When to use which",
+          "headers": [
+            "Scenario",
+            "JavaScript idiomatic",
+            "C# idiomatic"
+          ],
+          "rows": [
+            [
+              "Service wiring",
+              "Factory + object literals / classes with injection",
+              "Constructor injection in composition root"
+            ],
+            [
+              "Shared algorithm steps",
+              "Functions or mixins",
+              "Protected methods on abstract base — one base class limit"
+            ],
+            [
+              "Multiple behaviors",
+              "Compose modules; mixins with care",
+              "Multiple interfaces + default interface methods"
+            ],
+            [
+              "Global behavior patch",
+              "Avoid — mutates prototypes",
+              "Avoid — extension methods on static types"
+            ],
+            [
+              "Testing",
+              "Pass mock objects to factory",
+              "Mock interfaces with Moq/NSubstitute"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "BaseService anti-pattern",
+          "body": "A fat `BaseWorker` with database, logging, and HTTP helpers forces every worker into one hierarchy. Extract services and compose them — same advice as C# microservices."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mixin name collisions",
+          "body": "Two mixins defining the same method name — last assign wins silently. TypeScript interfaces do not solve runtime collisions."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "JavaScript's single inheritance pushes teams toward **functional composition** (Ramda-style) or **object composition** (React hooks combining state + effects). **Prototype delegation** via `Object.create` implements behavior sharing without classes — used in some DSLs. **Class extends** is still valid for framework integration (Error subclasses, DOM APIs). The interview answer: default to **has-a** for services; use **is-a** when you need shared prototype methods and instanceof checks with a **sealed** small hierarchy. C# adds **interfaces** for multiple contracts; JS has duck typing and optional TypeScript structural checks — no runtime interface."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Use when",
+            "Avoid when"
+          ],
+          "rows": [
+            [
+              "Factory + closures",
+              "Module-scoped privacy, test doubles",
+              "Need instanceof across modules"
+            ],
+            [
+              "class extends",
+              "Framework requires subclass (Error, Component)",
+              "Sharing unrelated utilities"
+            ],
+            [
+              "Mixins",
+              "Cross-cutting logging/serialization",
+              "Many mixins — collision and order bugs"
+            ],
+            [
+              "Plain functions",
+              "Stateless transforms",
+              "Need persistent this-bound API surface"
+            ]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — fragile base class constructor",
+            "code": "class BaseWorker {\n  constructor() {\n    this.init(); // calls override before subclass ready\n  }\n  init() { this.ready = true; }\n}\n\nclass CacheWorker extends BaseWorker {\n  constructor(store) {\n    super();\n    this.store = store;\n  }\n  init() {\n    this.cache = this.store.connect(); // store may be undefined!\n  }\n}\n\nnew CacheWorker({ connect: () => \"redis\" }); // throws or undefined",
+            "explanation": "Line 3: base calls virtual-like init from constructor. Line 14: derived init runs before derived constructor assigns store — same trap as C# virtual from base ctor."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Always reaching for extends to reuse code — shows OOP habit without JS pragmatism. Patching built-in prototypes as a mixin strategy — breaks libraries. Claiming JS has interface implementation like C# — duck typing only at runtime."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Default to composition (has-a) for services; use inheritance (is-a) for small polymorphic hierarchies.",
+    "Mixins copy behavior onto prototypes — watch for method name collisions.",
+    "Deep class trees are fragile; factory functions with injected deps test better.",
+    "60s: JS single inheritance via prototype chain. Compose dependencies for workers and APIs. extends when callers need polymorphic methods on a shared prototype. Mixins are a compromise. Same BaseService smell as C#.",
+    "Follow-up: how would you refactor a three-level class hierarchy into composition?"
+  ],
+  "commonPitfalls": [
+    "Weak: 'Inheritance is the primary reuse mechanism in JS.' Strong: functions and composition are default; extends for true subtype polymorphism.",
+    "Calling overridable methods from base constructor — derived state not initialized yet.",
+    "Mixin collisions — Object.assign last-wins with no compile-time warning."
+  ],
+  "relatedTopicIds": [
+    "javascript-05-prototype-chain",
+    "javascript-05-classes-and-constructors",
+    "javascript-05-js-oop-vs-csharp-ts"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "composition root",
+      "note": "C# comparison: Same DI pattern: wire IAttemptStore in constructor rather than inheriting BaseService.",
+      "futureTopicSlug": "csharp/composition-vs-inheritance"
+    },
+    {
+      "language": "typescript",
+      "concept": "interface segregation",
+      "note": "TS interfaces encourage composition at compile time; runtime is still plain object wiring.",
+      "futureTopicSlug": "typescript/interfaces"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Inheritance and the prototype chain",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Inheritance_and_the_prototype_chain"
+    },
+    {
+      "title": "javascript.info — Mixins",
+      "url": "https://javascript.info/mixins"
+    }
+  ],
+  "animationHint": "compare"
+}

@@ -1,0 +1,270 @@
+{
+  "id": "typescript-03-assignability-and-subtyping",
+  "slug": "assignability-and-subtyping",
+  "title": "Assignability, subtyping, and excess property checks",
+  "moduleId": "typescript-03-type-system-unions-intersections",
+  "order": 4,
+  "hook": "TypeScript decides whether one type can stand in for another using structural rules — if the shape fits, the assignment works. That sounds simple until extra properties, readonly flags, and unions enter the picture.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Assignability** asks: can a value of type **Source** be used where type **Target** is expected? TypeScript uses **structural subtyping** — Source is assignable to Target if Source has at least all the properties Target requires, with compatible types. This differs from C#'s **nominal** system where only declared inheritance relationships matter. **Excess property checks** apply to fresh object literals: extra properties not in the target type cause an error, even when the variable would otherwise be structurally compatible. Function parameter checking is **bivariant** for methods in older modes but **strictFunctionTypes** makes parameters contravariant — a senior interview topic."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "structural subtyping",
+              "longForm": "structural subtyping (duck typing)",
+              "plainDefinition": "A type is a subtype of another if its shape is compatible — extra properties on the value are often OK when assigning through a variable.",
+              "example": "`{ name: string; age: number }` assignable to `{ name: string }`."
+            },
+            {
+              "term": "excess property check",
+              "longForm": "excess property checking",
+              "plainDefinition": "When you pass an object literal directly, TypeScript rejects unknown properties not declared on the target type.",
+              "example": "`const u: User = { name: \"Ada\", extra: 1 }` — error on `extra`."
+            },
+            {
+              "term": "fresh object literal",
+              "longForm": "fresh object literal",
+              "plainDefinition": "A newly written `{ ... }` expression subject to stricter excess property rules than a variable reference.",
+              "example": "Assign through a variable first to bypass excess check — usually a code smell."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Misunderstanding assignability causes false confidence: you think a wider API type is safe because C# would have blocked it. Union assignability is directional — `\"a\"` fits `string` but not the reverse. Excess property checks catch typos in config objects (`{ naem: \"x\" }` would otherwise silently match a partial type). For C# developers, structural typing is the biggest mental model shift in TypeScript."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Variable vs literal",
+          "body": "Excess property checks apply to **fresh** object literals, not to variables already typed wider. `const x = { a: 1, b: 2 }; const y: { a: number } = x` is allowed — `x` is not fresh at the assignment point."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Assignability checklist",
+          "items": [
+            {
+              "title": "Required properties present",
+              "body": "Target's required keys must exist on Source with assignable types."
+            },
+            {
+              "title": "Optionality compatible",
+              "body": "An optional target property can be missing on Source. Required Source properties cannot be optional on Target unless types align."
+            },
+            {
+              "title": "Union direction",
+              "body": "Source union must be assignable to Target union member-by-member. A single literal assigns to a wider union."
+            },
+            {
+              "title": "Excess check on literals",
+              "body": "Direct `{ ... }` to typed parameter — no extra keys allowed beyond index signatures."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Structural assignability",
+            "source": "flowchart LR\n  S[\"Source shape\"] --> Q{\"All Target keys present?\"}\n  Q -->|no| FAIL[\"Not assignable\"]\n  Q -->|yes| T{\"Property types compatible?\"}\n  T -->|no| FAIL\n  T -->|yes| L{\"Fresh literal?\"}\n  L -->|yes| E{\"Excess keys?\"}\n  E -->|yes| FAIL\n  E -->|no| OK[\"Assignable\"]\n  L -->|no| OK"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Structural subtyping — extra properties OK via variable",
+            "code": "type Point = { x: number; y: number };\ntype Named = { name: string };\n\ntype NamedPoint = Point & Named;\n\nconst entity: NamedPoint = {\n  x: 1,\n  y: 2,\n  name: \"origin\",\n  id: \"p-1\", // extra field on wider object\n};\n\nconst asPoint: Point = entity; // OK — structural match",
+            "explanation": "Lines 1–4: intersection defines the full shape. Lines 6–11: object literal with an extra `id` is allowed when the target type includes all required fields (excess check may still warn if target is exact). Line 13: assigning wider variable to narrower `Point` is valid — only `x` and `y` are required."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Excess property check on fresh literal",
+            "code": "type User = { id: string; name: string };\n\nfunction saveUser(user: User): void {\n  console.log(user.id);\n}\n\n// Error: 'email' does not exist in type 'User'\n// saveUser({ id: \"1\", name: \"Ada\", email: \"a@b.c\" });\n\nconst draft = { id: \"1\", name: \"Ada\", email: \"a@b.c\" };\nsaveUser(draft); // OK — draft is not a fresh literal at call site",
+            "explanation": "Line 8: excess property check catches the typo/extra field immediately. Lines 10–11: when the object is stored in a variable first, TypeScript compares structurally and allows extra properties — intentional escape hatch, not a feature to abuse."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Union assignability direction",
+            "code": "type Status = \"pending\" | \"done\";\n\nlet narrow: \"pending\" = \"pending\";\nlet wide: Status = narrow;    // OK — literal fits union\n\n// narrow = wide;            // Error — wide might be \"done\"\n\nfunction onlyPending(s: \"pending\") {}\n// onlyPending(wide);         // Error",
+            "explanation": "Lines 4–5: assigning a narrower literal to a wider union is safe. Lines 7–8: reverse is unsafe — `wide` might be `\"done\"`. Lines 10–11: passing a union where a single literal is required fails."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "readonly blocks assignment to mutable",
+            "code": "type Mutable = { items: string[] };\ntype Immutable = { readonly items: readonly string[] };\n\nconst imm: Immutable = { items: [\"a\"] };\n// const mut: Mutable = imm; // Error: readonly array not assignable to mutable\n\nconst mut: Mutable = { items: [\"a\"] };\nconst imm2: Immutable = mut; // OK — mutable is assignable to readonly",
+            "explanation": "Lines 6–7: you cannot assign readonly to mutable — mutation would break the readonly contract. Lines 9–10: the opposite direction works — readonly consumers accept mutable data."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Subtyping models",
+          "headers": [
+            "Rule",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Subtype test",
+              "Structural shape match",
+              "No compile-time check",
+              "Nominal — declared inheritance"
+            ],
+            [
+              "Extra properties",
+              "Error on fresh literals",
+              "Silently stored on object",
+              "Not applicable — fixed class shape"
+            ],
+            [
+              "Interface implementation",
+              "Implicit if shape fits",
+              "N/A",
+              "Explicit `: IInterface`"
+            ],
+            [
+              "Covariance",
+              "Mostly covariant returns",
+              "N/A",
+              "Arrays covariant (legacy)"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming C# nominal rules apply — unrelated classes with the same shape are assignable in TS. Relying on the variable workaround to smuggle misspelled keys. Expecting union assignability to work both directions."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "With `strictFunctionTypes`, function parameters are checked contravariantly for callbacks — a subtle source of generic bugs. **Optional properties** vs `| undefined` differ under `exactOptionalPropertyTypes`. Intersection assignability requires each constituent to be assignable. For API evolution, prefer explicit DTO types over anonymous shapes to get excess property protection. Branding (module 15) restores nominal-like safety when needed."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Mechanism",
+            "When",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "Structural match",
+              "Plain objects, JSON DTOs",
+              "Accidental compatibility"
+            ],
+            [
+              "Excess property check",
+              "Inline config objects",
+              "Bypassed via variable"
+            ],
+            [
+              "Type assertion",
+              "Known-safe interop",
+              "Hides real mismatches"
+            ],
+            [
+              "Branded types",
+              "IDs, currencies",
+              "Extra ceremony"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Calling TypeScript nominal. Not explaining excess property checks vs structural widening. Reversing union assignability. Unaware that readonly is covariant but mutable is not assignable from readonly."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "TypeScript subtyping is structural — compatible shape means assignable.",
+    "Excess property checks apply to fresh object literals, not widened variables.",
+    "Union assignability is directional: narrow assigns to wide, not always reverse.",
+    "readonly types are assignable from mutable, not the other way around.",
+    "60s: TS asks 'does the shape fit?' C# asks 'is it declared?' Excess checks catch typos on literals. Unions narrow-to-wide only."
+  ],
+  "commonPitfalls": [
+    "Expecting C# nominal inheritance rules in TypeScript.",
+    "Smuggling extra keys through an intermediate variable to silence excess errors.",
+    "Strong answer: 'Structural subtyping. Fresh literals get excess checks. readonly covariance. C# needs explicit interface implementation.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-03-union-types",
+    "typescript-03-intersection-types",
+    "typescript-03-readonly-and-immutability",
+    "typescript-03-type-system-vs-csharp"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "duck typing at runtime",
+      "note": "JavaScript has always been structural at runtime ('if it quacks...'). TypeScript formalizes that into compile-time assignability rules.",
+      "futureTopicSlug": "javascript/objects/property-access"
+    },
+    {
+      "language": "typescript",
+      "concept": "nominal typing",
+      "note": "C# requires explicit inheritance or interface implementation. Two unrelated classes with identical fields are not interchangeable.",
+      "futureTopicSlug": "csharp/type-system/custom-type-kinds"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Type Compatibility",
+      "url": "https://www.typescriptlang.org/docs/handbook/type-compatibility.html"
+    }
+  ]
+}

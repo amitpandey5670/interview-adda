@@ -1,0 +1,238 @@
+{
+  "id": "javascript-03-json-and-serialization",
+  "slug": "json-and-serialization",
+  "title": "JSON.stringify, parse, and structured clone",
+  "moduleId": "javascript-03-types-coercion-equality",
+  "order": 8,
+  "hook": "JSON is the wire format of the web — but it is not a full copy of JavaScript values. `JSON.parse` can execute attacks if you trust the wrong input, and `JSON.stringify` silently drops `undefined`, functions, and `Symbol` keys.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**JSON (JavaScript Object Notation)** is a text format for structured data. **`JSON.stringify(value)`** converts a JavaScript value to a JSON string. **`JSON.parse(text)`** converts JSON text back to JavaScript values. JSON supports only `null`, booleans, numbers, strings, arrays, and objects — not `undefined`, functions, `Symbol`, `bigint` (without custom handling), `Date`, `Map`, or `Set`. **`structuredClone()`** (modern browsers and Node 17+) deep-clones most structured data including `Date`, `Map`, and `ArrayBuffer` — but still cannot clone functions or DOM nodes."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "JSON.stringify",
+              "longForm": "JSON.stringify",
+              "plainDefinition": "Serializes a value to JSON text. Omits undefined properties, converts NaN/Infinity to null in arrays, throws on BigInt.",
+              "example": "`JSON.stringify({ a: 1, b: undefined })` → `'{\"a\":1}'`"
+            },
+            {
+              "term": "JSON.parse",
+              "longForm": "JSON.parse",
+              "plainDefinition": "Parses JSON text into JavaScript values. Returns plain objects and arrays — no type information. Security risk with untrusted input.",
+              "example": "`JSON.parse('{\"id\":1}')` → `{ id: 1 }`"
+            },
+            {
+              "term": "reviver",
+              "longForm": "JSON.parse reviver function",
+              "plainDefinition": "Optional callback that transforms each key-value during parse — use for Date revival or validation.",
+              "example": "`JSON.parse(text, (k, v) => k === 'date' ? new Date(v) : v)`"
+            },
+            {
+              "term": "structuredClone",
+              "longForm": "structuredClone global function",
+              "plainDefinition": "Deep clone using the structured clone algorithm. Handles cycles, Dates, Maps — not functions or symbols.",
+              "example": "`const copy = structuredClone(original);`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every REST API and localStorage call uses JSON. Assuming `JSON.parse` returns typed data causes production bugs — `id` arrives as number or string depending on the server. `JSON.stringify` dropping `undefined` means `{ status: undefined }` becomes `{}` silently. Security: never pass untrusted JSON to `eval` or template engines. Prototype pollution attacks use `__proto__` keys in parsed objects. C# `System.Text.Json` deserializes to typed classes; JavaScript `JSON.parse` always returns plain objects unless you validate and map."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Security first",
+          "body": "Treat all external JSON as hostile. Use `JSON.parse` (not `eval`). Validate shape after parse. Reject `__proto__` and `constructor.prototype` keys. Consider `Object.create(null)` for dictionaries. For deep merge, use libraries that block prototype pollution."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Serialize and deserialize safely",
+          "items": [
+            {
+              "title": "Choose the right tool",
+              "body": "Wire format / storage → JSON. Deep clone in memory → `structuredClone`. Custom types → write mapper functions."
+            },
+            {
+              "title": "stringify with awareness",
+              "body": "Know what drops: `undefined`, functions, symbols. `Date` becomes ISO string. `toJSON()` on objects customizes output."
+            },
+            {
+              "title": "parse then validate",
+              "body": "Never trust parsed shape. Check types with typeof, Array.isArray, or schema library (Zod)."
+            },
+            {
+              "title": "Handle BigInt and Date",
+              "body": "BigInt: convert to string before stringify. Date: revive in reviver or map manually after parse."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "JSON vs JavaScript type support",
+            "source": "flowchart TB\n  subgraph js [\"JavaScript values\"]\n    J1[\"string, number, boolean, null\"]\n    J2[\"undefined, Symbol, BigInt, Function\"]\n    J3[\"Date, Map, Set, RegExp\"]\n  end\n  subgraph json [\"JSON format\"]\n    OK[\"string, number, boolean, null, array, object\"]\n  end\n  J1 -->|\"JSON.stringify\"| OK\n  J2 -->|\"dropped or throws\"| DROP[\"lost in translation\"]\n  J3 -->|\"Date→string; Map/Set need custom\"| PARTIAL[\"partial support\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "stringify and parse basics",
+            "code": "const user = {\n  id: 42,\n  name: 'Ada',\n  active: true,\n  meta: undefined,     // dropped\n  created: new Date('2024-01-15'),\n  tags: ['js', 'ts'],\n};\n\nconst json = JSON.stringify(user);\nconsole.log(json);\n// {\"id\":42,\"name\":\"Ada\",\"active\":true,\"created\":\"2024-01-15T00:00:00.000Z\",\"tags\":[\"js\",\"ts\"]}\n\nconst parsed = JSON.parse(json);\nconsole.log(typeof parsed.created); // 'string' — not a Date!\nconsole.log(parsed.meta);           // undefined — key was dropped",
+            "explanation": "Line 5: `undefined` properties are omitted from JSON. Line 6: Date serializes to ISO string. Lines 12–13: parse returns plain object — `created` is string, `meta` is gone."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Reviver for Date and BigInt patterns",
+            "code": "const payload = JSON.stringify({\n  id: '9007199254740993',\n  at: new Date().toISOString(),\n});\n\nconst data = JSON.parse(payload, (key, value) => {\n  if (key === 'at') return new Date(value);\n  if (key === 'id') return BigInt(value);\n  return value;\n});\n\nconsole.log(data.id);       // 9007199254740993n\nconsole.log(data.at instanceof Date); // true\n\n// BigInt direct stringify throws:\ntry {\n  JSON.stringify({ n: 1n });\n} catch (e) {\n  console.log(e.message); // Do not serialize BigInt\n}",
+            "explanation": "Lines 6–10: reviver restores types JSON cannot represent natively. Lines 12–13: BigInt and Date revived manually. Lines 16–19: BigInt must be converted to string before stringify."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "structuredClone vs JSON round-trip",
+            "code": "const original = {\n  date: new Date(),\n  map: new Map([['a', 1]]),\n  nested: { x: 1 },\n};\noriginal.self = original; // circular reference\n\n// JSON cannot handle cycles, Map, or preserve Date type:\n// JSON.parse(JSON.stringify(original)); // throws on cycle\n\nconst clone = structuredClone(original);\nconsole.log(clone.date instanceof Date); // true\nconsole.log(clone.map.get('a'));         // 1\nconsole.log(clone.self === clone);       // true — cycle preserved",
+            "explanation": "Line 5: circular ref breaks JSON.stringify. Lines 9–12: structuredClone handles cycles, Date, and Map. Use JSON for wire format; structuredClone for in-memory deep copy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — JSON.parse security",
+            "code": "// NEVER:\n// eval('(' + userInput + ')'); // remote code execution!\n\n// Prototype pollution via parse + merge:\nconst malicious = JSON.parse('{\"__proto__\": {\"isAdmin\": true}}');\n\nfunction unsafeMerge(target, source) {\n  for (const key in source) {\n    target[key] = source[key]; // pollutes Object.prototype!\n  }\n}\n\nconst config = {};\n// unsafeMerge(config, malicious); // breaks all objects\n\n// Safe pattern:\nfunction safeParse(json) {\n  const data = JSON.parse(json);\n  if ('__proto__' in data || 'constructor' in data) {\n    throw new SecurityError('Prototype pollution attempt');\n  }\n  return data;\n}\n\n// Better: use Object.create(null) for dictionaries\nconst dict = Object.create(null);",
+            "explanation": "Lines 2–3: eval on JSON is RCE. Lines 6–14: __proto__ merge pollutes Object.prototype. Lines 17–22: reject dangerous keys. Line 25: null-prototype objects prevent inherited pollution."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Serialization across languages",
+          "headers": ["Aspect", "JavaScript", "C#", "TypeScript"],
+          "rows": [
+            ["Default parse result", "Plain object / array", "Typed class via Deserialize<T>", "any / unknown — no run-time types"],
+            ["Date handling", "ISO string in JSON", "System.Text.Json DateTime", "Same as JS at run time"],
+            ["BigInt", "Throws on stringify", "JsonSerializer custom converter", "Compile error without workaround"],
+            ["Deep clone", "structuredClone()", "Manual or library", "Same as JS"],
+            ["Security", "No eval; validate shape", "Typed deserialization helps", "Validate at boundary anyway"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `eval` to parse JSON. Assuming parsed dates are Date objects. Expecting `undefined` properties to survive stringify. Not validating API responses. Deep merging parsed JSON into existing objects without prototype pollution guards. Using JSON.parse + stringify as a deep clone — loses types and breaks on cycles."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "JSON.parse is safe from code execution (unlike eval) but not safe from data attacks. Prototype pollution (CVE-class in lodash.merge, hoek, and others) exploits __proto__ keys. Use Map for untrusted key-value data or Object.create(null). JSON.parse reviver runs bottom-up on nested values. JSON.stringify replacer can filter keys. toJSON() on objects customizes serialization (Date uses this). For API design: document whether numbers are integers or floats; JavaScript loses precision above 2⁵³. C# System.Text.Json can deserialize to record types with validation attributes — JS needs Zod/Yup/io-ts. structuredClone uses the HTML structured clone algorithm — supports transferable objects in workers. JSON.parse('null') returns null; JSON.parse('') throws."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Tool", "Use for", "Interview trap"],
+          "rows": [
+            ["JSON.stringify/parse", "Wire format, localStorage", "Not a clone; drops undefined"],
+            ["structuredClone", "In-memory deep copy", "No functions, symbols, DOM nodes"],
+            ["eval", "Never for JSON", "Remote code execution"],
+            ["reviver/replacer", "Custom types", "Reviver order is inside-out"],
+            ["Schema validation", "API boundaries", "TS types do not validate parse"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Recommending eval for JSON. Not knowing stringify drops undefined. Saying JSON.parse returns typed objects. Ignoring prototype pollution when merging parsed JSON. Not mentioning BigInt stringify throws."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "JSON supports null, boolean, number, string, array, object — nothing else natively.",
+    "JSON.stringify drops undefined properties; JSON.parse returns plain objects.",
+    "Never use eval for JSON — use JSON.parse; still validate shape after parse.",
+    "Prototype pollution: reject __proto__ and constructor keys; use Object.create(null).",
+    "60s: JSON wire format only. Parse then validate. No eval. structuredClone for deep copy. BigInt needs string."
+  ],
+  "commonPitfalls": [
+    "Weak: 'JSON.parse is safe.' Strong: 'No code execution but prototype pollution and missing validation are real risks.'",
+    "Using JSON round-trip as deep clone — loses Date type, fails on cycles.",
+    "Strong answer: 'Parse, validate schema, reject __proto__. structuredClone in memory. BigInt as string.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-03-dynamic-vs-static-types",
+    "javascript-03-symbol-and-bigint",
+    "javascript-03-primitives-and-objects",
+    "javascript-03-typeof-and-type-checks"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "JSON types",
+      "note": "TS JsonValue/JsonObject types describe JSON-safe values. JSON.parse still returns any — use Zod or type guards at boundaries.",
+      "futureTopicSlug": "typescript/types/json"
+    },
+    {
+      "language": "csharp",
+      "concept": "System.Text.Json",
+      "note": "C# deserializes to typed records with validation. JS JSON.parse is untyped — you must map and validate manually.",
+      "futureTopicSlug": "csharp/json-serialization"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — JSON",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON"
+    },
+    {
+      "title": "MDN — structuredClone",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/structuredClone"
+    }
+  ],
+  "scenarioTag": "api-payload"
+}

@@ -1,0 +1,241 @@
+{
+  "id": "javascript-01-execution-context-and-call-stack",
+  "slug": "execution-context-and-call-stack",
+  "title": "Execution contexts, call stack, and hoisting",
+  "moduleId": "javascript-01-runtime-and-execution",
+  "order": 3,
+  "hook": "Every function call pushes a frame onto the call stack inside an execution context. Variable environment, scope chain, and hoisting rules determine what names resolve to — and they are not the same thing as closure scope, which interviews love to test.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "When JavaScript runs, the engine creates execution contexts. The global execution context exists for the lifetime of the script. Each function invocation creates a new function execution context with its own variable environment (bindings for `var`, `let`, `const`, parameters) and a reference to the outer lexical environment (scope chain). The call stack is the data structure holding which function is currently running — last in, first out. Hoisting is the compile-phase behavior where `var` and function declarations are registered before line-by-line execution; `let` and `const` are hoisted but sit in the temporal dead zone until their declaration line. In C#, locals exist in a stack frame with definite assignment rules — no `var` hoisting surprise and no temporal dead zone."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Execution context",
+              "shortForm": "EC",
+              "longForm": "Execution context",
+              "plainDefinition": "An internal record of where code is running: variable bindings, `this` binding, and outer scope link.",
+              "example": "Calling `fetchUser()` creates a new execution context linked to the global one."
+            },
+            {
+              "term": "Call stack",
+              "shortForm": "Stack",
+              "longForm": "Call stack",
+              "plainDefinition": "A stack of active function execution contexts. When a function returns, its frame pops off.",
+              "example": "`main → parse → validate` means three frames; `validate` is on top."
+            },
+            {
+              "term": "TDZ",
+              "shortForm": "TDZ",
+              "longForm": "Temporal Dead Zone",
+              "plainDefinition": "The period from entering a scope until a `let` or `const` declaration runs. Accessing the name throws ReferenceError.",
+              "example": "`console.log(x); let x = 1;` throws before line two executes."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Stack overflow happens when recursion or mutual calls exceed the engine's stack limit — a synchronous error, not an async one. Hoisting explains why `var` is `undefined` before its line but `let` throws. The scope chain (lexical nesting) is separate from the call stack (who called whom): a closure captures lexical outer variables even after the outer function returned and its stack frame popped. Interviews conflate \"execution context\" with \"closure scope\" — you need both models. C# closures also capture outer locals, but without `var` hoisting or TDZ; `async`/`await` in C# suspends without blocking the thread, while JavaScript `await` yields to the event loop."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Call stack = who is running now (LIFO). Scope chain = where names are looked up (lexical nesting). Closures keep the outer lexical environment alive after the outer function returns."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Function call lifecycle",
+          "items": [
+            {
+              "title": "Caller invokes function",
+              "body": "Engine creates a new execution context and pushes it onto the call stack."
+            },
+            {
+              "title": "Creation phase",
+              "body": "Parameters bound, `var` hoisted as `undefined`, function declarations fully hoisted, `let`/`const` registered in TDZ."
+            },
+            {
+              "title": "Execution phase",
+              "body": "Lines run top to bottom. Assignments update bindings. Returns pop the frame."
+            },
+            {
+              "title": "Scope lookup",
+              "body": "Unresolved names walk the scope chain outward — not up the call stack unless lexical nesting matches."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Call stack vs scope chain",
+            "source": "flowchart TB\n  subgraph stack [Call stack - who runs now]\n    S3[inner fn]\n    S2[outer fn]\n    S1[global]\n  end\n  subgraph scope [Scope chain - lexical nesting]\n    L3[inner env]\n    L2[outer env]\n    L1[global env]\n    L3 --> L2 --> L1\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Hoisting: var vs let",
+            "code": "console.log(a); // undefined — var hoisted\nvar a = 10;\n\nconsole.log(b); // ReferenceError — TDZ\nlet b = 20;\n\nfoo(); // works — function declaration fully hoisted\nfunction foo() { return 'hi'; }",
+            "explanation": "`var` declarations hoist with initializer `undefined`. `let`/`const` hoist but cannot be read until the declaration line. Function declarations hoist the whole function."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Call stack trace",
+            "code": "function c() {\n  throw new Error('boom');\n}\nfunction b() { c(); }\nfunction a() { b(); }\n\ntry { a(); } catch (e) {\n  console.log(e.stack);\n  // Error: boom\n  //   at c (...)\n  //   at b (...)\n  //   at a (...)\n}",
+            "explanation": "The stack trace lists call stack frames from innermost to outermost. This is synchronous — async stacks need `async` stack traces or source maps."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Closure vs call stack",
+            "code": "function makeCounter() {\n  let count = 0;\n  return function increment() {\n    count++;\n    return count;\n  };\n}\n\nconst inc = makeCounter();\n// makeCounter's frame popped, but lexical env for 'count' survives\ninc(); // 1\ninc(); // 2",
+            "explanation": "The closure holds the outer lexical environment, not a stack frame. `count` lives on the heap as part of the closure — similar to C# compiler-generated closure classes capturing locals."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "var in loops — classic pitfall",
+            "code": "for (var i = 0; i < 3; i++) {\n  setTimeout(() => console.log(i), 0);\n}\n// prints 3, 3, 3 — single hoisted 'i'\n\nfor (let j = 0; j < 3; j++) {\n  setTimeout(() => console.log(j), 0);\n}\n// prints 0, 1, 2 — new binding per iteration",
+            "explanation": "`var` is function-scoped and hoisted once. `let` in a `for` loop gets a fresh binding per iteration — the scope chain each closure captures differs."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Execution model comparison",
+          "headers": [
+            "Concept",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Local declarations",
+              "`var` hoists; `let`/`const` have TDZ",
+              "Definite assignment; no hoisting surprise",
+              "Same as JS after compile"
+            ],
+            [
+              "Stack overflow",
+              "Synchronous RangeError on deep sync recursion",
+              "StackOverflowException",
+              "Same as JS"
+            ],
+            [
+              "Closures",
+              "Capture lexical environment on heap",
+              "Compiler-generated closure classes",
+              "Same as JS"
+            ],
+            [
+              "Block scope",
+              "`let`/`const` block-scoped; `var` function-scoped",
+              "Block scope with `{}`",
+              "Same as JS"
+            ],
+            [
+              "Async suspension",
+              "`await` yields to event loop; stack unwinds",
+              "`await` on Task frees thread",
+              "Same as JS"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Confusing call stack with scope chain — `inner` can read `outer`'s variable because of lexical nesting, not because `outer` is still on the stack. Using `var` in loops with async callbacks and expecting per-iteration values. Assuming hoisting means assignment runs early — only declarations hoist, not initializers. Saying closures \"keep the stack frame\" — they keep the lexical environment; the frame may be gone."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Execution context = variable environment + scope chain + `this`. Call stack tracks active contexts LIFO.",
+    "Hoisting: `var` → `undefined`; `let`/`const` → TDZ until declaration; function declarations hoist fully.",
+    "Closures capture lexical outer bindings on the heap — survives after outer function returns.",
+    "60s: Stack is who runs now. Scope chain is lexical lookup. Closures keep outer env, not stack frames. var hoists; let has TDZ. Loop var vs let changes closure behavior.",
+    "Follow-up: why does `for (var i...)` with setTimeout print 3 three times?"
+  ],
+  "commonPitfalls": [
+    "Equating execution context with closure — context is the mechanism; closure is a function plus captured lexical environment.",
+    "Using `var` in async loops and blaming the event loop instead of hoisting.",
+    "Strong answer: 'Stack LIFO for calls. Scope chain lexical. Closure = function + outer env on heap. let per-iteration in for loops.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-01-engines-and-v8",
+    "javascript-01-strict-mode-and-sloppy",
+    "javascript-01-event-loop-overview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Closure capture",
+      "note": "C# closures capture locals into compiler-generated display classes. JavaScript closures capture lexical environments — same idea, different implementation, plus JS hoisting quirks C# lacks.",
+      "futureTopicSlug": "csharp/04-functions-scope-closures"
+    },
+    {
+      "language": "typescript",
+      "concept": "Block scope",
+      "note": "TypeScript emits `let`/`const` as-is. No compile-time change to hoisting or TDZ — behavior is identical to JavaScript at run time.",
+      "futureTopicSlug": "javascript/04-functions-scope-closures"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Closures",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures"
+    },
+    {
+      "title": "MDN — Hoisting",
+      "url": "https://developer.mozilla.org/en-US/docs/Glossary/Hoisting"
+    },
+    {
+      "title": "javascript.info — Variable scope, closure",
+      "url": "https://javascript.info/closure"
+    }
+  ],
+  "animationHint": "stack-heap"
+}

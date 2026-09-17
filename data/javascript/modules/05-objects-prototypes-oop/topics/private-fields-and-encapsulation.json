@@ -1,0 +1,300 @@
+{
+  "id": "javascript-05-private-fields-and-encapsulation",
+  "slug": "private-fields-and-encapsulation",
+  "title": "Private fields (#), getters, setters, and symbols",
+  "moduleId": "javascript-05-objects-prototypes-oop",
+  "order": 5,
+  "hook": "JavaScript had no real private instance fields for decades — only conventions and closures. Hash-prefixed private fields (#) are enforced by the engine. TypeScript private and C# private are not the same thing, and interviews love that distinction.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Private fields** use the `#` prefix: `#token` is stored per instance and cannot be read or written from outside the class body. **Getters and setters** (`get size() / set size(v)`) are accessor properties — they look like fields but run functions. **Symbols** provide unique keys that are omitted from normal enumeration but are not true privacy — anyone with the symbol reference can access the property."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "private field",
+              "longForm": "private class field",
+              "plainDefinition": "Instance storage prefixed with #, accessible only inside the class declaration. Enforced at runtime by the engine.",
+              "example": "`#refreshToken = \"\";` inside a class body."
+            },
+            {
+              "term": "WeakMap encapsulation",
+              "longForm": "WeakMap pattern",
+              "plainDefinition": "Pre-# pattern: store private data in a WeakMap keyed by the public instance.",
+              "example": "`const private = new WeakMap(); private.set(this, { token });`"
+            },
+            {
+              "term": "accessor property",
+              "longForm": "getter and setter",
+              "plainDefinition": "Property defined with get/set keywords; descriptor uses getter/setter functions instead of value.",
+              "example": "`get label() { return this.#id; }`"
+            },
+            {
+              "term": "closure privacy",
+              "longForm": "closure privacy",
+              "plainDefinition": "Factory function keeps variables in closure scope — invisible outside the factory.",
+              "example": "`function createCounter() { let n = 0; return { inc() { n++; } }; }`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Encapsulation protects invariants — a session object should not let callers set `expiresAt` to the past. C# enforces `private` through Common Language Runtime (CLR) metadata. TypeScript `private` is a compile-time check that **erases** in the JavaScript bundle — users can still read the property at runtime. JavaScript `#fields` are **real runtime privacy** per instance, though not as rich as CLR access levels (no protected, internal, or friend assemblies)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Three different \"private\" meanings",
+          "body": "C# private: CLR enforced. TypeScript private: compile-time only. JavaScript #field: engine enforced on the instance. Underscore `_secret`: convention only — not enforced."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "How # private fields work",
+          "items": [
+            {
+              "title": "Lexical class binding",
+              "body": "Private names are resolved lexically to the class body — subclasses cannot access `#parentField` unless it is in their own class declaration scope."
+            },
+            {
+              "title": "Per-instance storage",
+              "body": "Each instance gets its own # slots — not on the prototype. Access outside the class throws TypeError."
+            },
+            {
+              "title": "Not in JSON.stringify",
+              "body": "Private fields are not enumerable own properties in the traditional sense — they do not appear in spread or JSON output."
+            },
+            {
+              "title": "Getters expose controlled views",
+              "body": "Public `get tokenPreview()` can return a redacted string while `#token` stays hidden."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Privacy mechanisms compared",
+            "source": "flowchart LR\n  subgraph js [JavaScript]\n    HASH[\"#field\\nengine enforced\"]\n    SYM[Symbol key\\nhidden not secret]\n    WM[WeakMap\\nlegacy pattern]\n    CL[Closure\\nfactory scope]\n  end\n  subgraph ts [TypeScript]\n    TSP[private keyword\\nerased at compile]\n  end\n  subgraph cs [C#]\n    CLR[CLR metadata\\nruntime enforced]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Private fields and public accessors",
+            "code": "class Session {\n  #token = \"\";\n  #expiresAt = 0;\n\n  constructor(token, expiresAt) {\n    this.#token = token;\n    this.#expiresAt = expiresAt;\n  }\n\n  get isValid() {\n    return Date.now() < this.#expiresAt;\n  }\n\n  get preview() {\n    return this.#token.slice(0, 4) + \"…\";\n  }\n\n  rotate(newToken) {\n    if (!this.isValid) throw new Error(\"expired\");\n    this.#token = newToken;\n  }\n}\n\nconst s = new Session(\"secret-jwt\", Date.now() + 60_000);\nconsole.log(s.preview);     // secr…\n// console.log(s.#token);   // SyntaxError outside class",
+            "explanation": "Line 2–3: # fields initialized per instance. Line 10–16: getters expose computed views without leaking #token. Line 18–21: method mutates private state with invariant check. Line 26: syntax error if accessing # outside class body."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript private versus JavaScript #",
+            "code": "// TypeScript source\nclass CacheEntry {\n  private key = \"\";   // compile-time only\n  #hash = \"\";         // runtime private if emit targets ES2022+\n\n  constructor(key: string) {\n    this.key = key;\n    this.#hash = hash(key);\n  }\n}\n\n// Emitted JS (conceptual): key is public on the object\n// entry.key is readable in DevTools — entry.#hash throws",
+            "explanation": "Line 3: TS private does not hide key in bundle unless you use # or WeakMap. Line 4: # survives emit as real privacy. Line 11–12: critical interview point — DevTools can read TS private after compile."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Symbol keys — unique but not private",
+            "code": "const secretKey = Symbol(\"secret\");\n\nclass Config {\n  constructor(value) {\n    this[secretKey] = value;\n  }\n  reveal(sym) {\n    if (sym === secretKey) return this[secretKey];\n    throw new Error(\"denied\");\n  }\n}\n\nconst c = new Config(\"api-key\");\nconsole.log(c.reveal(secretKey)); // api-key\nconsole.log(Object.keys(c));      // [] — not enumerated\n// Anyone exporting secretKey can read the value",
+            "explanation": "Line 1: symbol is unique. Line 5: stored as computed property. Line 12: omitted from Object.keys but accessible with symbol reference — not security."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "WeakMap pattern before # fields",
+            "code": "const internals = new WeakMap();\n\nclass LegacySession {\n  constructor(token) {\n    internals.set(this, { token });\n  }\n  preview() {\n    return internals.get(this).token.slice(0, 4);\n  }\n}\n\nconst s = new LegacySession(\"hidden\");\nconsole.log(s.preview()); // hidd\n// No property on s — DevTools shows empty own keys",
+            "explanation": "Line 1: module-scoped WeakMap holds private bag. Line 4: associate data with instance without own properties. Line 12: still bypassable if internals map is exported — pattern not cryptographic privacy."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# access modifiers",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Encapsulation across languages",
+          "headers": [
+            "Mechanism",
+            "JavaScript",
+            "TypeScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Runtime private instance field",
+              "#field",
+              "#field in emit",
+              "private field in CLR"
+            ],
+            [
+              "Compile-only private",
+              "N/A",
+              "private keyword",
+              "N/A — C# private is runtime"
+            ],
+            [
+              "Protected in subclass",
+              "No — use composition",
+              "No runtime equivalent",
+              "protected keyword"
+            ],
+            [
+              "Assembly/internal scope",
+              "Modules (ESM scope)",
+              "Modules",
+              "internal, protected internal"
+            ],
+            [
+              "Property syntax",
+              "get/set in class",
+              "Same + parameter properties",
+              "auto-property { get; set; }"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Treating underscore prefix as private",
+          "body": "`this._token` is a public own property — any code can read it. Linters may warn but the engine does not enforce."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Subclass accessing parent # fields",
+          "body": "Private fields are not inherited for access — `class B extends A` cannot read `#field` from A. Use protected patterns via composition or protected-like getters in the parent."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Private fields use **internal slots** checked lexically at access sites — the spec uses `#` in parse tree, not string names. **Private methods** `#helper()` follow the same rules. **Brand checks**: only code in the class body can read `#x` on instances of that class — including on other instances of the same class (`other.#token` inside Session is allowed). DevTools in modern browsers may still inspect some internal state through debugging APIs — privacy is about language access, not anti-tamper security. For **true secrets** (API keys), never ship them to the client bundle — no access modifier fixes that."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "When to use which pattern",
+          "headers": [
+            "Pattern",
+            "Enforcement",
+            "Best for"
+          ],
+          "rows": [
+            [
+              "# private field",
+              "Runtime TypeError outside class",
+              "Modern class invariants"
+            ],
+            [
+              "WeakMap",
+              "Convention + module scope",
+              "Legacy browsers; hide from enumeration"
+            ],
+            [
+              "Closure factory",
+              "Scope invisibility",
+              "Small modules without classes"
+            ],
+            [
+              "TS private",
+              "Compiler only",
+              "API surface during development — pair with # for runtime"
+            ]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — TS private in production bundle",
+            "code": "// After tsc emit (no # used):\nclass AuthClient {\n  constructor() {\n    this.refreshToken = \"rt-live\"; // was 'private refreshToken' in TS\n  }\n}\n\nconst c = new AuthClient();\n// Browser console:\nconsole.log(c.refreshToken); // rt-live — no runtime privacy",
+            "explanation": "Line 4: TS private becomes public property in JS output. Line 9: any script on the page can read refreshToken. Strong answer: use # or server-side storage for secrets."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Equating TypeScript private with C# private or JavaScript # — three different mechanisms. Claiming Symbol properties are secure private fields — they are hidden from enumeration, not from code with the symbol. Saying JSON.stringify can leak # fields — it does not; but TS private fields without # do serialize if public on the object."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "JavaScript # fields are runtime-enforced per instance; TypeScript private erases unless you use # in emit.",
+    "C# private is CLR metadata enforcement — richest access model of the three.",
+    "Symbols and WeakMaps are obscurity patterns, not substitutes for # or CLR private.",
+    "60s: Three privates — C# CLR runtime, TS compile-time only, JS # engine slots. Underscore is convention. Symbols skip enumeration but are not secret. Use # for real instance privacy in modern JS classes.",
+    "Follow-up: can a subclass read a parent # field?"
+  ],
+  "commonPitfalls": [
+    "Weak: 'TypeScript private equals C# private.' Strong: TS erases; C# enforces at runtime; JS # enforces per class lexical scope.",
+    "Using _prefix expecting enforcement — still a public property.",
+    "Symbol keys for security — export the symbol and privacy collapses."
+  ],
+  "relatedTopicIds": [
+    "javascript-05-object-literals-and-properties",
+    "javascript-05-classes-and-constructors",
+    "javascript-05-js-oop-vs-csharp-ts"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "private erase",
+      "note": "TS private is erased in emit — use # private fields when runtime hiding matters.",
+      "futureTopicSlug": "typescript/access-modifiers"
+    },
+    {
+      "language": "typescript",
+      "concept": "CLR private",
+      "note": "C# private enforced by metadata; JS has no protected/internal assembly scopes.",
+      "futureTopicSlug": "csharp/access-modifiers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Private class features",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes/Private_properties"
+    },
+    {
+      "title": "MDN — get/set",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/get"
+    }
+  ]
+}

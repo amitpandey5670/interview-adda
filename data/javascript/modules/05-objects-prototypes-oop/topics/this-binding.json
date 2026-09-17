@@ -1,0 +1,298 @@
+{
+  "id": "javascript-05-this-binding",
+  "slug": "this-binding",
+  "title": "this binding: default, implicit, explicit, and arrow functions",
+  "moduleId": "javascript-05-objects-prototypes-oop",
+  "order": 6,
+  "hook": "In JavaScript, this is not the object where a function was written — it is the object chosen when the function is called. FAANG interviews love the binding matrix because one wrong assumption breaks React handlers, class methods, and callbacks.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**this** is a runtime binding set by the **call site**, not the definition site (except arrow functions and bound functions). The five rules interviewers expect: **default** (strict: undefined; sloppy: global object), **implicit** (`obj.method()` → this is obj), **explicit** (`call/apply/bind`), **new** (`new Fn()` → fresh object), and **arrow** (lexical this from enclosing scope). Class methods use implicit binding when called as `instance.method()`."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "call site",
+              "longForm": "call site",
+              "plainDefinition": "The place in code where a function is invoked — determines this for ordinary functions.",
+              "example": "`handler.parse(raw)` — implicit this is handler."
+            },
+            {
+              "term": "implicit binding",
+              "longForm": "implicit binding",
+              "plainDefinition": "When the function is called as a method on an object, this is that object.",
+              "example": "`user.greet()` sets this to user."
+            },
+            {
+              "term": "explicit binding",
+              "longForm": "explicit binding",
+              "plainDefinition": "Forcing this with Function.prototype.call, apply, or bind.",
+              "example": "`parse.call(ctx, raw)`"
+            },
+            {
+              "term": "lexical this",
+              "longForm": "lexical this (arrow functions)",
+              "plainDefinition": "Arrow functions do not have their own this — they capture this from the surrounding scope.",
+              "example": "`const fn = () => this.id;` inside a class field or constructor."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lost **this** is the top bug in event handlers and array callbacks: `button.addEventListener('click', obj.handleClick)` passes the function without the object — **this** becomes the button or undefined in strict mode. C# instance methods carry **this** implicitly and cannot be \"detached\" the same way unless you use delegates with explicit targets. TypeScript does not fix runtime **this** — only `this` parameter types and `@typescript-eslint/unbound-method` help at compile time."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Priority when multiple rules apply",
+          "body": "new binding beats explicit bind; explicit bind beats implicit; implicit beats default. Arrow functions ignore call-site rules — they use lexical this."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "The this binding matrix",
+          "items": [
+            {
+              "title": "Default binding",
+              "body": "Plain call `fn()` — strict mode: this is undefined. Sloppy mode: global object (window in browsers)."
+            },
+            {
+              "title": "Implicit binding",
+              "body": "`obj.fn()` — this is obj. Lost if you assign `const f = obj.fn; f()` — only default binding applies."
+            },
+            {
+              "title": "Explicit binding",
+              "body": "`fn.call(ctx, a)`, `fn.apply(ctx, [a])`, or `fn.bind(ctx)` — this is ctx (bind creates a new function with fixed this)."
+            },
+            {
+              "title": "new binding",
+              "body": "`new Constructor()` — this is the new object inside the constructor."
+            },
+            {
+              "title": "Arrow / lexical",
+              "body": "Arrow functions inherit this from enclosing function or class field scope — not from how they are called."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "this binding decision flow",
+            "source": "flowchart TD\n  CALL[Function invoked] --> ARROW{Arrow function?}\n  ARROW -->|yes| LEX[Use lexical this\\nfrom enclosing scope]\n  ARROW -->|no| NEW{Called with new?}\n  NEW -->|yes| FRESH[this = new object]\n  NEW -->|no| BOUND{bind/call/apply?}\n  BOUND -->|yes| CTX[this = specified object]\n  BOUND -->|no| METH{Method call obj.f?}\n  METH -->|yes| OBJ[this = obj]\n  METH -->|no| DEF[Default\\nstrict: undefined\\nsloppy: global]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Default versus implicit binding",
+            "code": "\"use strict\";\n\nfunction show() {\n  console.log(this);\n}\n\nconst api = {\n  name: \"attempt-api\",\n  show,\n};\n\napi.show();        // implicit — { name, show }\nconst detached = api.show;\ndetached();        // default — undefined (strict)",
+            "explanation": "Line 1: strict mode — default binding is undefined. Line 12: method call — implicit this is api. Line 14–15: extracting method loses implicit binding — classic interview trap."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Explicit bind and call",
+            "code": "function parse(raw) {\n  return `${this.provider}:${raw}`;\n}\n\nconst lti = { provider: \"lti\" };\nconst oidc = { provider: \"oidc\" };\n\nconsole.log(parse.call(lti, \"jwt\"));  // lti:jwt\nconsole.log(parse.apply(oidc, [\"jwt\"])); // oidc:jwt\n\nconst bound = parse.bind(lti);\nconsole.log(bound(\"jwt\")); // lti:jwt — this locked",
+            "explanation": "Line 1–3: function uses this.provider. Line 8–9: call/apply set this for one invocation. Line 11–12: bind returns new function with permanent this."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Class methods and arrow class fields",
+            "code": "class Handler {\n  constructor(id) {\n    this.id = id;\n  }\n  // prototype method — this depends on call site\n  handle() {\n    return this.id;\n  }\n  // class field arrow — lexical this from construction\n  handleArrow = () => {\n    return this.id;\n  };\n}\n\nconst h = new Handler(\"h1\");\nconst a = h.handle;\nconst b = h.handleArrow;\n\nconsole.log(h.handle());    // h1\nconsole.log(a());           // TypeError — undefined.id in strict class\nconsole.log(b());           // h1 — arrow captured instance this",
+            "explanation": "Line 6–8: prototype method — detached call loses this. Line 10–12: field arrow closes over construction-time this. Line 19: strict class bodies — default this is undefined."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "new binding in constructor",
+            "code": "function Service(name) {\n  this.name = name;\n  this.run = function () {\n    return this.name;\n  };\n}\n\nconst s = new Service(\"worker\");\nconsole.log(s.run()); // worker — implicit on s\n\nconst loose = s.run;\nconsole.log(loose()); // undefined.name in strict — lost again",
+            "explanation": "Line 1–6: new sets this inside constructor. Line 9: method on instance — implicit works. Line 12–13: per-instance method still loses this when detached."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# this",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "this in JavaScript versus C#",
+          "headers": [
+            "Aspect",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Determined by",
+              "Call site (except arrow/bind)",
+              "Always the instance for instance methods"
+            ],
+            [
+              "Detached method",
+              "Loses implicit this",
+              "Delegate still carries target unless static"
+            ],
+            [
+              "Arrow equivalent",
+              "Lexical this — no C# equivalent",
+              "Local functions capture variables, not this rebinding"
+            ],
+            [
+              "Strict undefined",
+              "Default binding undefined in strict",
+              "N/A — always typed instance"
+            ],
+            [
+              "Fix pattern",
+              "bind, arrow field, wrapper",
+              "Lambda capturing instance explicitly"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Passing class method as callback",
+          "body": "`setTimeout(this.tick, 1000)` loses this. Fix: `setTimeout(() => this.tick(), 1000)`, `this.tick.bind(this)`, or arrow class field."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Arrow functions as prototype methods",
+          "body": "Arrow functions on the prototype are rare and wrong — they close over outer this at definition time, not instance this at call time."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Soft bind** and **currying** reuse explicit binding patterns. **Class private fields** and **this** interact: `#x` access requires valid instance **this** in class methods. **Proxy** can wrap methods to preserve this. In React class components, autobinding in constructor existed precisely because of implicit binding loss. **Performance**: `bind` allocates a wrapper function — hot paths sometimes use `const self = this` or arrow fields consciously. **Interview tracing**: given `obj.a().b().c()`, determine this at each step from call shape only."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Fix strategies for lost this",
+          "headers": [
+            "Strategy",
+            "Pros",
+            "Cons"
+          ],
+          "rows": [
+            [
+              "Arrow class field",
+              "Stable this in callbacks",
+              "Per-instance function allocation"
+            ],
+            [
+              "bind in constructor",
+              "Explicit; one wrapper per method",
+              "Boilerplate; must list methods"
+            ],
+            [
+              "Wrapper lambda",
+              "Clear at call site",
+              "Inline noise"
+            ],
+            [
+              "Prototype method + call",
+              "Shared function object",
+              "Must remember call/apply at boundary"
+            ]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Interview trace — predict output",
+            "code": "const obj = {\n  x: 10,\n  getX() { return this.x; },\n  getXLater() {\n    setTimeout(function () {\n      console.log(this.x); // default binding — undefined.x\n    }, 0);\n    setTimeout(() => {\n      console.log(this.x); // lexical — 10\n    }, 0);\n  },\n};\n\nobj.getXLater();",
+            "explanation": "Line 5–7: ordinary function in setTimeout — this is global/undefined, logs undefined. Line 8–10: arrow captures getXLater's this (obj). FAANG loops love this exact pattern."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying this always refers to the object where the function was defined — that is Java/C#, not JS (except arrows). Claiming bind and call are the same — bind returns a new function. Forgetting that strict mode default this is undefined, not window."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "this is set by call site: default, implicit, explicit (call/apply/bind), new, or lexical (arrow).",
+    "Detaching a method loses implicit binding — const f = obj.m; f() uses default binding.",
+    "Arrow functions inherit this from enclosing scope; class field arrows fix React-style callbacks.",
+    "60s: Five rules — new beats bind beats implicit beats default; arrows ignore call site. Strict default is undefined. obj.method() binds obj; passing method as callback loses it. Fix with bind, arrow field, or wrapper lambda.",
+    "Follow-up: predict this in setTimeout with function versus arrow inside a method."
+  ],
+  "commonPitfalls": [
+    "Weak: 'this is the function owner.' Strong: this is chosen at invocation — method call, bind, new, or lexical arrow.",
+    "Passing obj.handle as event listener without bind — this becomes the DOM element or undefined.",
+    "Using arrow as prototype method expecting instance this — captures outer this instead."
+  ],
+  "relatedTopicIds": [
+    "javascript-05-classes-and-constructors",
+    "javascript-05-prototype-chain",
+    "javascript-05-object-literals-and-properties"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "detached method trap",
+      "note": "C# instance methods always receive the instance as this — no detached-method trap at runtime.",
+      "futureTopicSlug": "javascript/this-binding"
+    },
+    {
+      "language": "typescript",
+      "concept": "this parameter",
+      "note": "TS can type this on functions but does not change runtime binding rules.",
+      "futureTopicSlug": "typescript/this-types"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — this",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/this"
+    },
+    {
+      "title": "javascript.info — Object methods and this",
+      "url": "https://javascript.info/object-methods"
+    }
+  ]
+}

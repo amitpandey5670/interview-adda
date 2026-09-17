@@ -1,0 +1,301 @@
+{
+  "id": "javascript-03-equality-and-comparison",
+  "slug": "equality-and-comparison",
+  "title": "== versus ===, Object.is, and SameValueZero",
+  "moduleId": "javascript-03-types-coercion-equality",
+  "order": 4,
+  "hook": "Three equality notions exist in JavaScript: loose `==` with coercion, strict `===` without, and `SameValueZero` used by `Map`/`Set`. Pick the right one or your cache keys and NaN checks break.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Strict equality (`===`)** compares type and value without coercion — the default choice in modern code. **Loose equality (`==`)** applies the Abstract Equality Comparison algorithm: it may convert types (e.g. `'5' == 5` → `true`) before comparing. **`Object.is(a, b)`** uses **SameValue**: like `===` but treats `NaN` as equal to `NaN` and distinguishes `+0` from `-0`. **`SameValueZero`** (used internally by `Map`/`Set`) is like `Object.is` but treats `+0` and `-0` as equal."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "===",
+              "longForm": "strict equality",
+              "plainDefinition": "Compares without type conversion. Different types always false. Same reference for objects.",
+              "example": "`'5' === 5` → `false`; `5 === 5` → `true`"
+            },
+            {
+              "term": "==",
+              "longForm": "loose equality",
+              "plainDefinition": "Compares with coercion. `'5' == 5` → `true`. `null == undefined` → `true`. Avoid in new code.",
+              "example": "`0 == false` → `true`; `'' == false` → `true`"
+            },
+            {
+              "term": "SameValueZero",
+              "longForm": "SameValueZero equality",
+              "plainDefinition": "Like === but NaN equals NaN and +0 equals -0. Used by Map/Set key lookup.",
+              "example": "`map.set(NaN, 'x'); map.get(NaN)` works"
+            },
+            {
+              "term": "Object.is",
+              "longForm": "Object.is static method",
+              "plainDefinition": "SameValue equality: NaN === NaN, but +0 !== -0.",
+              "example": "`Object.is(NaN, NaN)` → `true`; `Object.is(+0, -0)` → `false`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "`==` causes subtle bugs: `userInput == 0` is true for `''`, `false`, and `'0'`. Production code uses `===` and explicit parsing. `Map` and `Set` use SameValueZero — so `NaN` keys work, and `+0`/`-0` collapse. `Object.is` is the right tool for `NaN` checks and distinguishing signed zeros in math libraries. C# `==` on value types compares values; on reference types it compares references unless overloaded — no cross-type coercion like JavaScript."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Default to ===",
+          "body": "ESLint `eqeqeq` enforces `===` except `value == null` (checks both null and undefined in one expression). Parse types at boundaries; do not let `==` coerce for you."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Abstract Equality Comparison (==) outline",
+          "items": [
+            {
+              "title": "Same type → compare like ===",
+              "body": "Two numbers, two strings, etc. — no conversion needed."
+            },
+            {
+              "title": "null == undefined → true",
+              "body": "The only case where `==` is idiomatic: `x == null` catches both null and undefined."
+            },
+            {
+              "title": "Number vs string → ToNumber string",
+              "body": "`'5' == 5` → `5 == 5` → `true`. `'abc' == 1` → `NaN == 1` → `false`."
+            },
+            {
+              "title": "Boolean vs anything → ToNumber boolean",
+              "body": "`true == 1` → `1 == 1` → `true`. `false == 0` → `true`."
+            },
+            {
+              "title": "Object vs primitive → ToPrimitive object",
+              "body": "`[1] == 1` → `'1' == 1` → `1 == 1` → `true`."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Three equality algorithms",
+            "source": "flowchart TB\n  subgraph strict [\"=== (Strict Equality)\"]\n    S1[\"Same type required\"]\n    S2[\"NaN !== NaN\"]\n    S3[\"+0 === -0\"]\n  end\n  subgraph loose [\"== (Abstract Equality)\"]\n    L1[\"Coerce types first\"]\n    L2[\"null == undefined\"]\n    L3[\"'5' == 5 → true\"]\n  end\n  subgraph svz [\"SameValueZero / Object.is\"]\n    Z1[\"NaN equals NaN\"]\n    Z2[\"Object.is: +0 !== -0\"]\n    Z3[\"Map/Set: +0 == -0\"]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "== coercion classics",
+            "code": "console.log('5' == 5);      // true — string → number\nconsole.log(0 == false);      // true — false → 0\nconsole.log('' == false);     // true — both → 0\nconsole.log(null == undefined); // true — special rule\nconsole.log([] == false);     // true — [] → '' → 0\nconsole.log([1] == 1);        // true — [1] → '1' → 1\n\n// Same with ===:\nconsole.log('5' === 5);       // false — different types\nconsole.log(0 === false);     // false",
+            "explanation": "Lines 1–6: `==` coerces until types match or gives up. Line 3: empty string and false both coerce to 0. Lines 9–10: `===` stops coercion — different types are always false."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "NaN and signed zero",
+            "code": "console.log(NaN === NaN);           // false\nconsole.log(Object.is(NaN, NaN));   // true\nconsole.log(Number.isNaN(NaN));     // true — preferred NaN test\n\nconsole.log(+0 === -0);             // true\nconsole.log(Object.is(+0, -0));     // false — distinguishes signs\n\nconst map = new Map();\nmap.set(NaN, 'found');\nconsole.log(map.get(NaN));          // 'found' — SameValueZero\n\nmap.set(+0, 'positive');\nconsole.log(map.get(-0));           // 'positive' — SameValueZero treats ±0 equal",
+            "explanation": "Lines 1–3: `===` fails for NaN; use `Number.isNaN` or `Object.is`. Lines 5–6: only `Object.is` distinguishes +0 and -0. Lines 8–12: Map uses SameValueZero — NaN keys work, ±0 collapse."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Production equality patterns",
+            "code": "// Prefer === everywhere:\nfunction isAuthorized(role) {\n  return role === 'admin';\n}\n\n// Idiomatic null+undefined check:\nfunction isMissing(v) {\n  return v == null; // null or undefined only\n}\n\n// Deep equality — not built in:\nimport { isEqual } from 'lodash-es';\nconsole.log(isEqual({ a: 1 }, { a: 1 })); // true\n\n// Reference equality for objects:\nconst a = { x: 1 };\nconst b = { x: 1 };\nconsole.log(a === b); // false — different references",
+            "explanation": "Lines 2–4: strict string compare. Lines 7–9: rare acceptable `==` use. Lines 12–13: deep equality needs a library or recursive compare. Lines 16–18: objects compare by reference with `===`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — == in validation",
+            "code": "function acceptScore(input) {\n  // BUG: '' and false and '0' all pass as \"zero\"\n  if (input == 0) return 'retry';\n  return 'ok';\n}\n\nconsole.log(acceptScore(''));    // 'retry' — surprise\nconsole.log(acceptScore(false)); // 'retry' — surprise\n\n// Fix:\nfunction acceptScoreFixed(input) {\n  const n = Number(input);\n  if (Number.isFinite(n) && n === 0) return 'retry';\n  return 'ok';\n}",
+            "explanation": "Lines 2–5: `==` treats `''` and `false` as equal to 0. Lines 11–15: explicit parse + `===` removes coercion surprises. Classic production bug in form validation."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Equality across languages",
+          "headers": [
+            "Case",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "'5' == 5",
+              "true (coercion)",
+              "Compile error",
+              "Compile error"
+            ],
+            [
+              "NaN === NaN",
+              "false",
+              "false (NaN != NaN)",
+              "false"
+            ],
+            [
+              "null == undefined",
+              "true with ==",
+              "N/A — different types",
+              "Allowed with == in lint exception"
+            ],
+            [
+              "Object deep equal",
+              "No native — use library",
+              "Equals override / IEquatable",
+              "Structural typing at compile time only"
+            ],
+            [
+              "Map key NaN",
+              "Works (SameValueZero)",
+              "Dictionary throws on NaN key",
+              "Same as JS at run time"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `==` for general comparisons. Expecting `===` to compare object contents. Using `isNaN(x)` instead of `Number.isNaN(x)` — `isNaN` coerces first. Not knowing Map/Set use SameValueZero, not `===`."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Know the three algorithms by name: Strict Equality Comparison (`===`), Abstract Equality Comparison (`==`), SameValue (`Object.is`), and SameValueZero (`Map`/`Set`). `Array.prototype.includes` uses SameValueZero — so `arr.includes(NaN)` works but `arr.includes(-0)` finds `+0`. `indexOf` uses Strict Equality — `arr.indexOf(NaN)` is always -1. `Object.is(+0, -0)` is false because IEEE 754 signed zero matters in some math; Map collapses them for practical key lookup. The only widely accepted `==` idiom is `x == null`. Coercion in `==` is fully specified — walk through `[] == ![]` as a whiteboard exercise (true)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Algorithm",
+            "NaN",
+            "+0 vs -0",
+            "Coercion"
+          ],
+          "rows": [
+            [
+              "===",
+              "NaN !== NaN",
+              "+0 === -0",
+              "None"
+            ],
+            [
+              "==",
+              "NaN != NaN",
+              "+0 == -0",
+              "Full Abstract Equality"
+            ],
+            [
+              "Object.is (SameValue)",
+              "NaN === NaN",
+              "+0 !== -0",
+              "None"
+            ],
+            [
+              "SameValueZero (Map/Set)",
+              "NaN === NaN",
+              "+0 === -0",
+              "None"
+            ],
+            [
+              "Array.includes",
+              "SameValueZero",
+              "SameValueZero",
+              "None"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot explain why `'5' == 5` is true but `'5' === 5` is false. Saying `NaN === NaN` is true. Not knowing Map uses SameValueZero. Recommending `==` for general use without mentioning coercion rules."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Default to `===`; use `==` only for `x == null` (null or undefined).",
+    "`==` applies Abstract Equality Comparison — coerces types before compare.",
+    "`NaN === NaN` is false; use `Number.isNaN()` or `Object.is(NaN, NaN)`.",
+    "Map/Set use SameValueZero: NaN keys work; +0 and -0 are equal.",
+    "60s: === no coercion. == coerces ('5'==5). Object.is for NaN. Map uses SameValueZero. Default ===."
+  ],
+  "commonPitfalls": [
+    "Weak: '== and === are the same for numbers.' Strong: '== coerces types; === requires same type and value.'",
+    "Using isNaN(x) — coerces x first; prefer Number.isNaN(x).",
+    "Strong answer: '=== default. == only for null check. SameValueZero for Map. Object.is for NaN and ±0.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-03-coercion-rules",
+    "javascript-03-primitives-and-objects",
+    "javascript-03-truthiness-and-falsy",
+    "javascript-03-typeof-and-type-checks"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "strict equality",
+      "note": "TypeScript ESLint `eqeqeq` recommends `===`. Structural equality is a compile-time concept only — run time still uses reference equality for objects.",
+      "futureTopicSlug": "typescript/types/equality"
+    },
+    {
+      "language": "typescript",
+      "concept": "== and Equals",
+      "note": "C# `==` on reference types compares references unless overloaded. No `'5' == 5` coercion — types must match or convert explicitly.",
+      "futureTopicSlug": "csharp/operators"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Equality comparisons and sameness",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Equality_comparisons_and_sameness"
+    },
+    {
+      "title": "MDN — Object.is",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/is"
+    }
+  ]
+}

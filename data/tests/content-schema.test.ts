@@ -28,7 +28,7 @@ const addFormats = require('ajv-formats') as (ajv: unknown) => void;
 const root = process.cwd();
 const dataRoot = path.join(root, 'data');
 const schemaDir = path.join(dataRoot, 'schemas');
-const contentLanguages = ['csharp', 'dotnet'] as const;
+const contentLanguages = ['csharp', 'dotnet', 'javascript', 'typescript'] as const;
 
 function loadJson(filePath: string): unknown {
   return JSON.parse(readFileSync(filePath, 'utf8')) as unknown;
@@ -90,7 +90,14 @@ function requiresSeniorDepth(stage: Stage, upgradedModule: boolean): boolean {
 
 for (const language of contentLanguages) {
   const langRoot = languageRoot(language);
-  const label = language === 'csharp' ? 'C#' : '.NET';
+  const label =
+    language === 'csharp'
+      ? 'C#'
+      : language === 'dotnet'
+        ? '.NET'
+        : language === 'javascript'
+          ? 'JavaScript'
+          : 'TypeScript';
 
   describe(`${label} content schemas`, () => {
   it('validates index.json when present', () => {

@@ -38,6 +38,8 @@ Change `githubPages.baseHref` if the repository name differs.
 data/
   catalog.json          # Home dashboard tiles
   csharp/
+  javascript/
+  typescript/
     index.json          # Module index and learning stages
     overview.json       # Language landing page
     modules/
@@ -51,7 +53,7 @@ data/
   schemas/              # JSON Schema validation
 ```
 
-C# is the first live track (18 modules, 109 topics). Other languages and frameworks are listed on the home page as coming soon.
+C# is the first live track (18 modules, 109 topics). JavaScript (18 modules, 110 topics) and TypeScript (18 modules, 101 topics) are fully available with the same dual-audience depth model. Other languages and frameworks are listed on the home page as coming soon.
 
 ## GitHub Pages
 
@@ -89,4 +91,4 @@ config/           # site.config.json
 scripts/          # Base-href helpers for ng build/serve
 ```
 
-Built with **Angular 22**, `outputMode: "static"`, and prerender params generated from `data/csharp`.
+Built with **Angular 22**, `outputMode: "static"`, and prerender params generated from `data/` language indexes (C#, .NET, JavaScript, TypeScript).

@@ -1,0 +1,245 @@
+{
+  "id": "javascript-01-engines-and-v8",
+  "slug": "engines-and-v8",
+  "title": "JavaScript engines and how V8 compiles code",
+  "moduleId": "javascript-01-runtime-and-execution",
+  "order": 2,
+  "hook": "You do not ship machine code when you deploy JavaScript — the engine compiles it inside the running process. V8's Just-In-Time (JIT) pipeline is the classic interview topic: parse, bytecode, optimize hot functions, deoptimize when assumptions break.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A JavaScript engine is the component that turns your source text into running behavior. V8 (used in Chrome and Node.js) parses JavaScript into an Abstract Syntax Tree (AST), generates bytecode with an interpreter (Ignition), and promotes frequently executed functions to optimized machine code via a JIT compiler (TurboFan). If runtime types diverge from what the optimizer assumed, V8 deoptimizes back to bytecode. Other engines — SpiderMonkey (Firefox), JavaScriptCore (Safari) — follow similar ideas with different names. This is unlike C#, where Roslyn emits IL at build time and the CLR's tiered JIT compiles methods before or during execution with metadata the engine always trusts."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "JIT",
+              "shortForm": "JIT",
+              "longForm": "Just-In-Time compilation",
+              "plainDefinition": "Compiling code to machine instructions while the program is already running, usually after observing which paths are hot.",
+              "example": "A loop that runs ten thousand times triggers TurboFan optimization in V8."
+            },
+            {
+              "term": "AST",
+              "shortForm": "AST",
+              "longForm": "Abstract Syntax Tree",
+              "plainDefinition": "A tree representation of source code structure after parsing. The engine walks the AST to generate bytecode or machine code.",
+              "example": "A function declaration becomes a node with parameters and a body subtree."
+            },
+            {
+              "term": "Deoptimization",
+              "shortForm": "Deopt",
+              "longForm": "Deoptimization",
+              "plainDefinition": "When optimized machine code assumed stable types or shapes that changed, V8 throws away the optimized code and falls back to slower bytecode.",
+              "example": "Passing a string into a function that was optimized for numbers triggers deopt."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Performance surprises in JavaScript often come from the engine, not from \"interpreted vs compiled\" slogans. Cold code runs slower in bytecode; hot loops become native code. Changing object shapes after optimization — adding properties in different orders, mixing types in the same variable — can cause repeated deopts and hurt throughput. In C#, tiered JIT also warms up, but CLR metadata gives the JIT stable type information JavaScript lacks. Benchmarking JavaScript without warm-up misleads you; benchmarking right after deploy measures interpreter speed, not peak JIT speed."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Modern JavaScript is JIT-compiled, not purely interpreted. V8: parse → Ignition bytecode → TurboFan for hot code → deopt on type/shape changes."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "V8 compilation pipeline (simplified)",
+          "items": [
+            {
+              "title": "Parse source to AST",
+              "body": "Lexer and parser build a syntax tree. Syntax errors fail here before any code runs."
+            },
+            {
+              "title": "Ignition generates bytecode",
+              "body": "Bytecode executes immediately — fast startup, lower peak speed. Every function starts here."
+            },
+            {
+              "title": "Profiler marks hot functions",
+              "body": "Counters track how often bytecode runs. Hot functions queue for TurboFan."
+            },
+            {
+              "title": "TurboFan emits optimized machine code",
+              "body": "Assumes stable types and object shapes (hidden classes). Inlined property access becomes direct memory offsets."
+            },
+            {
+              "title": "Deoptimize on assumption break",
+              "body": "Wrong type or mutated shape invalidates optimized code. Execution resumes in bytecode until maybe re-optimized."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "V8 JIT pipeline vs CLR tiered JIT",
+            "source": "flowchart TD\n  JS[JavaScript source] --> Parse[Parser / AST]\n  Parse --> Ignition[Ignition bytecode]\n  Ignition --> Hot{Hot enough?}\n  Hot -->|yes| TurboFan[TurboFan optimized code]\n  Hot -->|no| Ignition\n  TurboFan --> Deopt{Assumptions hold?}\n  Deopt -->|no| Ignition\n  Deopt -->|yes| TurboFan\n  CS[C# IL] --> CLRJIT[CLR tiered JIT]\n  CLRJIT --> Native[Native code with metadata]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Hot loop gets optimized",
+            "code": "function sumNumbers(arr) {\n  let total = 0;\n  for (let i = 0; i < arr.length; i++) {\n    total += arr[i]; // TurboFan assumes arr[i] is Smi or double\n  }\n  return total;\n}\n\n// Warm up — triggers optimization\nfor (let n = 0; n < 100_000; n++) sumNumbers([1, 2, 3]);",
+            "explanation": "After enough calls with numeric arrays, V8 compiles `sumNumbers` to fast machine code. First calls run in Ignition bytecode — benchmark only the steady state after warm-up."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Deoptimization from type change",
+            "code": "function add(a, b) {\n  return a + b;\n}\n\nfor (let i = 0; i < 50_000; i++) add(1, 2);     // optimized for numbers\nadd('1', '2'); // still works — but may deopt if +' was specialized",
+            "explanation": "V8 may specialize `+` for numbers. Feeding strings later still produces correct `'12'`, but the optimizer may bail out to generic bytecode. Polymorphic call sites are slower than monomorphic ones."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Hidden classes and property order",
+            "code": "function Point(x, y) {\n  this.x = x;\n  this.y = y;\n}\n\nconst a = new Point(1, 2);\nconst b = new Point(3, 4); // same hidden class — fast\n\nconst c = {};\nc.y = 1;\nc.x = 2; // different property order → different shape → slower access",
+            "explanation": "V8 groups objects with the same property layout into hidden classes. Consistent construction order keeps shapes stable. C# structs and classes have fixed layout from compile-time metadata — no equivalent surprise at run time."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Measuring with warm-up",
+            "code": "// Wrong: timing first call only\nconsole.time('cold');\nheavyComputation(data);\nconsole.timeEnd('cold');\n\n// Better: warm up, then measure\nfor (let i = 0; i < 1000; i++) heavyComputation(data);\nconsole.time('warm');\nheavyComputation(data);\nconsole.timeEnd('warm');",
+            "explanation": "Production servers and long-lived tabs hit optimized code. Micro-benchmarks without warm-up measure Ignition, not TurboFan — similar to measuring CLR Tier-0 JIT and calling it final performance."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Engine JIT vs CLR JIT",
+          "headers": [
+            "Concern",
+            "V8 (JavaScript)",
+            "CLR (C#)",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "When compile happens",
+              "At run time in the engine",
+              "Build emits IL; JIT at run time",
+              "Compile to JS before run"
+            ],
+            [
+              "Type info for optimizer",
+              "Inferred from run-time values",
+              "IL metadata always available",
+              "Erased — engine sees JS only"
+            ],
+            [
+              "Deoptimization",
+              "Common when types/shapes change",
+              "Rare — types are fixed",
+              "N/A — same as JS at run time"
+            ],
+            [
+              "Startup cost",
+              "Parse + bytecode; low cold compile",
+              "IL load + tiered JIT",
+              "tsc + same V8 path as JS"
+            ],
+            [
+              "Peak throughput",
+              "Excellent on stable hot paths",
+              "Excellent with known types",
+              "Identical to JS after erase"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Calling JavaScript \"interpreted only\" — V8 JIT-compiles hot code. Assuming `node --version` tells you optimization behavior without warm-up benchmarks. Optimizing object shapes in one code path then breaking them in another (different property order). Comparing first-run Node latency to warmed-up .NET without acknowledging both use JIT."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "V8 pipeline: parse → AST → Ignition bytecode → TurboFan for hot functions → deoptimize when assumptions break.",
+    "Hidden classes reward consistent object layout; polymorphic types at the same call site hurt optimization.",
+    "Always warm up before benchmarking JavaScript — cold bytecode is not steady-state production performance.",
+    "60s: JS engines JIT at run time. V8 starts in bytecode, optimizes hot paths with TurboFan, deopts on type or shape changes. CLR JIT has IL metadata upfront. TS adds no run-time type help.",
+    "Follow-up: what is a hidden class and why does property order matter?"
+  ],
+  "commonPitfalls": [
+    "Saying JavaScript is never compiled — modern engines JIT-compile hot functions aggressively.",
+    "Benchmarking cold first invocation and claiming it represents production throughput.",
+    "Strong answer: 'Parse, bytecode, profile, TurboFan, deopt on shape/type change. Warm up benchmarks. CLR has metadata; V8 infers.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-01-javascript-vs-csharp-ts",
+    "javascript-01-execution-context-and-call-stack",
+    "javascript-01-event-loop-overview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Tiered JIT",
+      "note": "C# comparison: Both V8 and the CLR use tiered compilation, but CLR trusts IL type metadata while V8 must speculate from observed values. Deoptimization is far more common in JavaScript.",
+      "futureTopicSlug": "csharp/01-program-and-compilation/compilation-pipeline"
+    },
+    {
+      "language": "typescript",
+      "concept": "No runtime types for optimizer",
+      "note": "TypeScript annotations do not reach V8. `const n: number = x` erases to `const n = x` — the JIT still discovers types dynamically.",
+      "futureTopicSlug": "typescript/compiler/type-erasure"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — JavaScript engines",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/JavaScript_technologies_overview#javascript_engines"
+    },
+    {
+      "title": "V8 — Ignition and TurboFan (V8 blog)",
+      "url": "https://v8.dev/docs/ignition"
+    },
+    {
+      "title": "javascript.info — Code structure",
+      "url": "https://javascript.info/structure"
+    }
+  ],
+  "animationHint": "flow"
+}

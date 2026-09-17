@@ -1,0 +1,246 @@
+{
+  "id": "javascript-01-modules-and-scripts",
+  "slug": "modules-and-scripts",
+  "title": "Scripts, modules, and how code is loaded",
+  "moduleId": "javascript-01-runtime-and-execution",
+  "order": 6,
+  "hook": "How you load JavaScript changes strict mode, scope, and when code runs. Classic scripts, ES modules, and Node.js `require` versus `import` each have different parsing rules — bundlers hide this until production breaks.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A classic script tag (`<script src=\"app.js\">` without `type=\"module\"`) runs in sloppy mode by default unless `'use strict'` is present, shares the global object for top-level `var`, and executes immediately in document order (blocking parse unless `defer` or `async`). An ES module (`<script type=\"module\">` or `import`/`export` syntax) is always strict, has its own top-level scope (no global `var` pollution), loads with `defer` semantics by default, and supports static `import`/`export` resolved at parse time. Node.js supports both CommonJS (`require`, `module.exports`) and ES modules (`.mjs` or `\"type\": \"module\"` in package.json). C# loads assemblies through references — namespaces organize names, but `using` does not load code; `import` in JavaScript actually evaluates and binds the module."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ES module",
+              "shortForm": "ESM",
+              "longForm": "ECMAScript module",
+              "plainDefinition": "A file using `import` and `export` with static dependency graph, strict mode, and top-level scope isolation.",
+              "example": "`import { readFile } from 'node:fs/promises';`"
+            },
+            {
+              "term": "CommonJS",
+              "shortForm": "CJS",
+              "longForm": "CommonJS module",
+              "plainDefinition": "Node's original module system using `require()` and `module.exports`. Dynamic, synchronous load.",
+              "example": "`const fs = require('node:fs');`"
+            },
+            {
+              "term": "Top-level await",
+              "shortForm": "TLA",
+              "longForm": "Top-level await",
+              "plainDefinition": "Using `await` at module top level in ES modules. Pauses module evaluation until the promise settles.",
+              "example": "`const config = await loadConfig();` in `config.mjs`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Mixing script types causes subtle bugs: a `var` at module top level is not global, but in a classic script it is. `import` hoisting means dependencies run before your module body — circular imports can leave bindings in the temporal dead zone. Node dual packages (CJS + ESM exports) confuse `default` interop. Bundlers flatten the graph, but Node ESM in production still follows spec rules. C# project references load assemblies at runtime; JavaScript `import` is live binding for exports — reassignments in the exporting module visible to importers for `let`/`const` exports."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "ES modules: strict, deferred, own scope, static imports. Classic scripts: sloppy default, global `var`, blocking unless defer/async. Node: CJS vs ESM interop is a deployment topic."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Browser load order",
+          "items": [
+            {
+              "title": "Parse HTML",
+              "body": "Encounter `<script>` — classic scripts without `defer`/`async` block HTML parsing while downloading and executing."
+            },
+            {
+              "title": "Module scripts defer",
+              "body": "`type=\"module\"` downloads in parallel, executes after document parse, in order."
+            },
+            {
+              "title": "Resolve import graph",
+              "body": "Engine fetches dependencies, instantiates module records, links exports to imports."
+            },
+            {
+              "title": "Evaluate modules",
+              "body": "Run module bodies depth-first respecting cycles. Top-level await pauses that module's evaluation."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Classic script vs ES module",
+            "source": "flowchart TB\n  subgraph classic [Classic script]\n    C1[Download]\n    C2[Execute immediately]\n    C3[Global scope var]\n    C4[Sloppy unless directive]\n    C1 --> C2 --> C3 --> C4\n  end\n  subgraph esm [ES module]\n    E1[Download parallel]\n    E2[Defer until parsed]\n    E3[Link imports]\n    E4[Strict module scope]\n    E1 --> E2 --> E3 --> E4\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Module scope vs global script",
+            "code": "// classic.js (script tag, no type=module)\nvar legacy = 'global'; // becomes window.legacy\n\n// app.mjs (module)\nvar modern = 'module-scoped'; // NOT on globalThis\nconsole.log(globalThis.modern); // undefined",
+            "explanation": "Top-level `var` in modules creates a module binding, not a global. Classic scripts pollute the global object — a common migration footgun."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Static import hoisting",
+            "code": "console.log(getVersion());\n\nimport { getVersion } from './version.mjs';\n\n// Works — imports are hoisted and evaluated before module body\n// C#: using only aliases names; import executes the module",
+            "explanation": "Import declarations are hoisted to the top of the module graph evaluation. The exporting module runs before importers use its bindings."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Node CJS vs ESM",
+            "code": "// cjs.cjs\nconst { readFileSync } = require('node:fs');\nmodule.exports = { readFileSync };\n\n// esm.mjs\nimport { readFileSync } from 'node:fs';\nexport { readFileSync };\n\n// package.json \"type\":\"module\" makes .js files ESM by default",
+            "explanation": "Node treats `.cjs` as CommonJS and `.mjs` as ESM. Mixing `require` and `import` in one file is a syntax error — choose per package boundary."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "html",
+            "label": "Script loading attributes",
+            "code": "<!-- Blocks parsing, runs immediately -->\n<script src=\"blocking.js\"></script>\n\n<!-- Downloads parallel, runs after HTML parsed -->\n<script defer src=\"deferred.js\"></script>\n\n<!-- Module: defer by default, strict, CORS for cross-origin -->\n<script type=\"module\" src=\"app.mjs\"></script>",
+            "explanation": "`async` classic scripts run when ready (order not guaranteed). Module scripts behave like `defer` — predictable order for dependency graphs."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Loading and linking",
+          "headers": [
+            "Aspect",
+            "JS ES module",
+            "JS classic script",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Loads code",
+              "`import` evaluates module",
+              "Inline or src executes",
+              "Assembly reference + CLR load",
+              "Compiles to JS modules or CJS"
+            ],
+            [
+              "Top-level scope",
+              "Module-private",
+              "Global object for `var`",
+              "Namespace / assembly",
+              "Follows emit target"
+            ],
+            [
+              "Strictness",
+              "Always strict",
+              "Sloppy default",
+              "Always strict",
+              "Strict if ESM output"
+            ],
+            [
+              "Dynamic load",
+              "`import()` function",
+              "Inject script tag",
+              "AssemblyLoadContext",
+              "`import()` in emitted JS"
+            ],
+            [
+              "Name vs load",
+              "`import` binds and runs",
+              "Script runs once",
+              "`using` is alias only",
+              "Erased to JS import"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `var` in a module and expecting a global — it is module-scoped. `require` in an ESM file or `import` in CJS without dynamic `import()`. Forgetting CORS on cross-origin `<script type=\"module\">`. Assuming bundler dev server behavior matches Node native ESM in production. Equating C# `using` with JS `import` — only JavaScript `import` executes the dependency."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "ES modules: strict, deferred, isolated scope, static `import`/`export`, live bindings.",
+    "Classic scripts: global `var`, sloppy default, blocking parse unless defer/async.",
+    "Node: `.mjs` / package `\"type\":\"module\"` for ESM; CJS uses `require` — interop needs care.",
+    "60s: Modules strict and scoped. Scripts can pollute global. import hoists and runs dependencies. C# using is not import. Bundlers flatten; Node prod follows spec.",
+    "Follow-up: what happens with circular ESM imports at evaluation time?"
+  ],
+  "commonPitfalls": [
+    "Expecting top-level var in a module to attach to window — it does not.",
+    "Mixing require and import in the same Node file without dynamic import().",
+    "Strong answer: 'ESM strict, deferred, module scope. CJS synchronous require. import executes; C# using does not load.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-01-strict-mode-and-sloppy",
+    "javascript-01-javascript-vs-csharp-ts",
+    "javascript-01-event-loop-overview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "using vs import",
+      "note": "C# `using` shortens type names at compile time. JavaScript `import` loads and evaluates the module graph. Assembly references in .csproj are closer to package.json dependencies.",
+      "futureTopicSlug": "csharp/01-program-and-compilation/namespaces-and-usings"
+    },
+    {
+      "language": "typescript",
+      "concept": "Module emit",
+      "note": "TypeScript `module` and `moduleResolution` settings determine whether output is ESM or CommonJS. Types erase; load semantics follow emitted format.",
+      "futureTopicSlug": "typescript/modules/module-resolution"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — JavaScript modules",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Modules"
+    },
+    {
+      "title": "MDN — script type=module",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script/type/module"
+    },
+    {
+      "title": "javascript.info — Modules, introduction",
+      "url": "https://javascript.info/modules-intro"
+    }
+  ]
+}

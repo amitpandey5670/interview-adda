@@ -1,0 +1,229 @@
+{
+  "id": "javascript-03-symbol-and-bigint",
+  "slug": "symbol-and-bigint",
+  "title": "Symbol and BigInt in modern JavaScript",
+  "moduleId": "javascript-03-types-coercion-equality",
+  "order": 5,
+  "hook": "`symbol` creates unique keys that never collide with string properties. `bigint` stores integers larger than `Number.MAX_SAFE_INTEGER` — essential for IDs, ledgers, and timestamps beyond 2⁵³.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Symbol** is a primitive type introduced in ES2015. Every `Symbol()` call creates a unique, immutable value — ideal for object property keys that should not clash with user-provided strings. Well-known symbols like `Symbol.iterator` and `Symbol.toStringTag` hook into language protocols. **BigInt** (ES2020) is an arbitrary-precision integer type. Literals end with `n` (`9007199254740991n`). BigInts cannot mix with `number` in arithmetic without explicit conversion — preventing silent precision loss."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Symbol",
+              "longForm": "Symbol primitive",
+              "plainDefinition": "A unique, immutable identifier. `Symbol('desc')` creates a new symbol each time — description is not part of identity.",
+              "example": "`const id = Symbol('id'); obj[id] = 42;`"
+            },
+            {
+              "term": "well-known symbol",
+              "longForm": "well-known symbol",
+              "plainDefinition": "Built-in symbols on `Symbol` namespace that customize language behavior.",
+              "example": "`obj[Symbol.iterator] = function* () { ... };`"
+            },
+            {
+              "term": "BigInt",
+              "longForm": "BigInt arbitrary-precision integer",
+              "plainDefinition": "Integer type with no fixed bit width. Use for values beyond ±2⁵³−1 safe integer range.",
+              "example": "`const big = 9007199254740993n;`"
+            },
+            {
+              "term": "MAX_SAFE_INTEGER",
+              "longForm": "Number.MAX_SAFE_INTEGER (2⁵³ − 1)",
+              "plainDefinition": "Largest integer `number` can represent exactly. Beyond this, use `bigint`.",
+              "example": "`9007199254740993 === 9007199254740992` → `true` (precision lost)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Twitter/X snowflake IDs and blockchain balances exceed `Number.MAX_SAFE_INTEGER`. Parsing them as `number` silently rounds — use `BigInt`. Symbols prevent library code from overwriting user keys: `const _cache = Symbol('cache')` on a class instance is invisible to `Object.keys()`. In C#, `long` handles 64-bit integers; beyond that you use `BigInteger`. JavaScript splits the problem: `number` for doubles, `bigint` for integers — no `decimal` type."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When to reach for each",
+          "body": "Symbol → hidden metadata, protocol hooks (`iterator`, `toStringTag`), enum-like constants without string collision. BigInt → snowflake IDs, crypto amounts, factorials, anything past 9_007_199_254_740_991."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Symbol and BigInt usage patterns",
+          "items": [
+            {
+              "title": "Create a unique Symbol key",
+              "body": "`const key = Symbol('label'); obj[key] = value;` — not enumerable in `for...in` or `Object.keys`."
+            },
+            {
+              "title": "Reuse a global Symbol",
+              "body": "`Symbol.for('app.id')` registers in global registry; `Symbol.keyFor(sym)` retrieves the string key."
+            },
+            {
+              "title": "Create BigInt literals and conversions",
+              "body": "`123n` or `BigInt('123')`. `BigInt(number)` truncates toward zero."
+            },
+            {
+              "title": "Keep number and bigint separate",
+              "body": "`1n + 2` throws TypeError. Use `1n + BigInt(2)` or convert explicitly."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Number safe range vs BigInt",
+            "source": "flowchart LR\n  subgraph safe [\"number — exact integers\"]\n    MIN[\"-2⁵³ + 1\"]\n    MAX[\"2⁵³ - 1\"]\n  end\n  subgraph unsafe [\"number — precision loss\"]\n    BAD[\"9007199254740993\"]\n  end\n  subgraph big [\"bigint — arbitrary\"]\n    BI[\"9007199254740993n\"]\n  end\n  BAD -->|\"rounds silently\"| LOSS[\"equals 9007199254740992\"]\n  BI -->|\"exact\"| OK[\"stays exact\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Symbol uniqueness and hidden properties",
+            "code": "const a = Symbol('id');\nconst b = Symbol('id');\nconsole.log(a === b); // false — each call is unique\n\nconst user = { name: 'Ada', [a]: 42 };\nconsole.log(user[a]);        // 42\nconsole.log(Object.keys(user)); // ['name'] — symbol key hidden\nconsole.log(Object.getOwnPropertySymbols(user)); // [Symbol(id)]\n\n// Global registry:\nconst global1 = Symbol.for('app.token');\nconst global2 = Symbol.for('app.token');\nconsole.log(global1 === global2); // true",
+            "explanation": "Lines 1–3: description string is cosmetic — symbols are unique. Lines 5–8: symbol keys are non-enumerable by default. Lines 11–13: `Symbol.for` shares symbols across realms/modules."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "BigInt for large integers",
+            "code": "const unsafe = 9007199254740993;\nconsole.log(unsafe);                    // 9007199254740992 — wrong!\nconsole.log(Number.isSafeInteger(unsafe)); // false\n\nconst safe = 9007199254740993n;\nconsole.log(safe);                      // 9007199254740993n — exact\nconsole.log(safe + 1n);                 // 9007199254740994n\n\n// JSON does not support BigInt natively:\n// JSON.stringify({ id: 1n }); // TypeError\nconst jsonSafe = { id: safe.toString() };",
+            "explanation": "Lines 1–3: beyond MAX_SAFE_INTEGER, `number` rounds. Lines 5–7: `bigint` stays exact. Lines 10–11: JSON.stringify throws on BigInt — serialize as string and parse back with BigInt()."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Well-known symbols and mixed-type guard",
+            "code": "class Collection {\n  constructor(items) {\n    this._items = items;\n  }\n  [Symbol.iterator]() {\n    return this._items[Symbol.iterator]();\n  }\n  get [Symbol.toStringTag]() {\n    return 'Collection';\n  }\n}\n\nconst c = new Collection([1, 2, 3]);\nconsole.log([...c]); // [1, 2, 3] — Symbol.iterator enables spread\n\ntry {\n  console.log(1n + 1); // TypeError\n} catch (e) {\n  console.log('Cannot mix bigint and number');\n}",
+            "explanation": "Lines 5–12: well-known symbols customize iteration and `Object.prototype.toString` branding. Line 16: spread uses `Symbol.iterator`. Lines 18–22: mixing `bigint` and `number` throws — by design."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Symbol and BigInt across languages",
+          "headers": ["Need", "JavaScript", "C#", "TypeScript"],
+          "rows": [
+            ["Unique hidden key", "`Symbol()`", "No direct equivalent — use `private` or `ConditionalWeakTable`", "`unique symbol` type; `symbol` in types"],
+            ["Large integers", "`bigint`", "`long` (64-bit) or `BigInteger`", "`bigint` type annotation"],
+            ["JSON serialization", "BigInt throws — use string", "long/BigInteger via custom converter", "Same run-time limitation"],
+            ["Enum-like constants", "`Symbol` or frozen objects", "`enum` keyword", "`enum` or `as const` objects"],
+            ["Iterator protocol", "`Symbol.iterator`", "`IEnumerable<T>`", "Erased — same as JS at run time"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Parsing snowflake IDs as `number` — silent rounding. Mixing `bigint` and `number` in math. Expecting `JSON.stringify` to handle BigInt. Using `new Symbol()` — Symbol is not a constructor; call `Symbol()` directly. Assuming `Symbol('x') === Symbol('x')` — they are always different unless from `Symbol.for`."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Symbols are opaque property keys — `Object.getOwnPropertyDescriptor` returns them but they skip `JSON.stringify`. Private class fields (`#field`) are a newer alternative for true encapsulation; symbols remain useful for cross-cutting protocols. BigInt uses arbitrary-length two's-complement representation in engines — operations can be slower than `number`. `BigInt.asIntN` / `asUintN` wrap to fixed width for bitwise interop. `typeof 1n` is `'bigint'`. Division on BigInt truncates toward zero (like C# integer division). For money, neither `number` nor `bigint` gives decimal fractions — use a library or integer cents (same advice as C# `decimal` vs `double`)."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Feature", "Strength", "Interview trap"],
+          "rows": [
+            ["Symbol", "Collision-free keys, protocol hooks", "Not serializable to JSON"],
+            ["Symbol.for", "Cross-module shared symbols", "Global registry pollution if abused"],
+            ["BigInt", "Exact large integers", "No JSON; no Math.sqrt on bigint"],
+            ["number", "Fast IEEE 754 math", "Only ±2⁵³−1 integers exact"],
+            ["Private fields #", "True class privacy", "Symbols still needed for protocols"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing MAX_SAFE_INTEGER. Saying BigInt works in JSON natively. Claiming two `Symbol('a')` are equal. Mixing bigint and number without mentioning the TypeError."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Every `Symbol()` is unique — description does not affect identity.",
+    "Symbol keys are non-enumerable; use `Object.getOwnPropertySymbols`.",
+    "BigInt handles integers beyond Number.MAX_SAFE_INTEGER (2⁵³ − 1).",
+    "Cannot mix bigint and number without explicit conversion; JSON.stringify rejects BigInt.",
+    "60s: Symbol for unique keys and protocols. BigInt for large integers. No JSON for BigInt. 2⁵³ safe limit on number."
+  ],
+  "commonPitfalls": [
+    "Weak: 'Symbol is like a string enum.' Strong: 'Each Symbol() is unique; use Symbol.for for shared registry.'",
+    "Parsing Twitter snowflake IDs as number — silent precision loss.",
+    "Strong answer: 'BigInt past 2⁵³. Serialize as string for JSON. Symbols for hidden keys and iterator protocol.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-03-primitives-and-objects",
+    "javascript-03-typeof-and-type-checks",
+    "javascript-03-json-and-serialization",
+    "javascript-03-coercion-rules"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "bigint and unique symbol",
+      "note": "TypeScript 3.2+ supports `bigint` literals and `unique symbol` for branded keys. Still no JSON support at run time.",
+      "futureTopicSlug": "typescript/types/bigint-symbol"
+    },
+    {
+      "language": "csharp",
+      "concept": "long and BigInteger",
+      "note": "C# `long` is 64-bit fixed. `BigInteger` is arbitrary like JS `bigint`. C# has no Symbol equivalent — use access modifiers.",
+      "futureTopicSlug": "csharp/built-in-types"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Symbol",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol"
+    },
+    {
+      "title": "MDN — BigInt",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/BigInt"
+    }
+  ],
+  "scenarioTag": "snowflake-ids"
+}

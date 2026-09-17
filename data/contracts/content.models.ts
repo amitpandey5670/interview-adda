@@ -238,7 +238,7 @@ export interface IndexModuleRef {
 }
 
 export interface ContentIndex {
-  language: 'csharp' | 'dotnet';
+  language: 'csharp' | 'dotnet' | 'javascript' | 'typescript';
   title: string;
   stages: StageGroup[];
   modules: IndexModuleRef[];

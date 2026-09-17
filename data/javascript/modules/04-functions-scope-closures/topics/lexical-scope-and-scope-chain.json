@@ -1,0 +1,231 @@
+{
+  "id": "javascript-04-lexical-scope-and-scope-chain",
+  "slug": "lexical-scope-and-scope-chain",
+  "title": "Lexical scope and the scope chain",
+  "moduleId": "javascript-04-functions-scope-closures",
+  "order": 3,
+  "hook": "Scope is not about where code runs — it is about where code was written. The scope chain is a linked list of environments the engine walks to resolve a variable name, and it is separate from the call stack.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Lexical scope** (also called static scope) means a function can access variables declared in its outer blocks based on source text position, not based on who called it. Each scope creates an **environment** (variable bindings). The **scope chain** links inner environments to outer ones through the `[[Environment]]` internal slot on functions. `var` is function-scoped; `let` and `const` are block-scoped. Global scope is the outermost link."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "lexical scope",
+              "longForm": "lexical (static) scope",
+              "plainDefinition": "Variable visibility determined by where functions and blocks are written in source code.",
+              "example": "function outer() { const x = 1; function inner() { console.log(x); } }"
+            },
+            {
+              "term": "scope chain",
+              "longForm": "scope chain",
+              "plainDefinition": "The chain of outer lexical environments consulted when resolving an identifier.",
+              "example": "inner → outer → global"
+            },
+            {
+              "term": "block scope",
+              "longForm": "block scope",
+              "plainDefinition": "Bindings created by let, const, class, or {} that exist only inside the block.",
+              "example": "if (true) { let x = 1; } // x not visible outside"
+            },
+            {
+              "term": "function scope",
+              "longForm": "function scope",
+              "plainDefinition": "Bindings created by var and function declarations inside a function body.",
+              "example": "function f() { var x = 1; }"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Understanding scope chain vs call stack is a top Reddit and FAANG interview topic. The call stack tracks *which function is running now*; the scope chain tracks *which environments are visible to that function*. A nested function always sees the environment where it was defined, even if invoked from elsewhere. Block scope with `let`/`const` prevents accidental leakage from `if`, `for`, and `try` blocks — and fixes the classic loop-with-`var` trap covered in the closures topic."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Scope chain ≠ call stack",
+          "body": "Calling a function from another file does not change its scope chain. Only the lexical nesting at definition time matters."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Resolving an identifier",
+          "items": [
+            {
+              "title": "Start in current environment",
+              "body": "Look up the name in the innermost lexical environment (function params, block locals)."
+            },
+            {
+              "title": "Walk the scope chain",
+              "body": "If not found, follow the outer reference to the parent environment until global or module scope."
+            },
+            {
+              "title": "ReferenceError if missing",
+              "body": "If no binding exists on the chain, throw ReferenceError (not undefined unless you declared let x without assigning)."
+            },
+            {
+              "title": "Separate from call stack",
+              "body": "The executing frame's scope comes from [[Environment]], not from who invoked the function."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Scope chain vs call stack",
+            "source": "flowchart TB\n  subgraph CALL_STACK[Call stack — who runs now]\n    CS3[inner invoked]\n    CS2[outer]\n    CS1[global caller]\n  end\n  subgraph SCOPE_CHAIN[Scope chain — where inner was written]\n    SC1[inner env]\n    SC2[outer env x=1]\n    SC3[global env]\n    SC1 --> SC2 --> SC3\n  end\n  CS3 -.->|reads x via chain not stack| SC2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "var function scope vs let block scope",
+            "code": "function demo() {\n  if (true) {\n    var hoisted = \"function scoped\";\n    let blocked = \"block scoped\";\n  }\n  console.log(hoisted); // \"function scoped\"\n  // console.log(blocked); // ReferenceError\n}\ndemo();",
+            "explanation": "Line 3: var is hoisted to function scope, visible after the if. Line 4: let exists only inside the block."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Lexical scope survives different call site",
+            "code": "const secret = \"global\";\n\nfunction makeReader() {\n  const secret = \"closure\";\n  return function read() {\n    return secret;\n  };\n}\n\nconst read = makeReader();\nconsole.log(read()); // \"closure\" — not \"global\"",
+            "explanation": "Line 8: read's scope chain includes makeReader's environment where secret is \"closure\", regardless of where read() is called."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Shadowing on the scope chain",
+            "code": "let color = \"blue\";\n\nfunction paint() {\n  let color = \"red\";\n  function stroke() {\n    console.log(color); // \"red\" — nearest binding wins\n  }\n  stroke();\n}\npaint();",
+            "explanation": "Line 6: inner function finds color in paint's environment first; global color is shadowed but still exists."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Scope models",
+          "headers": [
+            "Feature",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Scope kind",
+              "Lexical only",
+              "Lexical only",
+              "Lexical (erased at compile)"
+            ],
+            [
+              "Block locals",
+              "let/const",
+              "Any declaration in {}",
+              "Same as JS"
+            ],
+            [
+              "Hoisting",
+              "var and function declarations",
+              "No hoisting of locals",
+              "Same as JS"
+            ],
+            [
+              "Module scope",
+              "ES modules have top-level scope",
+              "File/class namespace scope",
+              "Module scope per file"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming dynamic scope",
+          "body": "JavaScript is not Perl — inner functions do not see the caller's locals. Only lexical outer environments count."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using var in blocks expecting isolation",
+          "body": "for (var i = 0; ...) leaks i outside the loop. Prefer let for loop counters and block-scoped temporaries."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Lexical scope is fixed at write time; the scope chain is the linked list of outer environments.",
+    "Call stack = execution order; scope chain = variable visibility — interviewers love contrasting these.",
+    "let/const are block-scoped; var is function-scoped and hoisted without initialization until assignment.",
+    "60s: Resolve names by walking outer environments from inner to global. Where a function is defined sets its chain, not where it is called.",
+    "Follow-up: what is the Temporal Dead Zone for let/const?"
+  ],
+  "commonPitfalls": [
+    "Confusing scope chain with call stack — calling from elsewhere does not change visible variables.",
+    "Using var inside loops and expecting per-iteration bindings — leads to the closure loop trap.",
+    "Strong answer: 'Scope is lexical. Each function carries [[Environment]]. Lookup walks outward. Block scope with let fixes loop capture bugs.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-04-function-forms",
+    "javascript-04-closures-and-capture",
+    "javascript-04-iife-and-module-pattern",
+    "javascript-04-recursion-and-call-stack-limits"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Block-scoped types",
+      "note": "TypeScript respects the same scope rules at type-check time. Unused block locals can trigger noUnusedLocals.",
+      "futureTopicSlug": "typescript/types/scope-and-modules"
+    },
+    {
+      "language": "typescript",
+      "concept": "Lexical nesting",
+      "note": "C# nested methods (local functions) also close over outer locals lexically. No var/function-scope split — all locals are block-scoped.",
+      "futureTopicSlug": "csharp/delegates/local-functions-vs-lambdas"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Closures (scope background)",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures"
+    },
+    {
+      "title": "javascript.info — Variable scope",
+      "url": "https://javascript.info/closure"
+    }
+  ]
+}

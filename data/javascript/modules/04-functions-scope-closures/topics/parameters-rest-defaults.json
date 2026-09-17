@@ -1,0 +1,231 @@
+{
+  "id": "javascript-04-parameters-rest-defaults",
+  "slug": "parameters-rest-defaults",
+  "title": "Parameters, default values, and rest parameters",
+  "moduleId": "javascript-04-functions-scope-closures",
+  "order": 2,
+  "hook": "Function parameters are not just names — defaults run when the argument is missing, rest collects leftovers into a real array, and both interact with destructuring in ways that surprise even experienced developers.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "When you define `function f(a, b = 1, ...rest) {}`, each parameter is a **binding** in the function's scope. A **default value** expression runs only when the corresponding argument is `undefined` — not when it is `null` or `0`. A **rest parameter** (`...names`) gathers all remaining arguments into a genuine Array instance (not array-like `arguments`). Parameters are evaluated left to right; a default can reference earlier parameters in the same signature."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "default parameter",
+              "longForm": "default parameter value",
+              "plainDefinition": "An initializer after = that runs when the argument is undefined.",
+              "example": "function log(msg, level = \"info\") {}"
+            },
+            {
+              "term": "rest parameter",
+              "longForm": "rest parameter",
+              "plainDefinition": "A final ...identifier that collects excess arguments into an Array.",
+              "example": "function sum(first, ...rest) { return rest.reduce((a,b)=>a+b, first); }"
+            },
+            {
+              "term": "arguments",
+              "longForm": "arguments object",
+              "plainDefinition": "Legacy array-like object available inside non-arrow functions. Prefer rest parameters in modern code.",
+              "example": "function old() { console.log(arguments.length); }"
+            },
+            {
+              "term": "TDZ",
+              "longForm": "Temporal Dead Zone",
+              "plainDefinition": "The period before a let/const binding is initialized where accessing it throws ReferenceError.",
+              "example": "Default params run in TDZ-safe order at call time."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Default parameters replace a lot of manual `if (x === undefined)` boilerplate and make APIs self-documenting. Rest parameters give you variadic functions without the quirks of `arguments` (not a real array, no arrow access). In production, a default that mutates a shared object literal is a subtle bug — each call must get a fresh default. Interviewers ask whether `null` triggers a default (it does not) and whether defaults are re-evaluated per call (yes)."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "undefined vs missing vs null",
+          "body": "Only `undefined` (including omitting the argument) triggers the default. Passing `null` explicitly keeps null — design your API docs accordingly."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Parameter binding at call time",
+          "items": [
+            {
+              "title": "Create function scope",
+              "body": "Each invocation creates a new lexical environment for parameters and locals."
+            },
+            {
+              "title": "Bind positional arguments",
+              "body": "Arguments map to parameters in order. Extra args are ignored unless a rest parameter exists."
+            },
+            {
+              "title": "Apply defaults",
+              "body": "If a parameter is undefined after binding, evaluate its default expression once for this call."
+            },
+            {
+              "title": "Build rest array",
+              "body": "Remaining arguments after the last non-rest parameter copy into a new Array."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Call to parameter bindings",
+            "source": "flowchart LR\n  CALL[fn 1 undefined 3 4] --> P1[a = 1]\n  CALL --> P2[b = default 2]\n  CALL --> REST[...rest = 3 4]\n  P2 --> EVAL[Evaluate b default once]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Defaults trigger only for undefined",
+            "code": "function greet(name = \"Guest\", punct = \"!\") {\n  return `${name}${punct}`;\n}\n\ngreet();              // \"Guest!\"\ngreet(\"Ada\");         // \"Ada!\"\ngreet(\"Ada\", null);   // \"Adanull\" — null is not undefined\ngreet(undefined, \"?\"); // \"Guest?\"",
+            "explanation": "Line 7: omitted name is undefined, default applies. Line 9: null is a value, so punct stays null and stringifies oddly — a common API footgun."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Rest parameter vs arguments",
+            "code": "function total(...nums) {\n  return nums.reduce((sum, n) => sum + n, 0);\n}\n\ntotal(1, 2, 3); // 6\n\nconst arrow = (...items) => items.map(String);\narrow(1, true); // [\"1\", \"true\"]",
+            "explanation": "Line 1: rest is a real Array with all reduce/map methods. Line 7: arrows support rest but have no arguments object."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Destructuring parameters",
+            "code": "function createUser({ name, role = \"viewer\", id = crypto.randomUUID() }) {\n  return { name, role, id };\n}\n\ncreateUser({ name: \"Sam\" });\n// { name: \"Sam\", role: \"viewer\", id: \"...\" }",
+            "explanation": "Line 1: object destructuring in the parameter position with nested defaults. Line 2: id default runs per call, giving a fresh UUID each time."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Parameters across languages",
+          "headers": [
+            "Feature",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Optional args",
+              "Default parameters",
+              "Optional parameters with defaults",
+              "Optional ? and defaults"
+            ],
+            [
+              "Variadic",
+              "Rest ...args",
+              "params T[] args",
+              "Rest ...args typed as tuple"
+            ],
+            [
+              "null vs default",
+              "Only undefined triggers default",
+              "Default used when omitted; nullable types separate",
+              "strictNullChecks affects call sites"
+            ],
+            [
+              "arguments object",
+              "Legacy in non-arrow functions",
+              "No equivalent",
+              "No equivalent"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mutable default object shared across calls",
+          "body": "function cfg(opts = {}) is safe. function bad(opts = { cache: [] }) shares one array unless you clone inside the body."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Rest must be last",
+          "body": "function f(...a, b) is a SyntaxError. Rest parameters must be the final formal parameter."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Default parameters apply when the argument is undefined, not null, not 0, not \"\".",
+    "Default expressions are evaluated at call time, left to right — they can reference earlier parameters.",
+    "Rest parameters produce a real Array; arguments is legacy, array-like, and absent in arrows.",
+    "60s: undefined triggers defaults. Rest collects extras. Destructuring in params works. Never use mutable object literals as defaults without cloning.",
+    "Follow-up: what happens if a default parameter references a later parameter?"
+  ],
+  "commonPitfalls": [
+    "Expecting null to trigger a default — only undefined does.",
+    "Using arguments in new code instead of rest — harder to compose and unavailable in arrows.",
+    "Strong answer: 'Defaults per call, undefined-only. Rest for variadics. Destructure in signature for options objects. Clone mutable defaults inside the body.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-04-function-forms",
+    "javascript-04-lexical-scope-and-scope-chain",
+    "javascript-04-higher-order-functions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Optional and default parameters",
+      "note": "TypeScript optional `name?: string` allows omitting the argument; combined with strictNullChecks, callers must not pass undefined unless typed explicitly.",
+      "futureTopicSlug": "typescript/types/function-types"
+    },
+    {
+      "language": "typescript",
+      "concept": "params and optional parameters",
+      "note": "C# params arrays are compile-time sugar for variable argument lists. JavaScript rest is always an Array at runtime with no params keyword.",
+      "futureTopicSlug": "csharp/members/methods-and-parameters"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Default parameters",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/Default_parameters"
+    },
+    {
+      "title": "MDN — Rest parameters",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Functions/rest_parameters"
+    }
+  ],
+  "animationHint": "flow"
+}

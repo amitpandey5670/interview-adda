@@ -1,0 +1,241 @@
+{
+  "id": "javascript-05-object-literals-and-properties",
+  "slug": "object-literals-and-properties",
+  "title": "Object literals, property keys, and descriptors",
+  "moduleId": "javascript-05-objects-prototypes-oop",
+  "order": 1,
+  "hook": "Almost every JavaScript value you pass around — config objects, API payloads, event handlers — starts as an object literal. Before prototypes and classes make sense, you need to know how keys, values, and hidden descriptor flags actually behave at runtime.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An **object literal** is the `{ key: value }` syntax for creating a plain object. Keys are usually strings or **Symbols**; values can be any JavaScript value including functions (called **methods** when defined inside the literal). Every property also has a hidden **descriptor** — three flags (`writable`, `enumerable`, `configurable`) that control whether you can change, list, or delete it."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "object literal",
+              "longForm": "object literal",
+              "plainDefinition": "Syntax `{ a: 1, b: 2 }` that creates a new plain object in one expression.",
+              "example": "`const user = { id: \"u-1\", role: \"admin\" };`"
+            },
+            {
+              "term": "property descriptor",
+              "longForm": "property descriptor",
+              "plainDefinition": "Metadata on a property: writable (can assign?), enumerable (shows in for-in?), configurable (can delete/redefine?).",
+              "example": "`Object.getOwnPropertyDescriptor(obj, \"id\")` returns `{ value, writable, enumerable, configurable }`."
+            },
+            {
+              "term": "computed property name",
+              "longForm": "computed property name",
+              "plainDefinition": "A key computed at runtime using square brackets in the literal.",
+              "example": "`{ [\"prop_\" + id]: true }`"
+            },
+            {
+              "term": "shorthand property",
+              "longForm": "shorthand property",
+              "plainDefinition": "When the key name matches a variable name, you can write `{ name }` instead of `{ name: name }`.",
+              "example": "`const name = \"Ada\"; const o = { name };`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Object literals are the building block for configuration, Data Transfer Objects (DTOs), and module exports. In TypeScript, structural typing means two interfaces with the same shape assign freely — but at runtime they are just plain objects with no type name attached. Property descriptors matter when you freeze API surfaces (`Object.freeze`), hide internal fields from `JSON.stringify`, or debug why `for...in` lists some keys and not others."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Literals create own properties",
+          "body": "Keys you write in `{ a: 1 }` become **own** properties on the new object. They are not inherited from `Object.prototype` unless you explicitly put them on the prototype — that distinction drives the prototype chain topic next."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From literal to stored property",
+          "items": [
+            {
+              "title": "Engine creates a new object",
+              "body": "The runtime allocates an object whose internal [[Prototype]] is `Object.prototype` (unless you use `Object.create(null)`)."
+            },
+            {
+              "title": "Each key becomes an own property",
+              "body": "String keys are coerced (`123` becomes `\"123\"`). Symbol keys stay as Symbols and never collide with string keys."
+            },
+            {
+              "title": "Default descriptor flags apply",
+              "body": "Data properties from literals default to `writable: true`, `enumerable: true`, `configurable: true` — unless you use `Object.defineProperty` or class fields with different rules."
+            },
+            {
+              "title": "Methods are just function-valued properties",
+              "body": "`{ greet() {} }` is shorthand for `{ greet: function() {} }`. The function's `this` depends on how it is called — not on the literal syntax."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Object literal structure",
+            "source": "flowchart TD\n  LIT[\"{ id: 1, name: 'Ada' }\"] --> OBJ[New object]\n  OBJ --> OWN[Own properties\\nid, name]\n  OBJ --> PROTO[[Prototype]]\\nObject.prototype\n  OWN --> DESC[Descriptors\\nwritable enumerable configurable]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Literals, shorthand, and computed keys",
+            "code": "const id = \"u-42\";\nconst role = \"editor\";\n\nconst user = {\n  id,                          // shorthand: { id: id }\n  role,\n  [\"can_\" + role]: true,       // computed key: can_editor\n  greet() {\n    return `Hi, ${this.id}`;   // method — this set by call site\n  },\n};\n\nconsole.log(user.can_editor);  // true\nconsole.log(user.greet());     // Hi, u-42",
+            "explanation": "Line 1–2: variables used as shorthand keys. Line 7: computed property name built at runtime. Line 8–10: method shorthand — still a function property. Line 14: `this.id` works because `user.greet()` uses implicit `this` binding."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Reading and changing descriptors",
+            "code": "const token = { value: \"abc\", meta: { tenant: \"t1\" } };\n\n// Default: all three flags true for literal keys\nconsole.log(Object.getOwnPropertyDescriptor(token, \"value\"));\n// { value: 'abc', writable: true, enumerable: true, configurable: true }\n\nObject.defineProperty(token, \"value\", {\n  writable: false,   // cannot reassign token.value\n  enumerable: false, // hidden from for...in and Object.keys\n  configurable: false,\n});\n\ntoken.value = \"xyz\"; // silent fail in sloppy mode; TypeError in strict\nconsole.log(Object.keys(token)); // ['meta'] — value not listed",
+            "explanation": "Line 4: inspect descriptor flags. Line 7–11: redefine with stricter flags — requires `configurable: true` on the original to change later. Line 13: assignment fails when `writable: false`. Line 14: non-enumerable keys are omitted from `Object.keys`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Symbol keys — unique and non-colliding",
+            "code": "const idKey = Symbol(\"id\");\nconst internal = Symbol(\"internal\");\n\nconst cache = {\n  [idKey]: \"entry-7\",\n  [internal]: { hits: 0 },\n  publicKey: \"visible\",\n};\n\nconsole.log(cache[idKey]);           // entry-7\nconsole.log(Object.keys(cache));     // ['publicKey'] — symbols omitted\nconsole.log(Object.getOwnPropertySymbols(cache)); // [Symbol(id), Symbol(internal)]",
+            "explanation": "Line 1–2: each `Symbol()` is unique even with the same description. Line 5–6: symbol keys store data without polluting string-key enumeration. Line 11: `Object.keys` skips symbols; use `getOwnPropertySymbols` to find them."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Objects versus C# types",
+          "headers": ["Feature", "JavaScript object literal", "C# / TypeScript"],
+          "rows": [
+            ["Creation", "`{ a: 1 }` at runtime", "C#: `new()` or object initializer; TS: type erased to plain object"],
+            ["Property metadata", "Descriptor flags (writable, enumerable, configurable)", "C#: access modifiers in CLR metadata; TS: erased"],
+            ["Unique keys", "Symbol", "C#: no direct equivalent; use typed wrapper"],
+            ["Structural assign", "Any object with matching shape", "TS: yes at compile time; C#: nominal — must declare relationship"],
+            ["Freeze immutability", "`Object.freeze` — shallow, best-effort", "C#: `readonly`, `init`, immutable records"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assuming Object.freeze is deep",
+          "body": "`Object.freeze(obj)` freezes only the top level. Nested objects remain mutable unless you freeze recursively. C# immutable records copy by value at the type level — different guarantee."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Using for...in without hasOwnProperty",
+          "body": "`for...in` walks enumerable keys on the prototype chain too. Use `Object.hasOwn(obj, key)` or `Object.keys(obj)` when you only want own properties."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "At the engine level, a plain object is an **ordinary object** with internal slots: `[[Prototype]]`, `[[Extensible]]`, and a property storage model (fast elements vs dictionary mode). Literal syntax is syntactic sugar for `OrdinaryObjectCreate` plus `CreateDataProperty` calls. **Enumerable false** is how libraries hide implementation details from serialization — `JSON.stringify` only serializes own enumerable string-key properties. **Configurable false** prevents deletion and blocks redefining the property — used by built-ins like `length` on arrays. In production, confusing **own** vs **inherited** properties causes bugs when patching prototypes or mixing `Object.assign` with class instances."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Descriptor tradeoffs",
+          "headers": ["Flag", "When true", "Interview pitfall"],
+          "rows": [
+            ["writable", "Assignment succeeds", "Assuming const makes nested fields immutable"],
+            ["enumerable", "Shows in for-in / Object.keys", "Hidden symbol keys still exist — not secret, just omitted from enumeration"],
+            ["configurable", "Can delete or redefine", "Once false, property is locked down permanently"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — mutating a frozen config in production",
+            "code": "const CONFIG = Object.freeze({ retries: 3, backoff: { ms: 100 } });\n\nfunction deployWorker(cfg) {\n  cfg.backoff.ms = 0; // mutates nested object — freeze is shallow!\n  cfg.retries = 10;   // silent no-op (or TypeError in strict)\n}\n\ndeployWorker(CONFIG);\nconsole.log(CONFIG.backoff.ms); // 0 — shared singleton corrupted",
+            "explanation": "Line 1: top-level freeze does not recurse. Line 4: nested object still mutable — classic production footgun. Line 5: top-level assignment blocked. Strong answer: deep-freeze or immutable update patterns (spread copy)."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying `const obj = {}` makes all properties immutable — only the binding is const. Claiming Symbol properties are private — they are hidden from normal enumeration but readable if you have the symbol reference. Confusing `Object.keys` with all properties — it skips non-enumerable and symbol keys."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Object literals create own properties with default descriptors: writable, enumerable, configurable all true.",
+    "Property descriptors control assignability, enumeration, and redefinition — not the same as TypeScript access modifiers.",
+    "Symbol keys are unique and omitted from Object.keys; they are not encryption or true privacy.",
+    "60s: Literals build plain objects with own properties. Descriptors are writable/enumerable/configurable flags. Methods are function properties — this binding is separate. Symbols avoid key collisions. Object.freeze is shallow. for-in walks the prototype chain unless you filter with hasOwn.",
+    "Follow-up: explain why JSON.stringify omits a non-enumerable property."
+  ],
+  "commonPitfalls": [
+    "Weak: 'Object.freeze makes the whole tree immutable.' Strong: freeze is shallow; nested objects stay mutable unless deep-frozen or copied immutably.",
+    "Using for...in on objects without checking hasOwn — inherits enumerable prototype keys like toString in edge cases.",
+    "Treating Symbol keys as private — any code holding the symbol reference can read and write the property."
+  ],
+  "relatedTopicIds": [
+    "javascript-05-prototype-chain",
+    "javascript-05-private-fields-and-encapsulation",
+    "javascript-05-js-oop-vs-csharp-ts"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "structural typing",
+      "note": "TypeScript checks object literal shapes at compile time; at runtime they are plain objects with no type name.",
+      "futureTopicSlug": "typescript/structural-types"
+    },
+    {
+      "language": "javascript",
+      "concept": "object initializer contrast",
+      "note": "C# object initializers create typed CLR instances; JS literals have no nominal type at runtime.",
+      "futureTopicSlug": "javascript/objects/literals"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Working with objects",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Working_with_objects"
+    },
+    {
+      "title": "MDN — Property descriptors",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/defineProperty"
+    }
+  ],
+  "animationHint": "build"
+}

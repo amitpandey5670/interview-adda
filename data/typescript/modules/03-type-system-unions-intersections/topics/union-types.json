@@ -1,0 +1,270 @@
+{
+  "id": "typescript-03-union-types",
+  "slug": "union-types",
+  "title": "Union types (A | B) and exhaustiveness",
+  "moduleId": "typescript-03-type-system-unions-intersections",
+  "order": 1,
+  "hook": "A union type says a value can be one of several shapes — like a function parameter that accepts either a string or a number. TypeScript checks that you handle every possibility before you use the value safely.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A **union type** is written `A | B` and means \"this value is either type A or type B.\" Unlike C#, which has no first-class union syntax, TypeScript unions are **structural** — the compiler tracks which members are safe on every branch. The special type **`never`** represents values that should not exist; returning `never` from a function that takes a union proves you handled every case (**exhaustiveness**). Unions are erased at run time — JavaScript still sees a plain value; TypeScript only enforces the contract at compile time."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "union type",
+              "longForm": "union type (A | B)",
+              "plainDefinition": "A type that allows a value to be one of several alternatives. You must narrow before using members that are not shared by every alternative.",
+              "example": "`string | number` — a parameter can be text or a numeric score."
+            },
+            {
+              "term": "exhaustiveness",
+              "longForm": "exhaustiveness checking",
+              "plainDefinition": "The compiler verifies that every member of a union was handled, often by assigning the remaining type to `never` in a default branch.",
+              "example": "`default: const _exhaustive: never = value;` — compile error if a case is missing."
+            },
+            {
+              "term": "never",
+              "longForm": "never type",
+              "plainDefinition": "The empty set of values. Used for impossible branches, functions that never return, and proving exhaustive switches.",
+              "example": "`function fail(msg: string): never { throw new Error(msg); }`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "API responses, form fields, and event payloads rarely have a single shape. A payment status might be `\"pending\" | \"paid\" | \"failed\"`. Without unions you fall back to `string` or `any` and lose compile-time safety. Unions let you model optional states (`T | null`), multiple input kinds (`string | File`), and polymorphic results — the same pattern C# approximates with inheritance, interfaces, or `OneOf` libraries, but with lighter syntax."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Compile-time only",
+          "body": "Unions exist only in the type checker. At run time JavaScript sees `typeof x === \"string\"` checks — TypeScript does not emit union metadata. Every union branch still needs a narrowing guard before you access type-specific members."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Working with a union safely",
+          "items": [
+            {
+              "title": "Declare the union",
+              "body": "`type Id = string | number;` — callers may pass either form."
+            },
+            {
+              "title": "Find shared members",
+              "body": "Only properties and methods present on **every** branch are usable without narrowing. `string | number` shares no useful methods beyond coercion."
+            },
+            {
+              "title": "Narrow with a guard",
+              "body": "`if (typeof id === \"string\")` — inside the block, `id` is `string`. See the widening/narrowing topic for the full toolkit."
+            },
+            {
+              "title": "Prove exhaustiveness",
+              "body": "In `switch`, use `default` with `const _check: never = value` so adding a new union member forces a compile error."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Union narrowing flow",
+            "source": "flowchart TD\n  U[\"value: string | number\"] --> G{\"typeof check\"}\n  G -->|string| S[\"branch: string\"]\n  G -->|number| N[\"branch: number\"]\n  G -->|neither| E[\"never — should not happen\"]\n  S --> OK[\"Safe to call .toUpperCase()\"]\n  N --> OK2[\"Safe to call .toFixed()\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Basic union parameter",
+            "code": "type UserId = string | number;\n\nfunction formatId(id: UserId): string {\n  if (typeof id === \"string\") {\n    return id.trim().toUpperCase();\n  }\n  return `#${id.toFixed(0)}`;\n}\n\nformatId(\"abc-42\");  // \"ABC-42\"\nformatId(42);          // \"#42\"",
+            "explanation": "Line 1: `UserId` is a type alias for a union. Line 4: `typeof` narrows to `string` — `.trim()` is legal. Line 7: the `else` branch is inferred as `number`. Line 10–11: both call sites type-check because each literal fits the union."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Exhaustive switch with never",
+            "code": "type PaymentStatus = \"pending\" | \"paid\" | \"failed\";\n\nfunction badge(status: PaymentStatus): string {\n  switch (status) {\n    case \"pending\": return \"⏳\";\n    case \"paid\": return \"✓\";\n    case \"failed\": return \"✗\";\n    default: {\n      const _exhaustive: never = status;\n      return _exhaustive;\n    }\n  }\n}",
+            "explanation": "Line 1: string literal union — each string is a distinct type member. Lines 4–7: each case narrows `status`. Lines 8–11: if you add `\"refunded\"` to the union but forget a `case`, `status` is no longer `never` and the assignment fails at compile time."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Union with null — optional API field",
+            "code": "type Profile = { name: string; avatarUrl: string | null };\n\nfunction displayAvatar(profile: Profile): string {\n  if (profile.avatarUrl === null) {\n    return \"default.png\";\n  }\n  // avatarUrl narrowed to string\n  return profile.avatarUrl;\n}",
+            "explanation": "Line 1: `string | null` models a field that may be missing at the object level (not the same as optional `?`). Line 4: comparing to `null` narrows away null. Line 7: TypeScript knows `avatarUrl` is `string` — no optional chaining needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — using without narrowing",
+            "code": "function broken(id: string | number): void {\n  // Error TS2339: Property 'toFixed' does not exist on type 'string | number'\n  // console.log(id.toFixed(2));\n\n  // Error TS2345: string | number is not assignable to string\n  // const s: string = id;\n}",
+            "explanation": "Line 3: neither `toFixed` (number) nor string methods are safe on the union. Line 6: you cannot assign a union to a single branch type without narrowing. This is the core safety unions provide — the error appears at compile time, not in production."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Unions across languages",
+          "headers": [
+            "Concept",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Syntax",
+              "`A | B` at compile time",
+              "No syntax — runtime checks only",
+              "No `|` — use base type + `is` / pattern matching"
+            ],
+            [
+              "Run-time representation",
+              "Erased — plain value",
+              "Same value",
+              "Inheritance or wrapper types"
+            ],
+            [
+              "Exhaustiveness",
+              "Compiler + `never`",
+              "Manual discipline",
+              "`switch` expressions with patterns (module 11)"
+            ],
+            [
+              "Null in union",
+              "`T | null`",
+              "`null` at runtime",
+              "`T?` for value types; NRT for references"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Accessing branch-specific members without narrowing — always guard first. Widening a literal union to `string` accidentally by reassigning to a `let` variable (see widening topic). Using `as string` to silence the compiler instead of a real guard — hides bugs that unions are meant to catch."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Unions are the backbone of API boundary modeling: `unknown` at the edge, narrow to a discriminated union internally. **Distributive behavior** appears when unions interact with conditional types (module 12) — `T extends U ? X : Y` distributes over `T` when `T` is a naked type parameter. Union assignability is symmetric for literals: `\"a\"` is assignable to `string | number` but not vice versa. Prefer literal unions over `string` enums for tree-shakeable, JSON-friendly tags. In production, log the `never` branch in default cases during development, then strip for release builds if needed."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Approach",
+            "When",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "Literal union",
+              "Fixed set of string/number tags",
+              "Widening if not `as const`"
+            ],
+            [
+              "Interface union",
+              "Different object shapes",
+              "Need discriminant for safe switch"
+            ],
+            [
+              "`string` escape hatch",
+              "Truly open-ended values",
+              "Loses exhaustiveness"
+            ],
+            [
+              "Type assertion `as`",
+              "Interop with untyped JSON",
+              "Bypasses safety — pair with validation"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying unions exist at run time. Claiming `string | number` lets you call any method on the value. Not knowing how `never` proves exhaustiveness. Confusing union (`|`) with intersection (`&`)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Union `A | B` means the value is one alternative — narrow before branch-specific access.",
+    "Unions are erased at compile time; JavaScript only sees the runtime value.",
+    "`never` in a default branch proves exhaustive handling of a finite union.",
+    "Literal unions (`\"a\" | \"b\"`) are preferable to `string` when the set is fixed.",
+    "60s: Union is OR at the type level. Narrow with typeof, in, or discriminant. never catches missing cases. C# uses patterns instead of | syntax."
+  ],
+  "commonPitfalls": [
+    "Using branch-specific members without narrowing — TS2339 at compile time.",
+    "Widening `\"pending\"` to `string` and losing literal exhaustiveness.",
+    "Strong answer: 'Union is compile-time OR. Narrow first. never for exhaustiveness. Erased at runtime like all TS types.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-03-intersection-types",
+    "typescript-03-widening-and-narrowing-basics",
+    "typescript-03-discriminated-unions-intro",
+    "typescript-03-assignability-and-subtyping"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "typeof runtime checks",
+      "note": "JavaScript `typeof` and `instanceof` are the runtime counterparts to TypeScript narrowing. Unions add compile-time proof that checks exist.",
+      "futureTopicSlug": "javascript/types/typeof-instanceof"
+    },
+    {
+      "language": "typescript",
+      "concept": "pattern matching instead of unions",
+      "note": "C# models alternatives with inheritance, interfaces, or records plus `switch` patterns. TypeScript unions are structural and lighter but require explicit narrowing.",
+      "futureTopicSlug": "csharp/pattern-matching/switch-expressions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Unions and Intersection Types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#union-types"
+    }
+  ]
+}

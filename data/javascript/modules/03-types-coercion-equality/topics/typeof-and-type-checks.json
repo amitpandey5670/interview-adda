@@ -1,0 +1,295 @@
+{
+  "id": "javascript-03-typeof-and-type-checks",
+  "slug": "typeof-and-type-checks",
+  "title": "typeof, instanceof, and safe type checks",
+  "moduleId": "javascript-03-types-coercion-equality",
+  "order": 2,
+  "hook": "`typeof` is the fastest runtime type question in JavaScript — but it lies about `null` and arrays. Learn when to pair it with `instanceof`, `Array.isArray`, and strict equality instead.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "JavaScript has no compile-time type checker — you discover types at **run time** with operators and helpers. **`typeof`** returns a string for primitives and a coarse label for objects (`'object'`, `'function'`). **`instanceof`** walks the prototype chain to test constructor ancestry. **`Array.isArray`** is the reliable array test. **`Object.prototype.toString.call(value)`** can distinguish built-in object brands when `typeof` and `instanceof` are not enough."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "typeof",
+              "longForm": "typeof operator",
+              "plainDefinition": "Unary operator returning a string: 'undefined', 'boolean', 'number', 'bigint', 'string', 'symbol', 'function', or 'object'.",
+              "example": "`typeof 42` → `'number'`"
+            },
+            {
+              "term": "instanceof",
+              "longForm": "instanceof operator",
+              "plainDefinition": "Tests whether an object's prototype chain includes a constructor's `.prototype`. Works across realms only for built-ins in some cases.",
+              "example": "`[] instanceof Array` → `true`"
+            },
+            {
+              "term": "Array.isArray",
+              "longForm": "Array.isArray static method",
+              "plainDefinition": "The spec-correct way to detect arrays. Works for cross-realm arrays where `instanceof` can fail.",
+              "example": "`Array.isArray([1,2])` → `true`; `Array.isArray({})` → `false`"
+            },
+            {
+              "term": "null bug",
+              "longForm": "typeof null returns 'object'",
+              "plainDefinition": "A legacy bug: `typeof null === 'object'`. Always test `value === null` separately.",
+              "example": "`value !== null && typeof value === 'object'`"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "API handlers receive untyped payloads. Before calling `.map()` you must know you have an array — `typeof x === 'object'` is true for arrays, `null`, dates, and plain objects alike. A guard like `if (data && typeof data === 'object' && Array.isArray(data.items))` prevents run-time crashes. In C#, the compiler catches type errors before deploy; in JavaScript you write defensive checks or use TypeScript to catch them at build time."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Compile-time vs run-time",
+          "body": "TypeScript `typeof x` at compile time is a type query. JavaScript `typeof x` at run time returns a string. C# `typeof(T)` returns a `System.Type` object at compile time. Three different tools with the same keyword."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing the right type check",
+          "items": [
+            {
+              "title": "Primitive? → typeof",
+              "body": "`typeof x === 'string'`, `'number'`, `'boolean'`, `'undefined'`, `'bigint'`, `'symbol'`."
+            },
+            {
+              "title": "Null? → strict equality",
+              "body": "`x === null` — never rely on `typeof` for null."
+            },
+            {
+              "title": "Array? → Array.isArray",
+              "body": "Do not use `typeof`, `instanceof` alone in iframes, or `Array.isArray` alternatives in hot paths without reason."
+            },
+            {
+              "title": "Custom class? → instanceof",
+              "body": "`error instanceof TypeError` — but remember prototype chain can be broken in tests."
+            },
+            {
+              "title": "Plain object? → Object.prototype.toString or duck typing",
+              "body": "`Object.prototype.toString.call(x) === '[object Object]'` and `x !== null`."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Type-check decision flow",
+            "source": "flowchart TD\n  START[\"Need to check value\"] --> NULL{\"x === null?\"}\n  NULL -->|yes| ISNULL[\"It's null\"]\n  NULL -->|no| PRIM{\"typeof is primitive label?\"}\n  PRIM -->|string/number/etc| PRIMTYPE[\"Use typeof result\"]\n  PRIM -->|object| ARR{\"Array.isArray(x)?\"}\n  ARR -->|yes| ISARR[\"It's an array\"]\n  ARR -->|no| INST[\"instanceof or toString brand\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "typeof null bug and safe null check",
+            "code": "function describe(value) {\n  if (value === null) return 'null';\n  if (value === undefined) return 'undefined';\n  return typeof value;\n}\n\nconsole.log(typeof null);       // 'object' — bug\nconsole.log(describe(null));    // 'null' — correct\nconsole.log(describe(undefined)); // 'undefined'",
+            "explanation": "Line 2: always handle `null` before `typeof`. Line 8: the raw `typeof null` bug — interview favorite. Lines 1–6: production-safe helper that fixes the null case first."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Array and object discrimination",
+            "code": "const payload = { items: [1, 2], meta: null };\n\nfunction isPlainObject(v) {\n  return v !== null && typeof v === 'object' && !Array.isArray(v);\n}\n\nconsole.log(Array.isArray(payload.items)); // true\nconsole.log(isPlainObject(payload));       // true\nconsole.log(isPlainObject(payload.items)); // false\nconsole.log(isPlainObject(payload.meta));  // false — null fails first check",
+            "explanation": "Line 4: plain object guard excludes `null` and arrays. Line 9: `null` is typeof `'object'` but fails `v !== null`. This pattern appears in JSON validation and Redux reducers."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "instanceof and cross-realm limits",
+            "code": "const err = new TypeError('bad type');\nconsole.log(err instanceof Error);     // true\nconsole.log(err instanceof TypeError); // true\n\n// In another iframe, Array might differ:\n// iframeArray instanceof Array → false (different realm)\n// Array.isArray(iframeArray) → true (spec-safe)\n\nclass MyError extends Error {}\nconst e = new MyError('oops');\nconsole.log(e instanceof MyError); // true",
+            "explanation": "Lines 1–3: `instanceof` walks the prototype chain. Lines 5–7: comment shows why `Array.isArray` is preferred for arrays across iframes/workers. Lines 9–11: custom errors work with `instanceof` when prototypes are intact."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — trusting typeof alone",
+            "code": "// API returns null when user not found\nconst user = null;\n\nif (typeof user === 'object') {\n  // BUG: null enters here!\n  console.log(user.name); // TypeError: Cannot read properties of null\n}\n\n// Fix:\nif (user !== null && typeof user === 'object') {\n  console.log(user.name);\n}",
+            "explanation": "Lines 4–7: the classic `typeof null` production bug — null passes the object check. Lines 10–12: guard null explicitly before treating a value as an object. This pattern prevents countless API-handler crashes."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Type checking across languages",
+          "headers": [
+            "Need",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "Compile-time type name",
+              "N/A",
+              "`typeof(int)`",
+              "`typeof` type operator (erased at run time)"
+            ],
+            [
+              "Run-time type test",
+              "`typeof`, `instanceof`",
+              "`is`, `as`, `GetType()`",
+              "Erased — use JS checks at run time"
+            ],
+            [
+              "Null test",
+              "`x === null`",
+              "`x is null`",
+              "`x === null` or strict null checks"
+            ],
+            [
+              "Array test",
+              "`Array.isArray(x)`",
+              "`x is int[]` or `is IList`",
+              "`Array.isArray(x)` at run time; `x is T[]` at compile time"
+            ],
+            [
+              "Safe cast",
+              "Manual guards",
+              "`as` returns null",
+              "Type narrowing with `is` / discriminated unions"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `typeof x === 'object'` without excluding `null`. Using `instanceof Array` in cross-realm code. Confusing TypeScript compile-time `typeof` with JavaScript run-time `typeof`. Using `constructor` property for type checks — it can be spoofed."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The `typeof null === 'object'` bug is a TC39-documented legacy behavior: in the original implementation, values were 32-bit tags plus payload; null was all-zero bits, same tag as objects. Changing it would break millions of sites. Production pattern: `value != null` (checks both null and undefined) or explicit `value === null` before object operations. For `undefined`, `typeof` is reliable. `instanceof` uses `GetPrototypeOf` internally — polyfilled environments or broken `@@hasInstance` can fool it. `Symbol.toStringTag` on built-ins makes `Object.prototype.toString.call(new Map())` return `'[object Map]'`."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Tool",
+            "Reliable for",
+            "Interview trap"
+          ],
+          "rows": [
+            [
+              "typeof",
+              "Primitives except null",
+              "null returns 'object'"
+            ],
+            [
+              "=== null",
+              "Null only",
+              "Does not catch undefined"
+            ],
+            [
+              "Array.isArray",
+              "Arrays cross-realm",
+              "Not for TypedArrays (different check)"
+            ],
+            [
+              "instanceof",
+              "Custom classes, Errors",
+              "Broken across iframes for Array"
+            ],
+            [
+              "Object.prototype.toString",
+              "Built-in brands",
+              "Plain objects return '[object Object]'"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing why `typeof null` is `'object'`. Using only `typeof x === 'object'` for object guards. Claiming TypeScript types exist at run time. Not mentioning `Array.isArray` for arrays."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "`typeof null === 'object'` is a historical bug — always use `x === null`.",
+    "Use `Array.isArray()` for arrays, not `typeof` or `instanceof` alone.",
+    "TypeScript `typeof` is compile-time; JavaScript `typeof` is run-time string.",
+    "`instanceof` walks the prototype chain; can fail cross-realm for built-ins.",
+    "60s: typeof for primitives. null needs ===. Array.isArray for arrays. typeof null is object bug from engine tags."
+  ],
+  "commonPitfalls": [
+    "Weak: 'typeof null is object so null is an object.' Strong: 'Legacy bug — null is primitive, check with === null.'",
+    "Guarding objects with only `typeof x === 'object'` — null slips through.",
+    "Strong answer: 'typeof for primitives, === null for null, Array.isArray for arrays, instanceof for custom classes.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-03-primitives-and-objects",
+    "javascript-03-coercion-rules",
+    "javascript-03-dynamic-vs-static-types",
+    "javascript-03-truthiness-and-falsy"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "typeof type queries",
+      "note": "TS `typeof foo` at compile time infers types from values. At run time you still need JS `typeof` for string labels.",
+      "futureTopicSlug": "typescript/types/typeof-queries"
+    },
+    {
+      "language": "typescript",
+      "concept": "is and as operators",
+      "note": "C# `is`/`as` are compile-time aware and return typed bindings. JS has no `as` — you guard manually or use TS assertions (no run-time effect).",
+      "futureTopicSlug": "csharp/conversions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — typeof",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/typeof"
+    },
+    {
+      "title": "MDN — instanceof",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/instanceof"
+    }
+  ]
+}

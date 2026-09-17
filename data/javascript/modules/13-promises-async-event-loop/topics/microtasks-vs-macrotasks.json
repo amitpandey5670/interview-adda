@@ -1,0 +1,222 @@
+{
+  "id": "javascript-13-microtasks-vs-macrotasks",
+  "slug": "microtasks-vs-macrotasks",
+  "title": "Microtasks versus macrotasks (event loop ordering)",
+  "moduleId": "javascript-13-promises-async-event-loop",
+  "order": 5,
+  "hook": "Promise.then callbacks are microtasks. setTimeout callbacks are macrotasks. The engine drains all microtasks before the next macrotask — that ordering explains half of senior JavaScript interview output questions and subtle race bugs in production.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Microtasks** (jobs) include Promise reactions (`then`, `catch`, `finally`), `queueMicrotask`, and `MutationObserver` callbacks in browsers. **Macrotasks** (tasks) include `setTimeout`, `setInterval`, I/O callbacks in Node.js, and UI events. After synchronous JavaScript finishes, the engine runs **every** queued microtask — including microtasks scheduled by other microtasks — before dequeuing the next macrotask. `async/await` desugars to Promise microtasks, so `await` continuations follow the same rules."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Microtask queue",
+              "longForm": "Microtask queue",
+              "plainDefinition": "High-priority queue drained to completion after each stack turn.",
+              "example": "Promise.resolve().then(fn) enqueues fn as a microtask."
+            },
+            {
+              "term": "Macrotask queue",
+              "longForm": "Task queue (macrotask)",
+              "plainDefinition": "Lower-priority queue processed one task per event loop iteration (after microtasks).",
+              "example": "setTimeout(fn, 0) enqueues a macrotask."
+            },
+            {
+              "term": "await",
+              "longForm": "await",
+              "plainDefinition": "Syntax that pauses an async function and resumes via a Promise microtask when the awaited value settles.",
+              "example": "After await fetch(), the continuation is a microtask."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Reddit and LeetCode discussions rank **event loop ordering** among the top FAANG JavaScript questions. Misordering causes bugs: you log state before a Promise callback mutates it, you assume `setTimeout(0)` runs before `then`, or you starve macrotasks by chaining infinite microtasks. In React 18, automatic batching still respects microtasks — understanding queues helps debug state updates after `await`."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Node.js extra: process.nextTick",
+          "body": "In Node.js, `process.nextTick` runs before other microtasks — even before Promise reactions. Treat it as an ultra-high-priority queue that can starve I/O if abused."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Ordering rules",
+          "items": [
+            { "title": "Sync first", "body": "All synchronous code in the current call stack runs to completion." },
+            { "title": "Microtasks until empty", "body": "Run microtasks FIFO; if a microtask queues another, run that too — before any macrotask." },
+            { "title": "One macrotask", "body": "Dequeue and run exactly one macrotask." },
+            { "title": "Repeat", "body": "Return to microtask draining for the next turn." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Microtasks before macrotasks",
+            "source": "sequenceDiagram\n  participant Stack\n  participant Micro\n  participant Macro\n  Stack->>Stack: sync console.log\n  Stack->>Micro: Promise.then\n  Stack->>Macro: setTimeout\n  Stack->>Micro: queueMicrotask\n  Note over Micro: drain all microtasks\n  Micro->>Macro: then one macrotask"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Nested microtasks vs macrotask",
+            "code": "console.log('A');\n\nsetTimeout(() => console.log('timeout'), 0);\n\nPromise.resolve()\n  .then(() => {\n    console.log('promise 1');\n    Promise.resolve().then(() => console.log('promise 2'));\n  });\n\nconsole.log('B');\n\n// A, B, promise 1, promise 2, timeout",
+            "explanation": "Nested Promise.then (promise 2) is still a microtask scheduled during microtask draining — it runs before the timer macrotask."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "async/await ordering",
+            "code": "async function demo() {\n  console.log('start');\n  await Promise.resolve();\n  console.log('after await'); // microtask continuation\n}\n\ndemo();\nconsole.log('sync after call');\n\n// start, sync after call, after await",
+            "explanation": "demo runs until await, then the caller continues synchronously. The async function body resumes as a microtask after the current sync code finishes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Node.js nextTick vs Promise",
+            "code": "Promise.resolve().then(() => console.log('promise'));\nprocess.nextTick(() => console.log('nextTick'));\n\n// nextTick, then promise",
+            "explanation": "Node runs nextTick callbacks before other microtasks — know this when debugging server ordering."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "No microtask queue in C#",
+            "code": "// Task continuations schedule on thread pool — not a single-thread microtask drain\nawait Task.Delay(1);\nConsole.WriteLine(\"continues on pool thread\");",
+            "explanation": "C# does not serialize all continuations on one thread unless SynchronizationContext forces it — unlike JS microtasks on one agent thread."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Scheduling comparison",
+          "headers": ["Feature", "JS microtasks/macrotasks", "C# Task / TypeScript"],
+          "rows": [
+            ["Promise.then", "Microtask on JS thread", "N/A at JS level; TS types only"],
+            ["Task continuation", "N/A", "Thread-pool queue (default)"],
+            ["setTimeout(0)", "Macrotask after microtasks", "Timer queue on pool"],
+            ["Ordering interview", "Predict console output", "Deadlock / starvation patterns"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming setTimeout(fn, 0) runs before Promise.then. Creating infinite microtask chains that starve rendering and I/O. Forgetting Node nextTick priority."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: log with performance.now() and labels in staging when race bugs appear after await. In Chrome DevTools, enable 'Async' call stack on breakpoints to see microtask continuations. If macrotasks never run, search for recursive queueMicrotask without await."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Risk"],
+          "rows": [
+            ["Promise chain", "Composable async", "Microtask depth delays macrotasks"],
+            ["setTimeout defer", "Yields to browser paint", "Minimum delay not zero in practice"],
+            ["queueMicrotask", "Explicit microtask", "Can starve if looped"],
+            ["process.nextTick", "Earliest post-sync hook in Node", "Starves I/O if overused"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot predict A/B/promise/timeout ordering. Claiming C# Task uses a microtask queue. Saying async/await is multi-threaded."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Microtasks drain completely before the next macrotask; Promise.then is a microtask.",
+    "async/await continuations are microtasks — ordering follows Promise rules.",
+    "Node process.nextTick runs before Promise microtasks.",
+    "60s: Sync first. All microtasks. One macrotask. Repeat. setTimeout 0 is not immediate. await resumes as microtask.",
+    "Follow-up: add nested then and setTimeout — predict line by line."
+  ],
+  "commonPitfalls": [
+    "Weak answer: 'setTimeout 0 runs next' — rejected; microtasks come first.",
+    "Ignoring Node nextTick priority in server code.",
+    "Strong answer: draw the two queues and walk through A/B/promise/timeout example."
+  ],
+  "relatedTopicIds": [
+    "javascript-13-promise-states-and-chaining",
+    "javascript-13-async-await-syntax",
+    "javascript-01-event-loop-overview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Promise<T> scheduling",
+      "note": "TypeScript does not change microtask ordering — emitted JS uses the same Promise microtasks.",
+      "futureTopicSlug": "typescript/async-types/promise-and-async-return-types"
+    },
+    {
+      "language": "typescript",
+      "concept": "C# Task comparison",
+      "note": "C# comparison: Task continuations use thread pool, not a single-thread microtask drain — see csharp-13-promises-vs-tasks.",
+      "futureTopicSlug": "csharp/async-await/promises-vs-tasks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Event loop",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop"
+    },
+    {
+      "title": "javascript.info — Event loop",
+      "url": "https://javascript.info/event-loop"
+    },
+    {
+      "title": "Node.js event loop",
+      "url": "https://nodejs.org/en/learn/asynchronous-work/event-loop-timers-and-nexttick"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

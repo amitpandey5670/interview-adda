@@ -1,0 +1,270 @@
+{
+  "id": "typescript-03-widening-and-narrowing-basics",
+  "slug": "widening-and-narrowing-basics",
+  "title": "Type widening, narrowing, and control flow",
+  "moduleId": "typescript-03-type-system-unions-intersections",
+  "order": 3,
+  "hook": "TypeScript starts with a precise type and sometimes broadens it on purpose — or narrows it when your `if` checks prove which branch you are in. Understanding both directions keeps your unions useful instead of accidentally turning into plain `string`.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Widening** is when TypeScript infers a broader type than the literal you wrote — `let x = \"hello\"` becomes `string`, not `\"hello\"`. **Narrowing** is the opposite: after a type guard (`typeof`, `===`, `in`, `instanceof`), the compiler refines a union to a specific member. **Control-flow analysis** tracks narrowing across `if`, `else`, `switch`, early returns, and assignment checks. The `as const` assertion freezes literals and prevents widening. C# has definite assignment and pattern narrowing; TypeScript's version is entirely compile-time on erased types."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "widening",
+              "longForm": "type widening",
+              "plainDefinition": "When a literal type (like \"pending\") is inferred as a wider type (like string) because the variable could be reassigned.",
+              "example": "`let s = \"a\";` → type `string`, not `\"a\"`."
+            },
+            {
+              "term": "narrowing",
+              "longForm": "type narrowing",
+              "plainDefinition": "When control flow proves a more specific type, the compiler updates the variable's type in that branch.",
+              "example": "`if (typeof x === \"number\")` → `x` is `number` inside the block."
+            },
+            {
+              "term": "as const",
+              "longForm": "as const assertion",
+              "plainDefinition": "Tells TypeScript to infer the narrowest readonly literal types and prevent widening on objects and arrays.",
+              "example": "`const roles = [\"admin\", \"user\"] as const;` → readonly tuple of literals."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Widening is why your exhaustive `switch` suddenly accepts any `string`. Narrowing is why TypeScript catches missing null checks before production. Senior engineers pair **`unknown` at boundaries** with narrowing guards — the top Reddit/LeetCode pattern for safe parsing. Without narrowing discipline, unions degrade to `any`-like behavior through assertions."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "const vs let",
+          "body": "`const x = \"a\"` keeps the literal type `\"a\"` because reassignment is impossible. `let x = \"a\"` widens to `string` because you might assign another string later."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Widening and narrowing lifecycle",
+          "items": [
+            {
+              "title": "Literal inferred on const",
+              "body": "`const status = \"paid\"` → type `\"paid\"` (literal)."
+            },
+            {
+              "title": "Widen on mutable let",
+              "body": "`let status = \"paid\"` → type `string` — reassignment is possible."
+            },
+            {
+              "title": "Freeze with as const",
+              "body": "`const config = { mode: \"strict\" } as const` → `mode: \"strict\"`, readonly."
+            },
+            {
+              "title": "Narrow with guards",
+              "body": "Equality, `typeof`, `in`, `instanceof`, and user-defined type predicates refine unions inside branches."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Control-flow narrowing",
+            "source": "flowchart TD\n  START[\"value: string | null\"] --> CHECK{\"=== null?\"}\n  CHECK -->|yes| NULL[\"branch: null\"]\n  CHECK -->|no| STR[\"branch: string\"]\n  NULL --> EARLY[\"early return\"]\n  STR --> USE[\"safe string ops\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Widening with let vs const",
+            "code": "const fixed = \"pending\";     // type: \"pending\"\nlet mutable = \"pending\";       // type: string (widened)\n\nfunction setStatus(next: \"pending\" | \"done\") {\n  fixed = next;   // Error: cannot assign to const\n  mutable = next; // OK — mutable is string\n}",
+            "explanation": "Line 1: `const` preserves the literal because the binding never changes. Line 2: `let` widens to `string` — the compiler assumes reassignment. Lines 5–6: assigning a union member to `string` is fine; assigning to a const literal type is not."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "as const prevents widening",
+            "code": "const HTTP = {\n  GET: \"GET\",\n  POST: \"POST\",\n} as const;\n\ntype Method = typeof HTTP[keyof typeof HTTP];\n// \"GET\" | \"POST\" — not string\n\nfunction route(method: Method) {\n  console.log(method);\n}\n\nroute(HTTP.GET); // OK",
+            "explanation": "Line 4: `as const` makes properties readonly literal types. Line 6: indexing the const object yields a union of literals. Line 12: passing `HTTP.GET` stays typed as `\"GET\"`, not widened `string`."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Control-flow narrowing guards",
+            "code": "function parseInput(raw: string | number | null): number {\n  if (raw === null) {\n    return 0;\n  }\n  if (typeof raw === \"string\") {\n    return Number.parseInt(raw, 10);\n  }\n  // raw narrowed to number\n  return raw;\n}",
+            "explanation": "Line 2: union of three types. Lines 3–5: null check removes `null` from the union. Lines 6–8: typeof removes `string`. Line 10: only `number` remains — no assertion needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — assertion instead of narrowing",
+            "code": "function unsafe(data: unknown): string {\n  // Bad: bypasses checking\n  // return data as string;\n\n  if (typeof data !== \"string\") {\n    throw new Error(\"Expected string\");\n  }\n  return data; // narrowed to string\n}",
+            "explanation": "Line 3: `as string` on `unknown` compiles but throws at runtime for wrong shapes. Lines 5–8: throw narrows `unknown` to `string` in the success path — the production-safe pattern for API boundaries."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Flow-sensitive typing",
+          "headers": [
+            "Concept",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Literal preservation",
+              "`const` / `as const`",
+              "No types — value is just a string",
+              "const string still reference type"
+            ],
+            [
+              "Null narrowing",
+              "`if (x === null)`",
+              "Same check at runtime",
+              "`is null` pattern / NRT flow"
+            ],
+            [
+              "typeof guard",
+              "Narrows union at compile time",
+              "Returns runtime string tag",
+              "`is int` pattern matching"
+            ],
+            [
+              "unknown at boundary",
+              "Forces narrowing",
+              "any value accepted",
+              "`object` requires cast"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `let` for fixed literal unions and losing exhaustiveness. Asserting `as` instead of narrowing `unknown`. Assuming narrowing survives across function boundaries — it does not unless you use a type predicate (module 11)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Widening applies to `null` and `undefined` in non-strictNullChecks legacy code — always enable strict null. **Discriminated unions** narrow on a shared literal field (next topic). Type predicates (`function isFish(x): x is Fish`) extend narrowing across call sites. Assignment narrowing (`if (x = maybeString)`) works but is easy to confuse with comparison — prefer `===`. Control-flow analysis does not cross async gaps without manual annotation — after `await`, re-narrow if the value could change."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Tool",
+            "When",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "as const",
+              "Config objects, route tables",
+              "Readonly surprises for consumers"
+            ],
+            [
+              "typeof / in",
+              "Plain unions and objects",
+              "Array typeof is object"
+            ],
+            [
+              "Type predicate",
+              "Reusable guards",
+              "Must be honest — lying breaks trust"
+            ],
+            [
+              "as assertion",
+              "Interop only",
+              "Masks real narrowing bugs"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Not knowing why let widens and const does not. Using as on unknown in production paths. Claiming narrowing persists after await without re-check. Confusing widening with type coercion at runtime."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "`let` widens literals to base types; `const` and `as const` preserve literals.",
+    "Narrowing follows control flow — if, else, switch, throw, and early return.",
+    "Use `unknown` at API boundaries and narrow; never trust `as` alone.",
+    "typeof, ===, in, and instanceof are built-in narrowing guards.",
+    "60s: Widening makes types broader on mutable bindings. Narrowing refines unions after checks. as const freezes literals. C# uses patterns; TS uses flow analysis on erased types."
+  ],
+  "commonPitfalls": [
+    "let status = \"pending\" widens to string — breaks literal exhaustiveness.",
+    "Asserting unknown to a concrete type without validation.",
+    "Strong answer: 'const keeps literals. Guards narrow unions. unknown + narrow at boundaries. Widening is compile-time inference, not JS coercion.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-03-union-types",
+    "typescript-03-assignability-and-subtyping",
+    "typescript-03-discriminated-unions-intro",
+    "typescript-03-type-system-vs-csharp"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "typeof and strict equality",
+      "note": "Narrowing guards map directly to JavaScript runtime checks. TypeScript adds compile-time proof that the right checks exist.",
+      "futureTopicSlug": "javascript/operators/typeof-strict-equality"
+    },
+    {
+      "language": "typescript",
+      "concept": "pattern narrowing",
+      "note": "C# `if (x is string s)` is the closest analog. TypeScript has more guard forms but no run-time type reification.",
+      "futureTopicSlug": "csharp/pattern-matching/pattern-kinds"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Type Narrowing",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html"
+    }
+  ]
+}

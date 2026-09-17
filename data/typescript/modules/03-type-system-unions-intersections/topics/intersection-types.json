@@ -1,0 +1,270 @@
+{
+  "id": "typescript-03-intersection-types",
+  "slug": "intersection-types",
+  "title": "Intersection types (A & B) and mixing shapes",
+  "moduleId": "typescript-03-type-system-unions-intersections",
+  "order": 2,
+  "hook": "An intersection type merges multiple type descriptions into one value that must satisfy all of them at once — like a user who is both an employee and a manager.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An **intersection type** is written `A & B` and means \"this value has every member of A **and** every member of B.\" For object types, TypeScript **merges** properties — the result must include the full combined shape. For primitives, `string & number` collapses to **`never`** because no value can be both. Intersections are the TypeScript way to compose mixins, layer capabilities onto a base type, and express \"implements multiple interfaces\" without a class hierarchy — closer to C# multiple interface implementation than to C# class inheritance."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "intersection type",
+              "longForm": "intersection type (A & B)",
+              "plainDefinition": "A type that requires a value to satisfy all constituent types simultaneously. Object intersections merge fields.",
+              "example": "`Person & Employee` — must have name fields and employeeId."
+            },
+            {
+              "term": "property merge",
+              "longForm": "intersection property merge",
+              "plainDefinition": "When two object types are intersected, their properties are combined. Conflicting property types are themselves intersected.",
+              "example": "`{ a: string } & { b: number }` → `{ a: string; b: number }`."
+            },
+            {
+              "term": "never from conflict",
+              "longForm": "conflicting intersection",
+              "plainDefinition": "When the same property has incompatible types in both sides, the property type becomes never and the whole intersection may be unusable.",
+              "example": "`{ id: string } & { id: number }` → `id: never`."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Framework code often layers behavior: a React component that is both `React.FC` and has static metadata, or a repository that is both readable and writable. Intersections let you **compose** types without creating a deep inheritance tree. They pair naturally with utility types like `Partial<T>` and `Readonly<T>` (covered in the readonly topic). C# achieves similar goals with `: IRead, IWrite` on a class; TypeScript does it purely at the type level on plain objects and functions."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Union vs intersection",
+          "body": "Union (`|`) is **OR** — the value is one of the types. Intersection (`&`) is **AND** — the value must satisfy all types. `A | B` widens what you accept; `A & B` narrows what you produce."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Composing with intersections",
+          "items": [
+            {
+              "title": "Merge two object interfaces",
+              "body": "`type Admin = User & { role: \"admin\"; permissions: string[] }` — result has all User fields plus admin fields."
+            },
+            {
+              "title": "Intersect function types",
+              "body": "Function intersections become **overloaded** call signatures merged together — each call must be valid for at least one signature."
+            },
+            {
+              "title": "Watch for conflicts",
+              "body": "Same property name with incompatible types → `never`. Same property with compatible subtypes → the intersection of the property types."
+            },
+            {
+              "title": "Combine with unions",
+              "body": "`(A | B) & C` distributes: `(A & C) | (B & C)`. Order and parentheses matter for readability."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Object intersection merge",
+            "source": "flowchart LR\n  subgraph A [\"Type A\"]\n    a1[\"name: string\"]\n    a2[\"age: number\"]\n  end\n  subgraph B [\"Type B\"]\n    b1[\"employeeId: string\"]\n    b2[\"department: string\"]\n  end\n  A --> M[\"A & B\"]\n  B --> M\n  M --> R[\"name, age, employeeId, department\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Merging interfaces with intersection",
+            "code": "interface User {\n  id: string;\n  name: string;\n}\n\ninterface Timestamped {\n  createdAt: Date;\n  updatedAt: Date;\n}\n\ntype AuditedUser = User & Timestamped;\n\nconst row: AuditedUser = {\n  id: \"u-1\",\n  name: \"Ada\",\n  createdAt: new Date(),\n  updatedAt: new Date(),\n};",
+            "explanation": "Lines 1–9: two interfaces describe separate concerns. Line 11: `&` merges them — `AuditedUser` requires all six properties. Lines 13–18: the object literal must satisfy the full intersection or excess/missing property errors appear."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Mixin-style function intersection",
+            "code": "type Serializable = { toJSON(): string };\ntype Identifiable = { id: string };\n\ntype Entity = Serializable & Identifiable;\n\nfunction createEntity(id: string, data: object): Entity {\n  return {\n    id,\n    toJSON() {\n      return JSON.stringify({ id, ...data });\n    },\n  };\n}",
+            "explanation": "Lines 1–2: capability traits as object types. Line 4: intersection requires both `id` and `toJSON`. Lines 6–13: the returned object implements every member — no class keyword needed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Conflicting properties become never",
+            "code": "type Bad = { id: string } & { id: number };\n// type Bad = { id: never }\n\n// const broken: Bad = { id: \"x\" }; // Error: string not assignable to never\n// const alsoBroken: Bad = { id: 1 }; // Error: number not assignable to never",
+            "explanation": "Line 1: both sides declare `id` but with incompatible types. Line 2: TypeScript intersects `string & number` → `never`. Lines 4–5: no value can satisfy `id: never` — the type is intentionally uninhabitable."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Intersection with union — distributing AND over OR",
+            "code": "type Cat = { kind: \"cat\"; meow(): void };\ntype Dog = { kind: \"dog\"; bark(): void };\ntype Named = { name: string };\n\ntype NamedPet = (Cat | Dog) & Named;\n\nfunction greet(pet: NamedPet): string {\n  return `${pet.name} (${pet.kind})`;\n}",
+            "explanation": "Line 5: `(Cat | Dog) & Named` means every pet has a `name` plus either cat or dog fields. Line 8: `kind` and `name` are on all branches — safe without extra narrowing. `meow` still requires narrowing to `Cat`."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Composition patterns",
+          "headers": [
+            "Pattern",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Multiple contracts",
+              "`A & B` on object type",
+              "Object.assign / spread at runtime",
+              "`class X : IA, IB`"
+            ],
+            [
+              "Conflicting members",
+              "Property → `never`",
+              "Last write wins at runtime",
+              "Compile error on class"
+            ],
+            [
+              "Mixin functions",
+              "Return type `T & U`",
+              "Prototype assignment",
+              "Extension methods / default interface methods"
+            ],
+            [
+              "vs union",
+              "`&` = AND all shapes",
+              "N/A",
+              "Multiple interfaces, not OR"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Confusing `A & B` with `A | B` — intersection requires all members. Creating `string & number` accidentally and wondering why nothing assigns. Expecting intersection to deep-merge nested objects — only top-level properties merge; nested objects need mapped types (module 12)."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Intersection of function types produces an overloaded callable — each invocation must match at least one constituent signature. With generics, `T & U` constrains `T` and `U` simultaneously — useful in `extends` clauses. **Interface merging** (declaration merging) is a separate mechanism: two `interface Foo` blocks merge like intersection but at declaration level. For API design, prefer intersection over inheritance when combining orthogonal capabilities (logging + caching + auth). Reducing `A & B` when `A extends B` simplifies to `A`."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Technique",
+            "When",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "`A & B` object merge",
+              "Layer capabilities on DTOs",
+              "Property name collisions"
+            ],
+            [
+              "Interface extends",
+              "Clear hierarchy",
+              "Diamond-like duplication"
+            ],
+            [
+              "Mixin function",
+              "Runtime composition",
+              "Type assertion at boundary"
+            ],
+            [
+              "`Partial<T> & Pick<T, K>`",
+              "Required + optional split",
+              "Harder to read than one interface"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying intersection is OR. Not knowing conflicting properties become never. Claiming intersection deep-merges nested objects. Unable to contrast with C# multiple interface implementation."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Intersection `A & B` means the value satisfies ALL constituent types — AND, not OR.",
+    "Object intersections merge properties; conflicting types on the same key become never.",
+    "Function intersections merge into overloaded call signatures.",
+    "`(A | B) & C` distributes to `(A & C) | (B & C)`.",
+    "60s: Intersection composes shapes. Union picks alternatives. C# uses multiple interfaces; TS uses & at the type level. Watch property conflicts."
+  ],
+  "commonPitfalls": [
+    "Swapping `&` and `|` — opposite meanings.",
+    "Expecting nested object merge from top-level intersection only.",
+    "Strong answer: 'Intersection is AND. Properties merge. Conflicts → never. C# class : IA, IB is the nominal cousin.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-03-union-types",
+    "typescript-03-assignability-and-subtyping",
+    "typescript-03-readonly-and-immutability",
+    "typescript-03-type-system-vs-csharp"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Object.assign composition",
+      "note": "Runtime mixin patterns with spread or Object.assign mirror intersection intent, but JS does not verify the combined shape at compile time.",
+      "futureTopicSlug": "javascript/objects/spread-assign"
+    },
+    {
+      "language": "typescript",
+      "concept": "multiple interface implementation",
+      "note": "C# comparison: `class Repo : IRead, IWrite` is nominal. TypeScript `Readable & Writable` is structural — any object with both shapes qualifies.",
+      "futureTopicSlug": "csharp/oop/multiple-interfaces"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Intersection Types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/objects.html#intersection-types"
+    }
+  ]
+}

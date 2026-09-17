@@ -1,0 +1,282 @@
+{
+  "id": "javascript-03-coercion-rules",
+  "slug": "coercion-rules",
+  "title": "Implicit and explicit coercion (+, ToNumber, ToString)",
+  "moduleId": "javascript-03-types-coercion-equality",
+  "order": 3,
+  "hook": "JavaScript quietly converts values between types when you use `+`, comparisons, or `if`. Understanding ToNumber, ToString, and ToBoolean stops the `[] + []` surprises.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "**Coercion** is the automatic or manual conversion of a value from one type to another. The ECMAScript specification defines abstract operations: **ToNumber** (e.g. `'42'` → `42`), **ToString** (e.g. `42` → `'42'`), and **ToBoolean** (e.g. `''` → `false`). The `+` operator is the famous fork: if either operand is a string, it does string concatenation; otherwise it converts both sides with ToNumber and adds. C# rejects most implicit cross-type math at compile time; JavaScript performs it at run time."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "implicit coercion",
+              "longForm": "implicit coercion (type conversion)",
+              "plainDefinition": "Automatic conversion the language performs for you — like `'5' - 2` becoming `3`.",
+              "example": "`'5' - 2` → `3` (string coerced to number for subtraction)."
+            },
+            {
+              "term": "explicit coercion",
+              "longForm": "explicit coercion",
+              "plainDefinition": "Conversion you trigger on purpose with functions or operators.",
+              "example": "`Number('42')`, `String(42)`, `Boolean(0)`, or unary `+'42'`."
+            },
+            {
+              "term": "ToNumber",
+              "longForm": "ToNumber abstract operation",
+              "plainDefinition": "Spec algorithm that converts any value to a number. `''` → `0`, `'hello'` → `NaN`, `true` → `1`.",
+              "example": "`+'42'` uses ToNumber → `42`."
+            },
+            {
+              "term": "ToPrimitive",
+              "longForm": "ToPrimitive abstract operation",
+              "plainDefinition": "Converts objects to primitives via `valueOf` then `toString`. Drives `[1,2] + 3` → `'1,23'`.",
+              "example": "`[].toString()` → `''`; `[1,2].toString()` → `'1,2'`."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Form inputs return strings. `if (input + 1 > 10)` concatenates instead of adding when `input` is `'9'`. API query params arrive as strings — always parse with `Number()`, `parseInt()`, or `BigInt()` explicitly. Template literals and `String()` are safer than relying on `+` for building messages. In C#, `int.Parse` or `TryParse` makes the conversion visible; JavaScript hides it inside operators unless you are disciplined."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Safe conversion helpers",
+          "body": "Numbers: `Number(x)`, `parseInt(x, 10)`, `parseFloat(x)`. Strings: `String(x)`, template literals `` `${x}` ``. Booleans: `Boolean(x)` or `!!x` when you intend truthiness. Avoid `new Number()` / `new String()` — they create objects."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "The + operator decision tree",
+          "items": [
+            {
+              "title": "Is either operand a string (or becomes one)?",
+              "body": "If yes → ToString both sides and concatenate. `'5' + 2` → `'52'`."
+            },
+            {
+              "title": "Otherwise → ToNumber both sides",
+              "body": "`5 + 2` → `7`. `true + 1` → `2`. `null + 1` → `1`."
+            },
+            {
+              "title": "Objects go through ToPrimitive first",
+              "body": "`[] + []` → `'' + ''` → `''`. `[1] + [2]` → `'1' + '2'` → `'12'`."
+            },
+            {
+              "title": "Other operators usually use ToNumber",
+              "body": "`-`, `*`, `/`, `%`, and relational comparisons coerce to number (with exceptions for `==` — see topic 4)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Coercion paths for + operator",
+            "source": "flowchart TD\n  A[\"a + b\"] --> B{\"Either primitive string?\"}\n  B -->|yes| C[\"ToString both → concatenate\"]\n  B -->|no| D{\"Either object?\"}\n  D -->|yes| E[\"ToPrimitive → retry\"]\n  D -->|no| F[\"ToNumber both → add\"]\n  E --> B"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "String vs number with +",
+            "code": "console.log('5' + 2);    // '52' — string wins\nconsole.log('5' - 2);    // 3 — subtraction forces ToNumber\nconsole.log(5 + '2');    // '52'\nconsole.log(5 - '2');    // 3\nconsole.log(true + 1);   // 2 — true → 1\nconsole.log(null + 1);   // 1 — null → 0\nconsole.log(undefined + 1); // NaN — undefined → NaN",
+            "explanation": "Line 1: if either side is string, `+` concatenates. Line 2: `-` always uses ToNumber. Lines 6–8: boolean, null, and undefined have numeric mappings in ToNumber."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Object coercion via ToPrimitive",
+            "code": "console.log([] + []);       // '' — [].toString() is ''\nconsole.log([] + {});       // '[object Object]'\nconsole.log({} + []);       // 0 in some engines (statement vs expression)\nconsole.log([1, 2] + 3);    // '1,23'\n\nconst obj = {\n  valueOf() { return 99; },\n  toString() { return 'custom'; }\n};\nconsole.log(obj + 1);       // 100 — valueOf wins for +\nconsole.log(String(obj));   // 'custom' — String() prefers toString",
+            "explanation": "Lines 1–4: arrays/objects convert via `toString()` for `+` when no string operand. Lines 6–11: custom `valueOf`/`toString` change coercion — rare in production but interview-relevant."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Explicit conversion — production style",
+            "code": "const raw = '19.99';\nconst qty = '3';\n\n// Explicit — clear intent:\nconst total = Number(raw) * Number(qty);\nconsole.log(total); // 59.97\n\n// Parsing integers — always pass radix:\nconst port = parseInt('08080', 10);\n\n// Guard invalid input:\nconst maybe = Number('abc');\nconsole.log(Number.isNaN(maybe)); // true\n\nif (!Number.isFinite(Number(userInput))) {\n  throw new Error('Invalid number');\n}",
+            "explanation": "Lines 5–6: explicit `Number()` beats implicit coercion for form data. Line 9: `parseInt` needs radix `10` to avoid octal surprises on old strings. Lines 12–16: validate before math — C# `TryParse` equivalent pattern."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with C# and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Coercion across languages",
+          "headers": [
+            "Operation",
+            "JavaScript",
+            "C#",
+            "TypeScript"
+          ],
+          "rows": [
+            [
+              "'5' + 2",
+              "'52' (string concat)",
+              "Compile error without cast",
+              "Compile error without conversion"
+            ],
+            [
+              "'5' - 2",
+              "3 (ToNumber)",
+              "Compile error or Parse",
+              "Compile error"
+            ],
+            [
+              "true + 1",
+              "2",
+              "Compile error",
+              "Compile error"
+            ],
+            [
+              "Explicit parse",
+              "`Number()`, `parseInt()`",
+              "`int.Parse`, `TryParse`",
+              "`Number()` at run time; TS checks at compile time"
+            ],
+            [
+              "Object to string",
+              "ToPrimitive / toString",
+              "`.ToString()` override",
+              "Same as JS at run time"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using `+` to add form field values that are strings. Forgetting radix in `parseInt('08', 10)`. Relying on `==` with mixed types (see topic 4). Using `new Number(5)` — creates an object where `typeof` is `'object'`, breaking strict checks."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Coercion is specified, not random — but the spec is long. `+` checks `IsString` before `ToPrimitive`. Abstract Relational Comparison (`<`, `>`) converts both sides to primitives, then to numbers if neither is string. `==` uses a different algorithm (see equality topic) that includes type coercion. `Object.is` and `===` skip coercion entirely. In production, lint rules (`eqeqeq`, `@typescript-eslint/strict-boolean-expressions`) ban implicit coercion in conditionals. The `valueOf`/`toString` order matters: for `+`, `ToPrimitive` tries `valueOf` first for non-dates; `String(obj)` tries `toString` first."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Abstract op",
+            "Key results",
+            "Interview trap"
+          ],
+          "rows": [
+            [
+              "ToNumber('')",
+              "0",
+              "Empty string is falsy AND numeric zero"
+            ],
+            [
+              "ToNumber(null)",
+              "0",
+              "null is falsy but coerces to 0 in math"
+            ],
+            [
+              "ToNumber(undefined)",
+              "NaN",
+              "undefined poisons math"
+            ],
+            [
+              "ToNumber(true/false)",
+              "1 / 0",
+              "Boolean coerces in arithmetic"
+            ],
+            [
+              "ToPrimitive([1,2])",
+              "'1,2' via toString",
+              "Array + number concatenates"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying coercion is 'random' without citing the spec path. Not knowing `+` prefers string concatenation. Claiming `parseInt('08')` is always 8 (old octal). Ignoring that `null` coerces to 0 in numeric context."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "`+` concatenates if either operand is a string; otherwise ToNumber and add.",
+    "ToNumber: '' → 0, null → 0, undefined → NaN, true → 1, false → 0.",
+    "Objects coerce via ToPrimitive (valueOf / toString) before + and comparisons.",
+    "Prefer explicit Number(), String(), Boolean() over relying on operators.",
+    "60s: + picks string concat or numeric add. ToNumber maps null to 0, undefined to NaN. Objects use ToPrimitive."
+  ],
+  "commonPitfalls": [
+    "Weak: 'JavaScript coercion is unpredictable.' Strong: 'Spec-defined: + checks for string, else ToNumber; objects use ToPrimitive.'",
+    "Using + to sum form inputs that are strings — concatenation bug.",
+    "Strong answer: 'Explicit parse at boundaries. + is concat if any string. null→0 in math but falsy in if.'"
+  ],
+  "relatedTopicIds": [
+    "javascript-03-primitives-and-objects",
+    "javascript-03-equality-and-comparison",
+    "javascript-03-truthiness-and-falsy",
+    "javascript-03-typeof-and-type-checks"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "strict arithmetic",
+      "note": "TypeScript flags `'5' + 2` at compile time. At run time (or in .js files) coercion still happens — TS does not change runtime behavior.",
+      "futureTopicSlug": "typescript/types/coercion"
+    },
+    {
+      "language": "typescript",
+      "concept": "Parse and Convert",
+      "note": "C# requires explicit `int.Parse` or casts for string→number. No silent `'5' + 2` concat — compile-time safety.",
+      "futureTopicSlug": "csharp/conversions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Type coercion",
+      "url": "https://developer.mozilla.org/en-US/docs/Glossary/Type_coercion"
+    },
+    {
+      "title": "ECMAScript — Abstract operations",
+      "url": "https://tc39.es/ecma262/#sec-abstract-operations"
+    }
+  ]
+}
