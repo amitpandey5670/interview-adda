@@ -1,0 +1,243 @@
+{
+  "id": "typescript-06-custom-error-classes",
+  "slug": "custom-error-classes",
+  "title": "Custom error classes and discriminated error unions",
+  "moduleId": "typescript-06-errors-and-result-types",
+  "order": 3,
+  "hook": "The built-in Error class is enough for generic failures, but domain code needs typed errors — HttpError with statusCode, ValidationError with field paths. Subclass Error for instanceof checks, or use discriminated unions when you prefer Result-style data.",
+  "sections": [
+    {
+      "heading": "What are custom errors?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A **custom error class** extends the built-in **Error** and adds domain fields — `statusCode`, `field`, `retryable`. Callers catch with `instanceof HttpError` and branch on those fields. An alternative is a **discriminated error union**: `{ kind: 'validation'; fields: string[] } | { kind: 'not-found'; id: string }` returned inside `Result<T, AppError>` without throwing at all. Both patterns give typed failure information; classes work well with throw/catch middleware, unions work well with Result pipelines."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Error subclass",
+              "longForm": "custom Error subclass",
+              "plainDefinition": "class HttpError extends Error with extra properties. Preserves stack when thrown correctly.",
+              "example": "class HttpError extends Error { constructor(public statusCode: number, message: string) { super(message); } }"
+            },
+            {
+              "term": "discriminated error union",
+              "longForm": "discriminated error union",
+              "plainDefinition": "A union of plain objects tagged with kind or code — no class, fits Result errors.",
+              "example": "{ kind: 'timeout'; ms: number } | { kind: 'auth'; reason: string }"
+            },
+            {
+              "term": "cause",
+              "longForm": "Error cause option",
+              "plainDefinition": "ES2022 Error constructor option linking an inner error — like C# InnerException.",
+              "example": "new HttpError(502, 'bad gateway', { cause: fetchErr })"
+            },
+            {
+              "term": "name property",
+              "longForm": "Error.name",
+              "plainDefinition": "String label on Error, often set to the class name for logging and serialization.",
+              "example": "this.name = 'HttpError';"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An API gateway maps errors to HTTP responses: 404 for not-found, 429 for rate limit, 500 for unexpected. If every failure is `new Error('...')`, you parse message strings — fragile and untestable. Typed errors let middleware do `if (err instanceof NotFoundError) res.status(404)` in one place. In C#, you might throw `LeaseExpiredException`; in TypeScript, subclass Error or return a tagged union. Pick one style per layer and stick to it."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Set prototype for instanceof in transpiled code",
+          "body": "When targeting ES5, subclassing Error requires Object.setPrototypeOf(this, HttpError.prototype) in the constructor so instanceof works after transpilation. Modern targets (ES2015+) usually handle this automatically."
+        }
+      ]
+    },
+    {
+      "heading": "Class errors versus union errors",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing a pattern",
+          "items": [
+            {
+              "title": "Throwing stack — use Error subclasses",
+              "body": "Express middleware, global handlers, and deep call stacks benefit from throw + instanceof."
+            },
+            {
+              "title": "Expected outcomes — use union in Result",
+              "body": "Validation and business rules return { kind: 'validation', fields } inside Result — no stack walk."
+            },
+            {
+              "title": "Normalize at the boundary",
+              "body": "Convert unknown catch values and plain union errors to AppError before logging."
+            },
+            {
+              "title": "Serialize carefully",
+              "body": "Error properties are non-enumerable — JSON.stringify(err) is often {}. Use a toJSON or mapper for APIs."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Error shapes in a layered app",
+            "source": "flowchart TD\n  DOMAIN[Domain layer Result or throw AppError]\n  DOMAIN --> SERVICE[Service catches unknown normalizes]\n  SERVICE --> HTTP[HTTP middleware maps to status]\n  HTTP --> LOG[Logger gets name message cause stack]\n  subgraph shapes\n    CLASS[HttpError extends Error]\n    UNION[kind validation not-found]\n  end\n  DOMAIN --> CLASS\n  DOMAIN --> UNION"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "HttpError subclass with cause",
+            "code": "class HttpError extends Error {\n  constructor(\n    public readonly statusCode: number,\n    message: string,\n    options?: { cause?: unknown }\n  ) {\n    super(message, options);\n    this.name = 'HttpError';\n  }\n}\n\nclass NotFoundError extends HttpError {\n  constructor(public readonly resource: string, id: string) {\n    super(404, `${resource} not found: ${id}`);\n    this.name = 'NotFoundError';\n  }\n}\n\nfunction getUser(id: string) {\n  const user = db.find(id);\n  if (!user) throw new NotFoundError('User', id);\n  return user;\n}",
+            "explanation": "Lines 1–9: statusCode on the error for middleware mapping. Line 6: cause chains inner fetch failures like C# InnerException. Lines 11–15: specific subclass for instanceof NotFoundError checks."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Discriminated AppError union for Result",
+            "code": "type AppError =\n  | { kind: 'validation'; fields: Record<string, string> }\n  | { kind: 'not-found'; resource: string; id: string }\n  | { kind: 'conflict'; message: string };\n\ntype Result<T> = { ok: true; value: T } | { ok: false; error: AppError };\n\nfunction updateEmail(userId: string, email: string): Result<void> {\n  if (!email.includes('@')) {\n    return { ok: false, error: { kind: 'validation', fields: { email: 'invalid' } } };\n  }\n  if (!db.exists(userId)) {\n    return { ok: false, error: { kind: 'not-found', resource: 'User', id: userId } };\n  }\n  db.setEmail(userId, email);\n  return { ok: true, value: undefined };\n}",
+            "explanation": "Lines 1–4: kind discriminant enables exhaustive switch. Lines 8–14: no throw for expected validation/not-found — errors are data. HTTP layer switches on error.kind for status codes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Express error middleware mapping",
+            "code": "function errorMiddleware(err: unknown, _req: Request, res: Response, _next: NextFunction) {\n  if (err instanceof HttpError) {\n    return res.status(err.statusCode).json({ error: err.message });\n  }\n  if (err instanceof Error) {\n    logger.error({ name: err.name, message: err.message, stack: err.stack, cause: err.cause });\n    return res.status(500).json({ error: 'Internal server error' });\n  }\n  logger.error({ raw: err });\n  res.status(500).json({ error: 'Internal server error' });\n}",
+            "explanation": "Lines 2–4: instanceof HttpError maps to correct HTTP status. Lines 5–8: generic Error logs stack and cause. Lines 9–11: non-Error throws still handled — unknown boundary discipline."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Custom errors across languages",
+          "headers": ["Aspect", "TypeScript", "JavaScript", "C#"],
+          "rows": [
+            ["Custom failure type", "class extends Error or union", "class extends Error", "class extends Exception"],
+            ["instanceof / pattern match", "instanceof + narrowing", "instanceof", "catch (NotFoundException ex)"],
+            ["Inner cause", "Error cause option", "Same (modern engines)", "InnerException constructor"],
+            ["Serialization", "Manual — JSON.stringify loses fields", "Same", "Exception.ToString()"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Dozens of empty custom exception classes",
+          "body": "class FooException extends Error {} with no extra fields adds no value over Error with a good message. Add fields callers need — statusCode, field, retryable — or use a union."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Mixing throw and Result in the same layer",
+          "body": "A function that sometimes throws HttpError and sometimes returns Result confuses callers. Pick throw OR Result per layer; convert at boundaries."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Custom Error subclasses work across async boundaries if you throw the same instance — unlike some serialized RPC errors that become plain objects and fail instanceof. For distributed systems, prefer stable error codes (kind: 'NOT_FOUND') in JSON over class names. Error.cause (ES2022) is the idiomatic inner chain — log err.cause in structured logging. In monorepos, put AppError union in a shared package; HTTP adapters map kind to status. Avoid deep inheritance trees — flat Error + code beats Exception → ApplicationException → DomainException. Production proof: alert on error.name distribution; spike in generic Error means missing classification."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Prefer for", "Avoid for"],
+          "rows": [
+            ["Error subclass + throw", "Middleware, deep stacks, unexpected faults", "Hot validation loops"],
+            ["Discriminated union in Result", "API inputs, business rules", "Replacing every library throw"],
+            ["error.cause chain", "Wrapping fetch/DB errors once", "Wrapping at every layer"],
+            ["C#-style exception hierarchy", "N/A in TS", "Expecting compile-time catch filters"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "instanceof breaks after JSON round-trip — use codes",
+            "code": "const err = new NotFoundError('User', '42');\nconst wire = JSON.parse(JSON.stringify(err)); // {}\n// wire instanceof NotFoundError === false\n\n// Safer for APIs:\ntype WireError = { code: 'NOT_FOUND'; resource: string; id: string };\n\nfunction toWire(error: AppError): WireError {\n  switch (error.kind) {\n    case 'not-found':\n      return { code: 'NOT_FOUND', resource: error.resource, id: error.id };\n    // ...\n    default:\n      return { code: 'NOT_FOUND', resource: 'Unknown', id: '' }; // exhaustive in real code\n  }\n}",
+            "explanation": "Lines 1–3: JSON.stringify on Error loses data — instanceof fails across services. Lines 6–14: stable codes survive serialization — pattern for microservices boundaries."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Creating ten exception classes with no extra fields. Not knowing JSON.stringify(Error) is {}. Assuming instanceof works after Redis or HTTP deserialization. Mixing Result and throw in one function without a boundary rule."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Extend Error for throw/catch middleware; use discriminated unions for Result-based domain errors.",
+    "Set name and use cause for inner chains — mirrors C# InnerException.",
+    "instanceof breaks across serialization — use stable error codes at service boundaries.",
+    "60s: HttpError with statusCode for middleware. Union with kind for Result. cause for wrap once. No empty exception classes. JSON.stringify err is empty.",
+    "Follow-up: when would you choose union errors over Error subclasses?"
+  ],
+  "commonPitfalls": [
+    "Empty exception classes with no domain fields — use Error or a union with data.",
+    "JSON.stringify(err) expecting custom fields — non-enumerable properties are lost.",
+    "Strong answer: 'Subclass for stack+middleware, union for Result, cause once at boundary, wire codes for RPC.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-06-try-catch-and-unknown",
+    "typescript-06-result-either-patterns",
+    "typescript-06-assertion-functions-errors",
+    "typescript-06-errors-vs-csharp-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Error subclass",
+      "note": "JS Error subclassing has prototype pitfalls on ES5 targets. TypeScript adds typing for custom fields on the subclass.",
+      "futureTopicSlug": "javascript/errors/custom-error"
+    },
+    {
+      "language": "csharp",
+      "concept": "custom Exception types",
+      "note": "C# LeaseExpiredException is caught by type at compile time. TypeScript HttpError needs instanceof at runtime in catch — no typed catch clause.",
+      "futureTopicSlug": "csharp/exceptions/hierarchy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "MDN — Error",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Error"
+    },
+    {
+      "title": "TypeScript handbook — classes",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/classes.html"
+    }
+  ],
+  "animationHint": "layers",
+  "scenarioTag": "express-middleware"
+}

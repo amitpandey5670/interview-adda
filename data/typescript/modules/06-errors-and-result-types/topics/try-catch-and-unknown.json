@@ -1,0 +1,292 @@
+{
+  "id": "typescript-06-try-catch-and-unknown",
+  "slug": "try-catch-and-unknown",
+  "title": "try/catch with unknown and type-safe error handling",
+  "moduleId": "typescript-06-errors-and-result-types",
+  "order": 1,
+  "hook": "In JavaScript, anything can be thrown — a string, a number, a plain object. TypeScript types the catch variable as unknown so you must narrow before using it. That honesty at API boundaries prevents silent bugs in production workers.",
+  "sections": [
+    {
+      "heading": "What is unknown in catch?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Since TypeScript 4.0, the default type of a **catch** variable is **unknown**, not **any**. **unknown** means \"we do not know what was thrown\" — you cannot read `.message`, call methods, or pass it to a function until you **narrow** it with `instanceof Error`, a type guard, or an explicit check. This matches JavaScript reality: `throw \"oops\"` and `throw { code: 404 }` are legal. C# is stricter — only `System.Exception`-derived types compile — but TypeScript runs on JavaScript, so the type system admits the truth at the boundary."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "unknown",
+              "longForm": "unknown type",
+              "plainDefinition": "A top type that is safe — you must narrow before use. Unlike any, unknown cannot be assigned or accessed without checks.",
+              "example": "catch (e: unknown) { if (e instanceof Error) console.log(e.message); }"
+            },
+            {
+              "term": "narrowing",
+              "longForm": "type narrowing",
+              "plainDefinition": "Refining a broad type to a specific one using control flow — instanceof, typeof, in, or custom guards.",
+              "example": "if (typeof e === 'string') return e;"
+            },
+            {
+              "term": "instanceof Error",
+              "longForm": "instanceof check",
+              "plainDefinition": "Runtime test that the thrown value is an Error (or subclass). The most common first guard in catch blocks.",
+              "example": "e instanceof TypeError"
+            },
+            {
+              "term": "useUnknownInCatchVariables",
+              "longForm": "useUnknownInCatchVariables compiler option",
+              "plainDefinition": "tsconfig flag (default true in strict) that types catch variables as unknown instead of any.",
+              "example": "\"useUnknownInCatchVariables\": true"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A fetch wrapper, queue consumer, or Express error middleware receives failures from libraries you do not control. Assuming `catch (e: Error)` is a lie — a dependency might throw a string or a rejected promise with a plain object. Treating unknown as Error and reading `.message` without a check causes runtime crashes in the handler that was supposed to recover. At FAANG-level interviews, \"catch is unknown, narrow first\" separates engineers who understand JavaScript semantics from those who only know syntax."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Catch is an API boundary",
+          "body": "Every catch block is a boundary between untyped throw sites and your typed application code. Narrow before logging, mapping to HTTP status codes, or rethrowing. Never cast with `as Error` without a runtime check."
+        }
+      ]
+    },
+    {
+      "heading": "How to narrow safely at the boundary",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From unknown to actionable error",
+          "items": [
+            {
+              "title": "Catch as unknown",
+              "body": "Let TypeScript default to unknown (or annotate explicitly). Do not opt back into any."
+            },
+            {
+              "title": "Check instanceof Error",
+              "body": "Most thrown values in well-behaved code are Error instances. Use message and stack safely after this check."
+            },
+            {
+              "title": "Handle non-Error throws",
+              "body": "Strings, numbers, and plain objects need explicit branches — stringify or map to a domain error."
+            },
+            {
+              "title": "Normalize and rethrow or return Result",
+              "body": "Convert to a consistent shape (AppError, Result failure) before crossing service layers."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Narrowing unknown at a catch boundary",
+            "source": "flowchart TD\n  THROW[Any value thrown] --> CATCH[catch e: unknown]\n  CATCH --> INST{e instanceof Error?}\n  INST -->|yes| ERR[Use e.message / e.stack]\n  INST -->|no| STR{typeof e === string?}\n  STR -->|yes| MSG[Wrap as Error or log string]\n  STR -->|no| OBJ[JSON.stringify or domain mapper]\n  ERR --> NORMALIZE[Normalize to AppError or Result]\n  MSG --> NORMALIZE\n  OBJ --> NORMALIZE"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Default unknown catch — the honest baseline",
+            "code": "async function fetchJson<T>(url: string): Promise<T> {\n  try {\n    const res = await fetch(url);\n    if (!res.ok) throw new Error(`HTTP ${res.status}`);\n    return (await res.json()) as T;\n  } catch (e: unknown) {\n    // e is unknown — cannot read e.message yet\n    if (e instanceof Error) {\n      throw new Error(`fetchJson failed: ${e.message}`, { cause: e });\n    }\n    throw new Error(`fetchJson failed: ${String(e)}`);\n  }\n}",
+            "explanation": "Line 7: catch types e as unknown. Lines 8–10: instanceof Error narrows to Error so .message is legal. Lines 11–12: non-Error throws (string, object) get String(e) — no unsafe cast."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Reusable toError helper",
+            "code": "function toError(value: unknown): Error {\n  if (value instanceof Error) return value;\n  if (typeof value === 'string') return new Error(value);\n  if (typeof value === 'object' && value !== null && 'message' in value) {\n    const msg = (value as { message: unknown }).message;\n    return new Error(typeof msg === 'string' ? msg : JSON.stringify(value));\n  }\n  return new Error(JSON.stringify(value));\n}\n\ntry {\n  await processMessage(body);\n} catch (e: unknown) {\n  const err = toError(e);\n  logger.error({ err, stack: err.stack });\n  throw err;\n}",
+            "explanation": "Lines 1–8: one place to normalize any thrown value to Error. Line 14: after toError, logging and rethrow use a consistent type. Keeps catch blocks thin in workers and middleware."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Why catch (e: any) is a regression",
+            "code": "// BAD — disables safety\nfunction badHandler(e: any) {\n  console.log(e.message); // compiles; crashes if e was \"timeout\"\n}\n\n// GOOD — forces a guard\nfunction goodHandler(e: unknown) {\n  if (!(e instanceof Error)) {\n    console.log('non-Error throw:', e);\n    return;\n  }\n  console.log(e.message);\n}",
+            "explanation": "Line 3: any lets you access .message without proof — runtime undefined if e is a string. Lines 8–12: unknown forces the instanceof check before property access."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "catch typing across languages",
+          "headers": [
+            "Aspect",
+            "TypeScript",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Catch variable type",
+              "unknown (strict default)",
+              "Untyped — any value",
+              "Specific Exception type"
+            ],
+            [
+              "What can be thrown",
+              "Anything (runtime)",
+              "Anything",
+              "Exception-derived only"
+            ],
+            [
+              "Compile-time catch filter",
+              "No — manual narrowing",
+              "No",
+              "Yes — catch (IOException ex)"
+            ],
+            [
+              "Stack trace",
+              "Error.stack when instanceof Error",
+              "Same",
+              "Exception.StackTrace always"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Casting unknown to Error without a check",
+          "body": "const err = e as Error is a lie at compile time and a crash at runtime when a library throws \"ECONNRESET\". Always narrow with instanceof or a helper like toError."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Empty catch blocks",
+          "body": "catch (e: unknown) { } swallows poison messages in queue workers. Log, map to Result, retry transient faults, or rethrow — never succeed silently."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "unknown at catch boundaries is TypeScript admitting JavaScript semantics — unlike C# where throw is typed. In production, measure non-Error throw rate from third-party packages; axios and node-fetch usually reject with Error but legacy callbacks may throw strings. useUnknownInCatchVariables should stay true in strict configs. At service boundaries, normalize once with toError or map to Result — do not scatter instanceof checks. Promise rejections follow the same rule: .catch((e: unknown) => ...). For async middleware, wrap the entire handler and normalize at the outer edge so inner code can assume AppError."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Approach",
+            "Prefer for",
+            "Avoid for"
+          ],
+          "rows": [
+            [
+              "catch (e: unknown) + instanceof",
+              "All production catch blocks",
+              "Assuming libraries only throw Error"
+            ],
+            [
+              "toError helper",
+              "Logging and HTTP error mappers",
+              "Replacing Result for expected failures"
+            ],
+            [
+              "catch (e: any)",
+              "Never in strict codebases",
+              "Greenfield projects"
+            ],
+            [
+              "Result instead of throw",
+              "Expected validation / not-found",
+              "Replacing every library throw"
+            ],
+            [
+              "C#-style typed catch",
+              "Not available in TS",
+              "Pretending catch (e: HttpError) filters runtime"
+            ]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — non-Error throw crashes naive handler",
+            "code": "// Library throws a string on timeout\nfunction legacyParse(raw: string): object {\n  if (!raw) throw 'empty payload'; // legal JS\n  return JSON.parse(raw);\n}\n\nfunction naiveCatch() {\n  try {\n    legacyParse('');\n  } catch (e: any) {\n    metrics.increment('parse_fail', { msg: e.message }); // undefined — silent bad metric\n  }\n}\n\nfunction safeCatch() {\n  try {\n    legacyParse('');\n  } catch (e: unknown) {\n    const err = toError(e);\n    metrics.increment('parse_fail', { msg: err.message }); // \"empty payload\"\n  }\n}",
+            "explanation": "Lines 3–4: string throw is valid JavaScript. Line 12: any hides the bug — e.message is undefined. Lines 20–22: unknown + toError produces a reliable message for metrics and alerts."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying catch (e: Error) is safe without instanceof. Using as Error to silence the compiler. Not knowing useUnknownInCatchVariables exists. Claiming TypeScript can catch only TypeError like C# catches IOException."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "catch defaults to unknown in strict TypeScript — anything can be thrown at runtime.",
+    "Narrow with instanceof Error or a toError helper before reading .message or .stack.",
+    "Never use as Error without a runtime check — that is how handlers crash while handling errors.",
+    "60s: unknown in catch is honest JS semantics. instanceof or toError at boundaries. No typed catch like C#. Result for expected failures, throw for exceptional.",
+    "Follow-up: how do you handle non-Error throws from a legacy npm package?"
+  ],
+  "commonPitfalls": [
+    "catch (e: any) or as Error without instanceof — compiles but crashes on string throws.",
+    "Empty catch blocks in workers — poison messages or silent data loss.",
+    "Strong answer: 'unknown default, toError at boundary, metrics on normalized message, never cast without check.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-06-result-either-patterns",
+    "typescript-06-custom-error-classes",
+    "typescript-06-assertion-functions-errors",
+    "typescript-06-errors-vs-csharp-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "throw any value",
+      "note": "JavaScript allows throw \"text\" or throw 42. TypeScript unknown in catch reflects this — there is no compile-time throw type.",
+      "futureTopicSlug": "javascript/errors/throw"
+    },
+    {
+      "language": "typescript",
+      "concept": "typed catch",
+      "note": "C# catch (IOException ex) is enforced by the compiler. TypeScript cannot filter catch by type — you inspect inside the block after narrowing unknown.",
+      "futureTopicSlug": "csharp/exceptions/try-catch"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript 4.0 — unknown in catch",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-0.html#unknown-on-catch-clause-bindings"
+    },
+    {
+      "title": "TypeScript handbook — narrowing",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html"
+    }
+  ],
+  "animationHint": "flow"
+}

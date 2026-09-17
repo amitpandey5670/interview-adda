@@ -1,0 +1,244 @@
+{
+  "id": "typescript-06-assertion-functions-errors",
+  "slug": "assertion-functions-errors",
+  "title": "Assertion functions and exhaustive error handling",
+  "moduleId": "typescript-06-errors-and-result-types",
+  "order": 4,
+  "hook": "Assertion functions tell TypeScript that after a check passes, a value has a narrower type — or that a function never returns normally because it always throws. Combined with exhaustive switch on error unions, you eliminate impossible states at compile time.",
+  "sections": [
+    {
+      "heading": "What are assertion functions?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An **assertion function** is declared with `asserts condition` in its return type. When you call `assertIsError(e)` on `unknown e`, TypeScript narrows `e` to `Error` in all code after the call — but only if the function returns normally. If the assertion fails, the function throws (or calls `process.exit`), so the narrowed path is safe. A related pattern is **`asserts arg is Type`** on a parameter. The **`never` return type** on functions like `fail(message)` signals \"this always throws\" — useful for exhaustive switch default branches and impossible cases."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "asserts",
+              "longForm": "asserts predicate",
+              "plainDefinition": "Return type annotation that narrows a variable when the function returns without throwing.",
+              "example": "function assertIsString(x: unknown): asserts x is string"
+            },
+            {
+              "term": "never",
+              "longForm": "never type",
+              "plainDefinition": "The empty type — no value exists. Used for functions that always throw or unreachable code.",
+              "example": "function fail(msg: string): never { throw new Error(msg); }"
+            },
+            {
+              "term": "exhaustive check",
+              "longForm": "exhaustiveness checking",
+              "plainDefinition": "Compiler error when a switch on a union does not handle every member — often using never in default.",
+              "example": "default: const _exhaustive: never = error;"
+            },
+            {
+              "term": "type predicate",
+              "longForm": "type predicate",
+              "plainDefinition": "Function returning x is T — narrows in true branch only. Assertion functions narrow after the call regardless of branch.",
+              "example": "function isError(x: unknown): x is Error"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Error handling code is repetitive — `if (!(e instanceof Error)) throw ...` at every site. A single `assertIsError(e)` centralizes the rule and keeps call sites clean. For discriminated error unions, an exhaustive `switch (error.kind)` with a `never` default means adding a new error kind forces compiler errors in every handler — the same safety Rust and C# pattern matching give you, but for TypeScript unions. Interviewers ask about assert vs type predicate: predicates narrow inside `if (isError(e))`; assertions narrow after the call on the same variable."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Assertions must throw on failure",
+          "body": "If assertIsUser(x) returns without throwing when x is invalid, TypeScript still narrows — but runtime is wrong. Assertion functions are contracts you must honor."
+        }
+      ]
+    },
+    {
+      "heading": "How assertions and exhaustiveness work together",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From unknown to handled error",
+          "items": [
+            {
+              "title": "Catch unknown",
+              "body": "catch (e: unknown) — starting point at boundaries."
+            },
+            {
+              "title": "assertIsError(e)",
+              "body": "After this line, e is Error in the rest of the block."
+            },
+            {
+              "title": "Map to AppError union",
+              "body": "Classify into { kind: 'validation' } | { kind: 'timeout' } etc."
+            },
+            {
+              "title": "Exhaustive switch with never",
+              "body": "default: const _x: never = err — compiler fails if a kind is missing."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Assertion and exhaustive error handling",
+            "source": "flowchart TD\n  U[unknown e] --> A[assertIsError]\n  A -->|throws| FAIL[rethrow or wrap]\n  A -->|returns| E[Error e narrowed]\n  E --> MAP[to AppError union]\n  MAP --> SW[switch error.kind]\n  SW --> V[validation handler]\n  SW --> N[not-found handler]\n  SW --> T[timeout handler]\n  SW --> DEF[default: never = err]\n  DEF -->|new kind added| COMPILE[Compiler error missing case]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "asserts vs type predicate",
+            "code": "function isError(value: unknown): value is Error {\n  return value instanceof Error;\n}\n\nfunction assertIsError(value: unknown): asserts value is Error {\n  if (!isError(value)) throw new TypeError('Expected Error');\n}\n\nfunction handleUnknown(e: unknown) {\n  // Predicate — narrow only inside if\n  if (isError(e)) {\n    console.log(e.stack);\n  }\n  // e still unknown here\n\n  assertIsError(e);\n  // e is Error here — no extra if\n  console.log(e.message);\n}",
+            "explanation": "Lines 1–3: predicate returns boolean — narrow in true branch only. Lines 5–7: assertion throws on failure — narrows after call. Lines 14–16: assertIsError eliminates nested if at boundary."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "never and fail for impossible branches",
+            "code": "function fail(message: string): never {\n  throw new Error(message);\n}\n\nfunction assertNever(value: never): never {\n  throw new Error(`Unexpected value: ${JSON.stringify(value)}`);\n}\n\ntype Shape = { kind: 'circle'; r: number } | { kind: 'square'; side: number };\n\nfunction area(shape: Shape): number {\n  switch (shape.kind) {\n    case 'circle':\n      return Math.PI * shape.r ** 2;\n    case 'square':\n      return shape.side ** 2;\n    default:\n      return assertNever(shape);\n  }\n}",
+            "explanation": "Lines 1–3: fail/never — always throws. Lines 14–21: default uses assertNever — if you add kind: 'triangle', default receives it and compile fails because triangle is not never."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Exhaustive AppError handler",
+            "code": "type AppError =\n  | { kind: 'validation'; fields: Record<string, string> }\n  | { kind: 'not-found'; id: string }\n  | { kind: 'timeout'; ms: number };\n\nfunction httpStatus(error: AppError): number {\n  switch (error.kind) {\n    case 'validation':\n      return 400;\n    case 'not-found':\n      return 404;\n    case 'timeout':\n      return 504;\n    default: {\n      const _exhaustive: never = error;\n      return _exhaustive;\n    }\n  }\n}",
+            "explanation": "Lines 14–17: assigning error to never in default — if a new kind is added to AppError, this default becomes a compile error. Safer than return 500 for unknown kinds."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Exhaustiveness across languages",
+          "headers": ["Feature", "TypeScript", "JavaScript", "C#"],
+          "rows": [
+            ["Assertion narrowing", "asserts keyword — compile time", "Manual throws only", "No equivalent — runtime checks"],
+            ["Exhaustive switch", "never in default — tsc error", "No compile check", "Switch expression exhaustiveness (C# 11+)"],
+            ["Unreachable helper", "assertNever(x: never)", "throw in default", "throw new UnreachableException"],
+            ["Catch typing", "assertIsError on unknown", "No types", "catch (SpecificEx ex)"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Assertion that does not throw",
+          "body": "function assertIsError(e: unknown): asserts e is Error { console.log(e); } — TypeScript narrows but runtime is unsafe. Always throw on failure."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "default: return 500 without never",
+          "body": "Swallowing new error kinds in a default branch hides bugs when AppError grows. Use const _: never = error to force updates."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Assertion functions are erased at runtime — they are thin throws with compile-time narrowing. Use them at trust boundaries after parsing JSON or catching unknown. assertNonNull is common with strictNullChecks. For discriminated unions, enable noImplicitReturns and prefer switch over if-else chains for exhaustiveness. In monorepos, shared assertIsDefined prevents duplicated guards. C# 11 switch expressions with when clauses achieve similar exhaustiveness at compile time; TypeScript needs never discipline. Production: when a new error kind ships, CI should fail on non-exhaustive handlers — tsc is your safety net. Do not use assertions for user input validation — use Result and return err; assertions are for programmer invariants and post-parse trust."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Tool", "Use for", "Not for"],
+          "rows": [
+            ["asserts x is T", "Post-parse trust, catch normalization", "User email validation"],
+            ["x is T predicate", "Optional narrowing in branches", "Replacing every assert"],
+            ["never + assertNever", "Exhaustive error switches", "Runtime-unknown string codes"],
+            ["fail(): never", "Impossible states after checks", "Expected business errors"],
+            ["C# catch filter", "N/A in TS", "Pretending TS has when on catch"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Diagnostics — non-exhaustive switch after new error kind",
+            "code": "// After adding { kind: 'rate-limit'; retryAfter: number } to AppError:\n\nfunction httpStatus(error: AppError): number {\n  switch (error.kind) {\n    case 'validation': return 400;\n    case 'not-found': return 404;\n    case 'timeout': return 504;\n    default: {\n      const _exhaustive: never = error;\n      // TS2322: Type '{ kind: \"rate-limit\"; ... }' is not assignable to type 'never'\n      return _exhaustive;\n    }\n  }\n}\n// Fix: add case 'rate-limit': return 429;",
+            "explanation": "Lines 10–12: compiler points at the missing case when the union grows — same workflow as adding a variant to a Rust enum or C# switch expression."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing type predicate with assertion function narrowing scope. Using assert for user-facing validation. Not knowing never enables exhaustiveness. Saying assertions exist at runtime — they are compile-time contracts on throw behavior."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "asserts x is T narrows after the call; x is T predicate narrows only inside if.",
+    "never in switch default forces compile errors when error unions grow.",
+    "assertIsError centralizes unknown catch handling — throw on failure or the contract lies.",
+    "60s: Assertions are compile-time contracts that throw on failure. never for exhaustive AppError switch. Not for user validation — use Result. C# has catch filters; TS has asserts.",
+    "Follow-up: difference between assertIsDefined and optional chaining?"
+  ],
+  "commonPitfalls": [
+    "Assertion function that returns without throwing — unsafe narrowing.",
+    "default: return 500 instead of never — new error kinds slip through silently.",
+    "Strong answer: 'asserts at trust boundaries, Result for validation, never default in switch, assertNever for impossible.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-06-try-catch-and-unknown",
+    "typescript-06-result-either-patterns",
+    "typescript-06-custom-error-classes",
+    "typescript-06-errors-vs-csharp-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "throw in invariant check",
+      "note": "JS developers throw on failed invariants manually. TypeScript asserts documents which checks narrow types for the compiler.",
+      "futureTopicSlug": "javascript/errors/invariants"
+    },
+    {
+      "language": "csharp",
+      "concept": "exhaustive switch",
+      "note": "C# switch expressions can be exhaustive over types and enums. TypeScript achieves similar safety with discriminated unions and never.",
+      "futureTopicSlug": "csharp/pattern-matching/switch"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — assertion functions",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html#using-type-predicates"
+    },
+    {
+      "title": "TypeScript handbook — never type",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/functions.html#never"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "error-mapper"
+}

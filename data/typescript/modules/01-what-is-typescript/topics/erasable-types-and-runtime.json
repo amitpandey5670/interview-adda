@@ -1,0 +1,285 @@
+{
+  "id": "typescript-01-erasable-types-and-runtime",
+  "slug": "erasable-types-and-runtime",
+  "title": "Erasable types and what survives at run time",
+  "moduleId": "typescript-01-what-is-typescript",
+  "order": 4,
+  "hook": "Almost everything TypeScript adds for typing is erased before JavaScript runs. Interfaces, type aliases, and most generics leave no trace in the output — unlike C# types that remain in Intermediate Language (IL) metadata for the Common Language Runtime (CLR) to enforce.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "TypeScript follows an erasable types model: the compiler uses type information to report errors, then removes it during emit. What survives at run time is plain JavaScript — values, functions, classes (as constructors), and a few constructs that emit code (enums, decorators with experimental support, legacy namespace patterns). There is no parallel to CLR metadata tables listing your interfaces. Run-time type questions in JavaScript are answered with typeof, instanceof, Array.isArray, or custom validators — not with TypeScript interfaces."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Erasure",
+              "longForm": "Type erasure",
+              "plainDefinition": "Removing type annotations and type-only syntax so only JavaScript remains.",
+              "example": "interface User {} disappears; class User {} becomes a JavaScript function."
+            },
+            {
+              "term": "Type-only import",
+              "longForm": "import type",
+              "plainDefinition": "An import used only for types; guaranteed erased and not loaded at run time.",
+              "example": "import type { User } from './models';"
+            },
+            {
+              "term": "Structural typing",
+              "longForm": "Structural type system",
+              "plainDefinition": "Compatibility is based on shape (properties), not declared names — and that shape is not stored at run time.",
+              "example": "Any object with { id: string } matches a User interface at compile time only."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Erasure explains why JSON.parse is never \"safe\" from TypeScript alone, why you cannot instanceof an interface, and why dependency injection containers in TS use decorators or manual registration unlike C# reflection. When an API returns unknown data, compile-time types lie unless you validate. Production services add Zod, io-ts, or JSON Schema at boundaries — the same place C# might use System.Text.Json with real DTO types plus optional validation attributes."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "TypeScript types are a compile-time fiction for the checker. JavaScript values at run time never carry interface tags. C# assemblies do carry type metadata the CLR reads."
+        }
+      ]
+    },
+    {
+      "heading": "What erases vs what emits",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Compile-time only vs run-time artifacts",
+          "items": [
+            {
+              "title": "Erased completely",
+              "body": "interface, type alias, generic parameters, import type, satisfies (compile-time check only)."
+            },
+            {
+              "title": "Emits JavaScript",
+              "body": "class, function, const/let, enum (object or IIFE), namespace (legacy), decorators (when enabled)."
+            },
+            {
+              "title": "Run-time checks you write",
+              "body": "typeof, instanceof, in operator, custom type guards, schema validators."
+            },
+            {
+              "title": "C# contrast",
+              "body": "Roslyn keeps type names in IL. CLR uses them for casting, reflection, serialization — no erasure."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Erasable types vs CLR metadata",
+            "source": "flowchart LR\n  subgraph ts [TypeScript]\n    I[interface Order]\n    C[class OrderService]\n    I -->|erased| X[gone]\n    C -->|emits| JS[function OrderService]\n  end\n  subgraph cs [C#]\n    IC[interface IOrder]\n    CL[class OrderService]\n    IC --> META[IL metadata]\n    CL --> META\n    META --> CLR[CLR enforcement]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough: erasure in action",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Interfaces and types vanish",
+            "code": "type OrderId = string;\ninterface Order {\n  id: OrderId;\n  total: number;\n}\n\nfunction printTotal(order: Order): void {\n  console.log(order.total);\n}\n\n// Emitted JS has no Order, OrderId, or parameter types.",
+            "explanation": "type and interface exist only for tsc. At run time order is any object JavaScript allows — wrong shapes throw at property access, not at a type boundary."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Classes emit — but generics erase",
+            "code": "class Repository<T> {\n  private items: T[] = [];\n  add(item: T): void {\n    this.items.push(item);\n  }\n}\n\nconst repo = new Repository<Order>();\n// JS: class Repository { ... } — no <Order> in output",
+            "explanation": "class becomes a constructor function. Generic <T> is compile-time only — unlike C# generic types that retain type args in metadata for reified generics on value types and reference types."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "import type is fully erased",
+            "code": "import type { Order } from './models.js';\nimport { validateOrder } from './validators.js';\n\nfunction handle(raw: unknown): Order {\n  return validateOrder(raw); // runtime validation required\n}\n\n// Emitted JS: only validateOrder import remains",
+            "explanation": "import type guarantees no run-time dependency on ./models.js. This is how you avoid circular bundle issues for type-only sharing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Enums are a special case (they emit)",
+            "code": "enum Status {\n  Pending = 'PENDING',\n  Shipped = 'SHIPPED',\n}\n\nconsole.log(Status.Pending);\n// Emits a real JS object — not erased like interfaces",
+            "explanation": "Enums break the pure erasure story — they generate JavaScript. Many codebases prefer const objects + union types to avoid enum emit quirks and bundler issues."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Boundary safety patterns",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Compile-time vs run-time safety",
+          "headers": [
+            "Boundary",
+            "TypeScript alone",
+            "With runtime validation",
+            "C# equivalent"
+          ],
+          "rows": [
+            [
+              "JSON.parse body",
+              "Trusts assertion/annotation",
+              "Zod/schema parse",
+              "Deserialize<T> + validation"
+            ],
+            [
+              "typeof interface",
+              "Compile error",
+              "N/A — use type guard",
+              "typeof / is pattern"
+            ],
+            [
+              "External API",
+              "Structural assignability",
+              "OpenAPI codegen + validate",
+              "HttpClient + DTO types"
+            ],
+            [
+              "Refactor rename",
+              "tsc catches in repo",
+              "Tests + schema version",
+              "Compiler + runtime types"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using as Order on JSON.parse without validation — the cast is a lie at run time. Expecting instanceof to work with interfaces. Assuming generic type parameters exist for reflection. Treating const enum as always inlined without checking isolatedModules."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "TypeScript's design trades run-time type reification for zero overhead and full JavaScript interop. Branded/opaque types (module 15) simulate nominal typing at compile time only. declare const enum with preserveConstEnums changes emit. experimentalDecorators + emitDecoratorMetadata (legacy) can emit design:type metadata for DI frameworks like NestJS — opt-in, not default. C# reflection can list properties on any object; TS needs libraries or code generation. For FAANG interviews: always mention unknown at API boundaries plus narrowing guards."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Technique",
+            "Compile-time",
+            "Run-time cost",
+            "C# analog"
+          ],
+          "rows": [
+            [
+              "interface",
+              "Shape check",
+              "Zero — erased",
+              "interface in IL"
+            ],
+            [
+              "type guard fn",
+              "Narrows union",
+              "Small JS branch",
+              "pattern matching / is"
+            ],
+            [
+              "Zod parse",
+              "Inferred type",
+              "Validation CPU",
+              "FluentValidation"
+            ],
+            [
+              "branded type",
+              "Nominal illusion",
+              "Zero",
+              "wrapper struct"
+            ],
+            [
+              "enum",
+              "Union of literals",
+              "Object in bundle",
+              "enum in IL"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming TS types exist at run time. Using as casts on external data as 'validation'. Not knowing enums emit. Saying generics are reified like Java/C# without mentioning erasure."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Interfaces, type aliases, and generic parameters erase — JavaScript engines never see them.",
+    "Classes and enums emit JavaScript; interfaces do not — instanceof works only on class constructors.",
+    "API boundaries need runtime validation (Zod, guards) because JSON.parse returns unknown shapes.",
+    "60s: TS types are compile-time only. Erased on emit. CLR keeps metadata. Use unknown + narrow at boundaries. Enums are the common exception that emits.",
+    "Follow-up: how would you model nominal IDs without run-time cost?"
+  ],
+  "commonPitfalls": [
+    "Weak: 'TypeScript makes JSON.parse safe.' Strong: 'Only after schema parse or type guard — annotations erase.'",
+    "Trying instanceof MyInterface — interfaces do not exist at run time.",
+    "Strong answer: 'Erasure = zero runtime types. Validate at boundaries. C# keeps IL metadata; TS does not.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-01-typescript-vs-javascript-csharp",
+    "typescript-01-compile-pipeline-and-tsc",
+    "typescript-01-type-annotations-basics",
+    "typescript-01-javascript-interop"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "typeof and instanceof",
+      "note": "JavaScript run-time checks replace erased TypeScript types. typeof returns string tags; instanceof checks prototype chain.",
+      "futureTopicSlug": "javascript/language/types-and-coercion"
+    },
+    {
+      "language": "typescript",
+      "concept": "Runtime type metadata",
+      "note": "C# comparison: CLR preserves types for reflection and enforcement. TypeScript requires explicit validators or codegen for the same guarantees.",
+      "futureTopicSlug": "csharp/type-system/value-vs-reference"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — Everyday Types",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/everyday-types.html"
+    },
+    {
+      "title": "TypeScript handbook — Classes",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/classes.html"
+    }
+  ]
+}

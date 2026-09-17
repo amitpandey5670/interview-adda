@@ -1,0 +1,289 @@
+{
+  "id": "typescript-06-result-either-patterns",
+  "slug": "result-either-patterns",
+  "title": "Result and Either patterns for typed errors",
+  "moduleId": "typescript-06-errors-and-result-types",
+  "order": 2,
+  "hook": "Exceptions hide failure paths in the type signature. A Result type makes success and failure explicit in the return type — callers must handle both. This is how you model expected failures without stack walks on hot paths.",
+  "sections": [
+    {
+      "heading": "What is a Result type?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A **Result** (sometimes called **Either** in functional libraries) is a **discriminated union** that represents either success or failure without throwing. The canonical TypeScript shape is `{ ok: true; value: T } | { ok: false; error: E }`. The **ok** field is the discriminant — TypeScript narrows `value` or `error` after you check `ok`. Unlike exceptions, failures appear in the function signature: `parseRow(line: string): Result<CsvRow, ParseError>`. Callers cannot ignore the error branch without a compile-time smell (unchecked result)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Result",
+              "longForm": "Result type",
+              "plainDefinition": "A union type encoding success (value) or failure (error) as data instead of control flow via throw.",
+              "example": "type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };"
+            },
+            {
+              "term": "Either",
+              "longForm": "Either<L, R>",
+              "plainDefinition": "Functional name for left-or-right outcomes. Left is often failure, right is success — convention varies by library.",
+              "example": "Either<ParseError, CsvRow> — error on left, value on right."
+            },
+            {
+              "term": "discriminated union",
+              "longForm": "discriminated union",
+              "plainDefinition": "A union with a shared literal field (ok, kind, type) so switch and if narrow correctly.",
+              "example": "if (result.ok) result.value else result.error"
+            },
+            {
+              "term": "railway-oriented programming",
+              "longForm": "railway-oriented programming",
+              "plainDefinition": "Chaining Result-returning steps so an early failure skips later work — like a train switching tracks.",
+              "example": "parse(line).flatMap(validate).map(toDto)"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Parsing a million-row CSV where 2% of rows are malformed is not exceptional — it is expected. Throwing and catching per bad row allocates and walks the stack. Returning `Result<CsvRow, string>` keeps control flow flat and lets you count failures in metrics. At API boundaries (HTTP handlers, CLI tools, library public surfaces), Result documents what can go wrong without reading the implementation. C# teams often use TryParse or a small Result struct for the same reason — TypeScript gets it from unions with zero runtime overhead when inlined."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "When Result beats throw",
+          "body": "Validation, not-found, parse errors, and business-rule rejections are expected outcomes. Reserve throw for programmer bugs, unrecoverable I/O, and invariant violations you cannot represent as data."
+        }
+      ]
+    },
+    {
+      "heading": "How Result flows through code",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Building a Result pipeline",
+          "items": [
+            {
+              "title": "Return Result from the boundary function",
+              "body": "parseRow returns ok: false with a typed error instead of throw on bad input."
+            },
+            {
+              "title": "Caller branches on ok",
+              "body": "if (!result.ok) { log(result.error); continue; } — explicit handling."
+            },
+            {
+              "title": "Chain with map / flatMap",
+              "body": "Each step returns Result; early failure short-circuits the chain."
+            },
+            {
+              "title": "Convert to throw at the outer edge if needed",
+              "body": "HTTP layer may throw 400 after Result says validation failed — one conversion point."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Railway-oriented Result chain",
+            "source": "flowchart LR\n  A[parse line] -->|ok| B[validate]\n  A -->|fail| X[error track]\n  B -->|ok| C[map to DTO]\n  B -->|fail| X\n  C -->|ok| D[success]\n  C -->|fail| X"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Minimal Result type and factories",
+            "code": "type Result<T, E = string> =\n  | { ok: true; value: T }\n  | { ok: false; error: E };\n\nconst ok = <T>(value: T): Result<T, never> => ({ ok: true, value });\nconst err = <E>(error: E): Result<never, E> => ({ ok: false, error });\n\nfunction parsePort(raw: string): Result<number, 'empty' | 'not-a-number' | 'out-of-range'> {\n  if (!raw.trim()) return err('empty');\n  const n = Number(raw);\n  if (Number.isNaN(n)) return err('not-a-number');\n  if (n < 1 || n > 65535) return err('out-of-range');\n  return ok(n);\n}",
+            "explanation": "Lines 1–3: discriminated union with ok literal. Lines 5–6: factories avoid repeating object shapes. Lines 8–14: error codes are a typed union — callers must handle each case or use a default branch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "map and flatMap for chaining",
+            "code": "function map<T, U, E>(r: Result<T, E>, fn: (v: T) => U): Result<U, E> {\n  return r.ok ? ok(fn(r.value)) : r;\n}\n\nfunction flatMap<T, U, E>(r: Result<T, E>, fn: (v: T) => Result<U, E>): Result<U, E> {\n  return r.ok ? fn(r.value) : r;\n}\n\nconst result = flatMap(parsePort('8080'), (port) =>\n  port === 443 ? err('reserved') as Result<number, 'reserved'> : ok(port)\n);",
+            "explanation": "Lines 1–3: map transforms success without touching error. Lines 5–7: flatMap chains Result-returning steps — failure propagates automatically. Line 9: railway pattern in one expression."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "CSV row parse — Result vs throw on hot path",
+            "code": "type CsvRow = { id: string; amount: number };\ntype ParseError = { row: number; reason: string };\n\nfunction parseRow(line: string, rowNum: number): Result<CsvRow, ParseError> {\n  const parts = line.split(',');\n  if (parts.length < 2) return err({ row: rowNum, reason: 'too few columns' });\n  const amount = Number(parts[1]);\n  if (Number.isNaN(amount)) return err({ row: rowNum, reason: 'bad amount' });\n  return ok({ id: parts[0], amount });\n}\n\n// Import loop — no try/catch per row\nlet failures = 0;\nfor (const [i, line] of lines.entries()) {\n  const r = parseRow(line, i + 1);\n  if (!r.ok) { failures++; log(r.error); continue; }\n  batch.push(r.value);\n}",
+            "explanation": "Lines 5–9: expected bad rows return err — no stack allocation. Lines 14–17: caller counts failures explicitly. Contrast with throw per row which is measurable slower at scale."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Result patterns across languages",
+          "headers": [
+            "Aspect",
+            "TypeScript Result",
+            "JavaScript",
+            "C#"
+          ],
+          "rows": [
+            [
+              "Enforcement",
+              "Compile-time union narrowing",
+              "Convention only — easy to ignore",
+              "Struct + pattern match or TryParse"
+            ],
+            [
+              "Runtime cost",
+              "Zero if inlined objects",
+              "Same",
+              "Struct often zero-alloc"
+            ],
+            [
+              "Error type in signature",
+              "Result<T, E> visible",
+              "Hidden in throw",
+              "TryParse bool + out param"
+            ],
+            [
+              "Library ecosystem",
+              "Roll your own or ts-results",
+              "throw / null",
+              "BCL throws; Result in app code"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Result everywhere including BCL-style I/O",
+          "body": "Wrapping every fs.readFile and fetch in Result adds noise. Wrap at your domain boundary; let low-level APIs throw and catch once at the edge."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Ignoring the error branch",
+          "body": "const v = result.value without checking ok compiles poorly and fails at runtime. Use if (!result.ok) return or exhaustive switch."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Result<T, E> is erased at runtime — enforcement is compile-time only, unlike Rust's Result. Choose E as a small union of codes (not-a-number | out-of-range) or a discriminated error type for exhaustiveness. For async, return Promise<Result<T, E>> or use async functions that return Result directly. At boundaries, convert Result to HTTP status once: validation err → 400, not-found → 404. Do not pull a 200 KB functional library for a twenty-line union — interviewers prefer a minimal ok/err. Measure: exception rate vs Result failure rate in import jobs; Result should dominate on expected paths."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Signal",
+            "Result",
+            "throw"
+          ],
+          "rows": [
+            [
+              "Bad CSV row",
+              "Result err — hot path",
+              "Avoid throw in loop"
+            ],
+            [
+              "Redis timeout",
+              "Catch at edge, optional Result wrap",
+              "Retry then DLQ"
+            ],
+            [
+              "Null argument to public API",
+              "err('missing') or assert",
+              "throw TypeError"
+            ],
+            [
+              "Invariant broken",
+              "throw or assert never",
+              "throw"
+            ],
+            [
+              "npm callback throws string",
+              "toError at boundary",
+              "Not Result — normalize first"
+            ]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Async Result at an HTTP handler boundary",
+            "code": "async function createUser(body: unknown): Promise<Result<User, ValidationError>> {\n  const parsed = validateCreateUser(body);\n  if (!parsed.ok) return parsed;\n  try {\n    const user = await db.insertUser(parsed.value);\n    return ok(user);\n  } catch (e: unknown) {\n    return err({ kind: 'db', message: toError(e).message });\n  }\n}\n\n// Express edge — single throw conversion\napp.post('/users', async (req, res) => {\n  const r = await createUser(req.body);\n  if (!r.ok) return res.status(400).json(r.error);\n  res.status(201).json(r.value);\n});",
+            "explanation": "Lines 2–4: validation uses Result. Lines 5–9: unexpected DB throw caught once and mapped to err. Lines 13–16: HTTP layer is the only place that maps failure to status codes."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming Result replaces all exceptions with no tradeoffs. Using Result but never checking ok. Importing heavy Either libraries for a simple union. Not knowing TypeScript erases Result at runtime."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Result is a discriminated union — ok: true carries value, ok: false carries typed error.",
+    "Use Result for expected failures (validation, parse, not-found); throw for exceptional paths.",
+    "Chain with map/flatMap; convert to HTTP or throw at the outer boundary only.",
+    "60s: Result makes failures visible in the signature. CSV bad rows return err, not throw. Erased at runtime — tsc enforces handling. C# mirrors with TryParse and small structs.",
+    "Follow-up: how is Promise<Result<T,E>> different from try/catch in async handlers?"
+  ],
+  "commonPitfalls": [
+    "Accessing .value without checking .ok — runtime undefined on failure branch.",
+    "Result-wrapping every npm throw instead of catching once at the edge.",
+    "Strong answer: 'Discriminated union, E as typed codes, map/flatMap chain, single HTTP conversion, metrics on err rate not exception rate.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-06-try-catch-and-unknown",
+    "typescript-06-custom-error-classes",
+    "typescript-06-assertion-functions-errors",
+    "typescript-06-errors-vs-csharp-exceptions"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "return null or throw",
+      "note": "JS often uses null for failure and throw for exceptional — Result unifies both into an explicit union TypeScript can check.",
+      "futureTopicSlug": "javascript/errors/null-vs-throw"
+    },
+    {
+      "language": "typescript",
+      "concept": "TryParse / CacheResult",
+      "note": "C# TryParse and generic Result structs mirror { ok, value, error }. C# keeps a real struct at runtime; TS unions erase.",
+      "futureTopicSlug": "csharp/generics/generic-result-wrapper"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "TypeScript handbook — unions and narrowing",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#union-types"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

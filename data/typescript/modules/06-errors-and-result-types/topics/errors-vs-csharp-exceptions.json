@@ -1,0 +1,250 @@
+{
+  "id": "typescript-06-errors-vs-csharp-exceptions",
+  "slug": "errors-vs-csharp-exceptions",
+  "title": "TypeScript error patterns versus C# exceptions",
+  "moduleId": "typescript-06-errors-and-result-types",
+  "order": 5,
+  "hook": "C# enforces typed exceptions at compile time — you can only throw Exception-derived types and catch specific ones. TypeScript runs on JavaScript where anything can be thrown, so the language uses unknown, Result unions, and runtime instanceof instead of CLR-style typed catch.",
+  "sections": [
+    {
+      "heading": "What is different?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In **C#**, `throw` requires a **System.Exception**-derived object. `catch (IOException ex)` is a **compile-time filter** — other exception types bubble past. The **Common Language Runtime (CLR)** walks the stack, runs **finally** blocks, and preserves **StackTrace** with `throw;` (not `throw ex;`). In **TypeScript**, there is no CLR — exceptions are ordinary JavaScript throws. The catch variable is **unknown**. You cannot write `catch (e: HttpError)` and expect the runtime to filter; you narrow inside the block. For expected failures, both ecosystems increasingly prefer **Result** / **TryParse** over hot-path exceptions — but C# still throws from the Base Class Library (BCL) while TypeScript libraries mix throw, reject, and callback errors."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CLR",
+              "shortForm": "CLR",
+              "longForm": "Common Language Runtime",
+              "plainDefinition": "The .NET runtime that unwinds the stack on throw. JavaScript engines do similar stack walks but with untyped thrown values.",
+              "example": "C# throw new IOException() — CLR finds catch (IOException ex)."
+            },
+            {
+              "term": "BCL",
+              "shortForm": "BCL",
+              "longForm": "Base Class Library",
+              "plainDefinition": "Core .NET APIs that predominantly throw exceptions. Node and browser APIs mix styles.",
+              "example": "int.Parse throws FormatException; TS Number('x') returns NaN."
+            },
+            {
+              "term": "TryParse",
+              "longForm": "TryParse pattern",
+              "plainDefinition": "C# pattern returning bool with out parameter for expected parse failure — analog to Result<T, E>.",
+              "example": "int.TryParse(\"42\", out var n)"
+            },
+            {
+              "term": "when filter",
+              "longForm": "exception filter",
+              "plainDefinition": "C# catch clause condition — catch (HttpRequestException ex) when (ex.StatusCode == 429). No TypeScript equivalent on catch.",
+              "example": "Retry only throttling without catching all HTTP errors."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Engineers moving between C# backends and TypeScript frontends or Node services hit a culture clash: C# teaches typed catch and Try-methods; TypeScript teaches unknown, Result, and middleware mapping. Misapplying C# habits — annotating catch as Error without instanceof — causes production crashes. Misapplying TS habits — returning Result from every C# repository method — fights the BCL. Knowing which language gives compile-time catch filters versus runtime narrowing is a common staff-level interview topic."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Same goal, different tools",
+          "body": "Both ecosystems want: expected failures as data (Result/TryParse), exceptional failures as throw, normalization at boundaries, and no empty catch in workers. The syntax differs; the architecture rhymes."
+        }
+      ]
+    },
+    {
+      "heading": "Side-by-side decision guide",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mapping patterns across stacks",
+          "items": [
+            {
+              "title": "Bad user input",
+              "body": "C#: return false from TryParse or Result. TS: Result<{ ok: false, error }> — not throw per field."
+            },
+            {
+              "title": "Transient I/O",
+              "body": "C#: catch TimeoutException / when 429, retry. TS: catch unknown, instanceof or code check, retry."
+            },
+            {
+              "title": "Programmer bug",
+              "body": "C#: let NullReferenceException bubble. TS: let throw bubble or use assert never in dev."
+            },
+            {
+              "title": "Wrap at boundary",
+              "body": "C#: new OuterException(msg, inner). TS: new HttpError(502, msg, { cause: inner })."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "C# CLR vs TypeScript JS error flow",
+            "source": "flowchart LR\n  subgraph CSharp[C#]\n    T1[throw Exception only] --> U1[CLR unwind]\n    U1 --> C1[catch IOException typed]\n    C1 --> F1[finally / using]\n  end\n  subgraph TypeScript[TypeScript]\n    T2[throw anything] --> U2[engine unwind]\n    U2 --> C2[catch unknown]\n    C2 --> N2[instanceof / Result]\n    N2 --> F2[finally same keyword]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "csharp",
+            "label": "C# — typed catch and TryParse",
+            "code": "static bool TryParsePort(string raw, out int port)\n{\n    if (!int.TryParse(raw, out port)) return false;\n    return port is >= 1 and <= 65535;\n}\n\ntry\n{\n    await client.GetAsync(url, ct);\n}\ncatch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)\n{\n    await DelayRetryAsync(ct);\n}\ncatch (HttpRequestException ex)\n{\n    logger.LogError(ex, \"HTTP failed\");\n    throw;\n}",
+            "explanation": "Lines 1–5: TryParse for expected parse failure — no exception. Lines 10–13: when filter catches only 429 — compile-time catch type plus runtime filter. Line 17: throw; preserves StackTrace."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — Result and unknown catch equivalent",
+            "code": "function tryParsePort(raw: string): Result<number, 'empty' | 'nan' | 'range'> {\n  if (!raw.trim()) return { ok: false, error: 'empty' };\n  const n = Number(raw);\n  if (Number.isNaN(n)) return { ok: false, error: 'nan' };\n  if (n < 1 || n > 65535) return { ok: false, error: 'range' };\n  return { ok: true, value: n };\n}\n\ntry {\n  await fetch(url);\n} catch (e: unknown) {\n  const err = toError(e);\n  if (isRateLimited(err)) {\n    await delayRetry();\n    return;\n  }\n  logger.error(err);\n  throw err;\n}",
+            "explanation": "Lines 1–6: Result mirrors TryParse + validation. Lines 10–18: no typed catch — check rate limit inside catch after normalizing unknown. Rethrow preserves stack like throw;."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Wrapping with cause — InnerException parallel",
+            "code": "// C#: throw new InvalidOperationException(\"token invalid\", jsonEx);\n\ntry {\n  const data = JSON.parse(raw) as TokenPayload;\n  return validateToken(data);\n} catch (e: unknown) {\n  throw new HttpError(401, 'token invalid', { cause: e });\n}\n\n// Logger walks cause chain like InnerException:\nfunction logError(err: Error) {\n  let cur: unknown = err;\n  while (cur instanceof Error) {\n    console.error(cur.message, cur.stack);\n    cur = cur.cause;\n  }\n}",
+            "explanation": "Line 7: cause option parallels C# InnerException. Lines 11–17: walk cause chain for structured logs — same debugging story across stacks."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and C#",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "TypeScript versus C# error model",
+          "headers": ["Concern", "TypeScript / JavaScript", "C#"],
+          "rows": [
+            ["What can throw", "Any value", "Exception-derived only"],
+            ["Catch typing", "unknown + manual narrow", "catch (SpecificEx ex) — compiler enforced"],
+            ["Expected failure", "Result union or return codes", "TryParse, bool Try*, Result struct"],
+            ["Stack on rethrow", "throw err preserves stack", "throw; preserves — throw ex; does not"],
+            ["Filter catch subset", "if inside catch", "catch when (condition)"],
+            ["Cleanup", "finally / using in modern JS", "finally / using / await using"],
+            ["Async unhandled", "unhandledRejection event", "Task unobserved exception — host policy"],
+            ["Compile-time exhaustiveness", "never on union switch", "Switch expression exhaustiveness"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pretending TypeScript has C# catch filters",
+          "body": "catch (e: HttpError) does not stop other throws from entering — there is no runtime filter. All throws enter catch; you narrow with instanceof inside."
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Throwing strings in TS because JS allows it",
+          "body": "C# developers sometimes throw strings in TS out of habit from old JS tutorials. Always throw Error (or subclass) so stack and cause work."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Staff interviews probe whether you architect boundaries, not memorize keywords. C# ASP.NET Core middleware catches and maps exceptions to ProblemDetails; Express uses error middleware with instanceof — same layer, different runtime. C# records and TS discriminated unions both model errors as data. Performance: exceptions are expensive on hot paths in both runtimes — Result for CSV rows is idiomatic in either language. Distributed systems: neither instanceof nor catch (RpcException) survives JSON — use stable error codes on the wire. Async: C# Task exceptions must be observed; TS Promise rejections need .catch or unhandledRejection handlers. Strong candidates articulate when to mirror TryParse in TS and when to let fetch throw once at the controller edge."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Scenario", "C# approach", "TypeScript approach"],
+          "rows": [
+            ["Parse config at startup", "Throw — fail fast", "Throw or process.exit — fail fast"],
+            ["Parse million CSV rows", "TryParse / Result struct", "Result union — no throw in loop"],
+            ["HTTP 429 from upstream", "catch when StatusCode == 429", "catch unknown + status check helper"],
+            ["Cross-service error", "ProblemDetails + error code", "JSON { code } — not class name"],
+            ["Nullable misuse", "Nullable reference types (compile)", "strictNullChecks (compile) — different from errors"]
+          ]
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Anti-pattern — fake typed catch",
+            "code": "// This does NOT filter at runtime — all throws still land here\nfunction bad() {\n  try {\n    mightThrowAnything();\n  } catch (e: HttpError) {\n    // Type annotation only — e might be a string\n    res.status(e.statusCode).json({ error: e.message }); // runtime crash\n  }\n}\n\nfunction good() {\n  try {\n    mightThrowAnything();\n  } catch (e: unknown) {\n    if (e instanceof HttpError) {\n      res.status(e.statusCode).json({ error: e.message });\n      return;\n    }\n    throw toError(e);\n  }\n}",
+            "explanation": "Lines 2–7: annotating catch parameter as HttpError is a TypeScript lie — no CLR filter. Lines 11–19: unknown + instanceof is the correct TS equivalent of C# catch (HttpError ex)."
+          }
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming TS catch (e: HttpError) filters like C#. Saying C# can throw strings. Not knowing throw; vs throw ex; in C# when discussing TS rethrow. Ignoring that both prefer Result on hot expected-failure paths."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "C# throw is typed; TypeScript catch is unknown — narrowing replaces compile-time catch filters.",
+    "TryParse / Result struct in C# maps to Result<T, E> unions in TypeScript for expected failures.",
+    "cause in TS parallels InnerException; throw; in C# parallels rethrowing the same Error in TS.",
+    "60s: C# typed catch and when filters. TS unknown plus instanceof. Both use Result on hot paths. Wire error codes not class names. No fake typed catch in TS.",
+    "Follow-up: how do unobserved Task exceptions compare to unhandled Promise rejections?"
+  ],
+  "commonPitfalls": [
+    "catch (e: HttpError) without instanceof — annotation does not filter runtime throws.",
+    "Assuming C# and TS handle async errors identically — observe Task vs catch Promise rejections.",
+    "Strong answer: 'CLR typed catch vs TS unknown narrow. TryParse maps to Result. cause maps to InnerException. Stable codes on the wire.'"
+  ],
+  "relatedTopicIds": [
+    "typescript-06-try-catch-and-unknown",
+    "typescript-06-result-either-patterns",
+    "typescript-06-custom-error-classes",
+    "typescript-06-assertion-functions-errors"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "untyped throw",
+      "note": "TypeScript error patterns exist because JavaScript throw is untyped. C# never had this problem at compile time.",
+      "futureTopicSlug": "javascript/errors/throw"
+    },
+    {
+      "language": "csharp",
+      "concept": "exception handling fundamentals",
+      "note": "C# module 06 is the direct counterpart — compare throw;, when filters, and TryParse to TS patterns in this module.",
+      "futureTopicSlug": "csharp/exceptions/overview"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "C# exceptions",
+      "url": "https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/exceptions/"
+    },
+    {
+      "title": "TypeScript 4.0 unknown in catch",
+      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/typescript-4-0.html#unknown-on-catch-clause-bindings"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "fullstack-boundary"
+}

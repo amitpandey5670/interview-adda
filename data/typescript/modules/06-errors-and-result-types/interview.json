@@ -1,0 +1,78 @@
+{
+  "moduleId": "typescript-06-errors-and-result-types",
+  "title": "Errors and result types — interview",
+  "items": [
+    {
+      "question": "Why is the catch variable typed as unknown in TypeScript?",
+      "answer": "JavaScript allows throw with any value — strings, numbers, plain objects — not only Error instances. TypeScript 4.0+ defaults catch bindings to unknown so you must narrow before using properties like message. This is honest typing: unlike C# where throw requires System.Exception, TypeScript runs on untyped throw semantics. useUnknownInCatchVariables should stay true in strict projects.",
+      "followUps": [
+        "What is the difference between unknown and any in catch?",
+        "How do you normalize a non-Error throw for logging?"
+      ],
+      "sixtySeconds": "unknown because JS throws anything. Narrow with instanceof or toError. No C#-style typed catch filter."
+    },
+    {
+      "question": "When should you use Result<T, E> instead of throw?",
+      "answer": "Use Result for expected failures where failure is a normal outcome — validation errors, parse failures, not-found lookups, business rule rejections — especially on hot paths like CSV import loops. throw remains appropriate for programmer bugs, unrecoverable I/O, and invariant violations. Result makes the failure branch visible in the function signature; exceptions hide it. Convert Result to HTTP status or throw at the outer boundary only.",
+      "followUps": [
+        "Is Result enforced at runtime in TypeScript?",
+        "How does Result compare to C# TryParse?"
+      ],
+      "sixtySeconds": "Result for expected outcomes on hot paths. throw for exceptional. Signature shows both branches. Erased at runtime."
+    },
+    {
+      "question": "How do custom Error classes differ from discriminated error unions?",
+      "answer": "Error subclasses (HttpError, NotFoundError) work with throw, stack traces, and Express-style middleware that checks instanceof. Discriminated unions ({ kind: 'validation', fields }) fit inside Result without stack walks and serialize cleanly across services. Subclasses can lose instanceof after JSON round-trips — use stable error codes on the wire. Set Error.name and use the cause option to chain inner errors like C# InnerException.",
+      "followUps": [
+        "Why does JSON.stringify(new Error()) return {}?",
+        "Do you need Object.setPrototypeOf for Error subclasses?"
+      ],
+      "sixtySeconds": "Subclass for throw+middleware. Union for Result. cause for inner chain. Wire codes not class names for RPC."
+    },
+    {
+      "question": "What are assertion functions and how do they help with errors?",
+      "answer": "Functions with return type asserts x is T tell TypeScript that after a successful call, x has a narrower type. assertIsError(e) on unknown e makes e an Error in subsequent lines because failure throws. This centralizes boundary checks. Combine with never in switch default branches on AppError unions for exhaustiveness — adding a new kind causes compile errors in handlers. Assertions are for programmer invariants, not user validation — use Result for that.",
+      "followUps": [
+        "Difference between x is T predicate and asserts x is T?",
+        "What does fail(): never signal?"
+      ],
+      "sixtySeconds": "asserts narrows after call. never for exhaustive switch. Throw on assert failure. Not for user input."
+    },
+    {
+      "question": "How do TypeScript error patterns compare to C# exceptions?",
+      "answer": "C# enforces throw of Exception-derived types and compile-time catch filters including when clauses. TypeScript catch is unknown — you narrow with instanceof inside the block; annotating catch (e: HttpError) does not filter runtime throws. C# TryParse and Result structs parallel TypeScript Result unions. C# throw; preserves StackTrace; throw ex; destroys it — TypeScript rethrowing the same Error preserves stack. Both ecosystems avoid exceptions on hot expected-failure paths.",
+      "followUps": [
+        "What is the C# equivalent of Error.cause?",
+        "How do unhandled Promise rejections compare to unobserved Tasks?"
+      ],
+      "sixtySeconds": "C# typed catch and when. TS unknown plus instanceof. TryParse maps to Result. cause maps to InnerException."
+    },
+    {
+      "question": "What belongs in a toError(unknown) helper?",
+      "answer": "Check instanceof Error and return as-is. If typeof value === 'string', wrap in new Error(value). For objects with a message field, use it if string else JSON.stringify. Fallback: new Error(JSON.stringify(value)). One helper keeps catch blocks thin in workers and middleware and prevents reading .message on non-Error throws.",
+      "followUps": [
+        "Should toError run at every catch or once at the boundary?",
+        "How do you preserve cause when wrapping?"
+      ],
+      "sixtySeconds": "instanceof first, string wrap, object message, JSON fallback. Single boundary normalization."
+    },
+    {
+      "question": "How do you map errors to HTTP status in Express?",
+      "answer": "Register error middleware with signature (err, req, res, next). If err instanceof HttpError, use err.statusCode. If err instanceof Error, log stack and cause, return 500. For unknown non-Error throws, log raw value and return 500. Domain functions can return Result and the route handler maps error.kind to status before calling next() only for unexpected throws.",
+      "followUps": [
+        "Where should Result-to-HTTP conversion live?",
+        "How do you avoid leaking stack traces to clients?"
+      ],
+      "sixtySeconds": "instanceof HttpError for status. Error logs 500. unknown normalized first. Result mapped in route not middleware for expected errors."
+    },
+    {
+      "question": "What are common production mistakes with try/catch in TypeScript?",
+      "answer": "Empty catch blocks that swallow queue poison messages. Casting unknown to Error without instanceof. Using exceptions for per-row validation in million-row imports. Mixing throw and Result in the same layer without boundary rules. Relying on catch (e: SomeError) as a filter. Not logging error.cause chains. Emitting class names instead of stable codes across microservices.",
+      "followUps": [
+        "How do you metric expected Result failures versus exceptions?",
+        "When is empty catch ever acceptable?"
+      ],
+      "sixtySeconds": "No empty catch. No as Error. Result on hot path. unknown always. Wire codes. Log cause chain once."
+    }
+  ]
+}
