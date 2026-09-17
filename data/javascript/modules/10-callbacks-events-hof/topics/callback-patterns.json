@@ -4,30 +4,42 @@
   "title": "Callback patterns and error-first conventions",
   "moduleId": "javascript-10-callbacks-events-hof",
   "order": 1,
-  "hook": "Callback patterns and error-first conventions shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "Before Promises dominated, Node standardized on callbacks with the error as the first argument. That convention still appears in fs, legacy APIs, and interview questions about control flow and error propagation.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Callback patterns and error-first conventions is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A **callback** is a function passed to another function to run later — on I/O completion, timer fire, or user click. Node's **error-first callback** signature is `(err, result) => void`: if `err` is truthy, treat it as failure; otherwise use `result`. Synchronous callbacks run immediately; asynchronous callbacks run on a later **event loop** turn. **Higher-order functions** like `array.map(cb)` use the same idea synchronously."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "callback",
-              "longForm": "Callback patterns and error-first conventions",
-              "plainDefinition": "The central idea behind \"Callback patterns and error-first conventions\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "error-first callback",
+              "longForm": "error-first callback",
+              "plainDefinition": "Node convention: first parameter is Error or null, second is success payload.",
+              "example": "fs.readFile(path, (err, data) => { if (err) throw err; });"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "continuation",
+              "longForm": "continuation",
+              "plainDefinition": "Function representing 'what to do next' after async work — callback or .then handler.",
+              "example": "download(url, (err, body) => parse(body, done));"
+            },
+            {
+              "term": "callback hell",
+              "longForm": "callback hell",
+              "plainDefinition": "Deep nesting when each async step needs the next callback inline.",
+              "example": "Three nested fs.readFile calls — hard to read and handle errors."
+            },
+            {
+              "term": "promisify",
+              "longForm": "util.promisify",
+              "plainDefinition": "Wraps error-first callback API into a function returning Promise.",
+              "example": "const readFile = promisify(fs.readFile); await readFile('x.txt');"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Callback patterns and error-first conventions beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "You still maintain code using `fs.readFile`, database drivers with callback modes, and third-party libs from the 2010s. Interviews test whether you know **why** `(err, data)` order exists and how to **promisify**, not just `async/await`. C# uses `Action<T>` and `Task` continuations — error-first is Node-specific ergonomics, not a language feature."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Callback patterns and error-first conventions\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Interview trap: throw inside callback",
+          "body": "Throwing in an async callback does not become a rejected Promise unless wrapped — it becomes an uncaught exception on the next tick. Always pass errors via err first or wrap with Promise."
         }
       ]
     },
@@ -53,32 +65,20 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Error-first flow",
           "items": [
-            {
-              "title": "Read the syntax",
-              "body": "Find where Callback patterns and error-first conventions appears in real code — a function, type annotation, or runtime API."
-            },
-            {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
-            },
-            {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
-            },
-            {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
-            }
+            { "title": "Caller registers callback", "body": "Passes function to async API." },
+            { "title": "I/O completes", "body": "Lib invokes callback on thread pool / libuv thread, marshaled to JS thread." },
+            { "title": "Check err", "body": "if (err) handle and return — do not touch result." },
+            { "title": "Use result", "body": "Continue logic or call next callback in chain." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Callback patterns and error-first conventions flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Error-first callback decision",
+            "source": "flowchart TD\n  A[API invokes callback] --> B{err truthy?}\n  B -->|yes| C[Handle error path]\n  B -->|no| D[Use result]\n  C --> E[Return early]\n  D --> F[Next step]"
           }
         }
       ]
@@ -90,36 +90,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Callback patterns and error-first conventions",
-            "code": "// Callback patterns and error-first conventions\nconst example = {\n  topic: 'callback-patterns',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Callback patterns and error-first conventions. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Classic error-first API",
+            "code": "import fs from 'node:fs';\n\nfs.readFile('config.json', 'utf8', (err, text) => {\n  if (err) {\n    console.error('read failed', err.code);\n    return;\n  }\n  const config = JSON.parse(text);\n  startServer(config.port);\n});",
+            "explanation": "Early return on err — never JSON.parse when read failed. err.code distinguishes ENOENT vs EACCES."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "Manual promisify",
+            "code": "function readFileAsync(path, encoding) {\n  return new Promise((resolve, reject) => {\n    fs.readFile(path, encoding, (err, data) => {\n      if (err) reject(err);\n      else resolve(data);\n    });\n  });\n}\n\nconst text = await readFileAsync('config.json', 'utf8');",
+            "explanation": "Maps err to reject, result to resolve — foundation of util.promisify and how Promise bridges callbacks."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "C# Task instead of error-first",
+            "code": "try\n{\n    var text = await File.ReadAllTextAsync(\"config.json\");\n    var config = JsonSerializer.Deserialize<Config>(text);\n    StartServer(config.Port);\n}\ncatch (IOException ex)\n{\n    _logger.LogError(ex, \"read failed\");\n}",
+            "explanation": "C# uses exceptions + Task — no err-first parameter. Node historically avoided throw across async C++ boundary."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Failure mode: forgotten err check",
+            "code": "fs.readFile('missing.txt', 'utf8', (err, text) => {\n  // BUG: no err check\n  const lines = text.split('\\n'); // text undefined → TypeError\n});\n\n// Fix: guard err; or use fs.promises.readFile + try/catch",
+            "explanation": "Most common callback bug in code review — silent undefined then secondary crash."
           }
         }
       ]
@@ -129,29 +129,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Callback patterns and error-first conventions across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Callback vs Task error model",
+          "headers": ["Aspect", "Node callbacks", "C# async/Task"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Error signal", "err first argument", "Exception on faulted Task"],
+            ["Composition", "Nested callbacks / manual promisify", "await, try/catch"],
+            ["Sync throw in cb", "Uncaught exception risk", "Captured in Task exception"],
+            ["TypeScript typing", "Callback types in @types/node", "Task<T> native"],
+            ["Modern Node", "fs.promises preferred", "Always async/await idiomatic"]
           ]
         }
       ]
@@ -163,7 +148,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating Callback patterns and error-first conventions as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "Calling callback twice (success then error). Mixing return value with callback style. Forgetting err check. Throwing instead of passing err in library code you author."
         }
       ]
     },
@@ -172,83 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Callback patterns and error-first conventions, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "When authoring callback APIs: document error codes, never invoke callback more than once, and support both callback and Promise if you must (dual API — avoid if greenfield). Use `util.callbackify` sparingly for legacy interop. In production migrate hot paths to promises with fs.promises, pg native promise driver, etc."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Style", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Error-first callback", "Legacy Node, cb streams", "Complex composition"],
+            ["Promisify wrapper", "Incremental migration", "Special APIs (callback last arg variants)"],
+            ["async/await", "All new code", "Top-level await constraints in CJS"],
+            ["EventEmitter errors", "Long-lived processes", "No single err callback per op"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Callback patterns and error-first conventions just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Not knowing err-first parameter order. Claiming throw in async fs callback becomes Promise reject automatically. Cannot write manual promisify or explain why Node chose err-first."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Callback patterns and error-first conventions: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for callback-patterns.",
-    "Production: validate external input before applying Callback patterns and error-first conventions; log failures with context.",
-    "60s: Callback patterns and error-first conventions — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Node error-first: (err, result) — check err before using result.",
+    "Throw in async callback ≠ rejected Promise unless wrapped.",
+    "promisify maps err→reject for migration to async/await.",
+    "60s: Callbacks are continuations. Node err-first avoids exceptions across libuv. C# uses Task exceptions. Always guard err; promisify for legacy; prefer fs.promises.",
+    "Follow-up: implement promisify handling APIs where callback is not last argument."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Callback patterns and error-first conventions is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Callback patterns and error-first conventions, show a 5-line example, name one pitfall and one C# difference."
+    "Skipping err check and operating on undefined result.",
+    "Invoking the same callback twice on retry logic.",
+    "Strong answer: err-first convention, promisify pattern, C# Task contrast, migrate to promises."
   ],
   "relatedTopicIds": [
+    "javascript-10-callback-hell-and-composition",
     "javascript-10-event-emitter",
-    "javascript-10-dom-events-and-delegation",
-    "javascript-10-callback-hell-and-composition"
+    "javascript-13-promise-states-and-chaining"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Callback patterns and error-first conventions",
-      "note": "Compare Callback patterns and error-first conventions in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/callbacks-events-hof/callback-patterns"
+      "concept": "Callback type signatures",
+      "note": "Node @types use typed err as NodeJS.ErrnoException | null — mirrors error-first at compile time.",
+      "futureTopicSlug": "typescript/node/callback-types"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Callback patterns and error-first conventions to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/10/callback-patterns"
+      "language": "javascript",
+      "concept": "util.promisify",
+      "note": "Official bridge from callbacks to Promises — understand before relying on async/await sugar.",
+      "futureTopicSlug": "javascript/promises/promisify"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "Node.js — Error-first callbacks", "url": "https://nodejs.org/en/learn/asynchronous-work/javascript-asynchronous-programming-and-callbacks" },
+    { "title": "MDN — Callback function", "url": "https://developer.mozilla.org/en-US/docs/Glossary/Callback_function" }
   ],
   "animationHint": "flow"
 }

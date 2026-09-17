@@ -4,30 +4,36 @@
   "title": "Definite assignment and strictPropertyInitialization",
   "moduleId": "typescript-07-null-safety-strict",
   "order": 4,
-  "hook": "Definite assignment and strictPropertyInitialization shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "strictPropertyInitialization ensures class fields are assigned before use — either in the declaration, constructor, or via definite assignment assertion. It mirrors C# rules about reading uninitialized fields, but only at compile time.",
   "sections": [
     {
-      "heading": "What is this?",
+      "heading": "What is definite assignment?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Definite assignment and strictPropertyInitialization is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Definite assignment analysis** tracks whether variables and class properties are assigned before read. **`strictPropertyInitialization`** (part of strict) errors when a class field lacks initializer and is not set in every constructor path. **`strictNullChecks`** enables the analysis for `undefined` reads. The **definite assignment assertion** (`name!: string`) tells the compiler an external initializer will run — common in Angular `@Input()` patterns. Like all TS checks, this is **compile-time only** — uninitialized fields are still `undefined` at runtime if you lie to the compiler."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "definite",
-              "longForm": "Definite assignment and strictPropertyInitialization",
-              "plainDefinition": "The central idea behind \"Definite assignment and strictPropertyInitialization\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "strictPropertyInitialization",
+              "longForm": "strictPropertyInitialization",
+              "plainDefinition": "Requires class properties be initialized in declaration or constructor.",
+              "example": "Part of strict: true"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "definite assignment assertion",
+              "longForm": "definite assignment assertion (!)",
+              "plainDefinition": "Property postfix !: field will be assigned before use outside constructor.",
+              "example": "@Input() name!: string;"
+            },
+            {
+              "term": "definite assignment analysis",
+              "longForm": "definite assignment analysis",
+              "plainDefinition": "Control-flow tracking of whether variables are assigned on all paths.",
+              "example": "let x: string; if (ok) x = 'a'; console.log(x); // error"
             }
           ]
         }
@@ -38,38 +44,38 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Definite assignment and strictPropertyInitialization beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Uninitialized class fields caused silent `undefined` bugs before strictPropertyInitialization. Frameworks that set fields after construction (Angular, NestJS DI) need `!` or optional types. C# also forbids reading unassigned locals and warns on nullable fields — similar intent, CLR still allows reflection to see default values."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Definite assignment and strictPropertyInitialization\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Prefer initialization over !",
+          "body": "Default values in declaration or constructor assignment beat definite assignment assertion when possible."
         }
       ]
     },
     {
-      "heading": "How it works step by step",
+      "heading": "How definite assignment works",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Class field initialization options",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Definite assignment and strictPropertyInitialization appears in real code — a function, type annotation, or runtime API."
+              "title": "Inline initializer",
+              "body": "count = 0; — simplest, always satisfies checker."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Constructor assignment",
+              "body": "this.name = name; in every constructor path."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Definite assignment !",
+              "body": "For framework-injected fields set before ngOnInit."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Optional type",
+              "body": "name?: string — documents field may be undefined until set."
             }
           ]
         },
@@ -77,8 +83,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Definite assignment and strictPropertyInitialization flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Class field initialization paths",
+            "source": "flowchart TD\n  FIELD[class property] --> INIT[inline = value]\n  FIELD --> CTOR[constructor this.x =]\n  FIELD --> BANG[x!: T framework sets later]\n  FIELD --> OPT[x?: T explicitly optional]"
           }
         }
       ]
@@ -90,27 +96,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Definite assignment and strictPropertyInitialization",
-            "code": "// Definite assignment and strictPropertyInitialization\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'definite-assignment',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Definite assignment and strictPropertyInitialization. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "strictPropertyInitialization error",
+            "code": "class UserService {\n  private baseUrl: string; // Error: no initializer\n\n  constructor() {\n    // forgot to set baseUrl\n  }\n\n  fetch() {\n    return fetch(this.baseUrl); // would read undefined\n  }\n}",
+            "explanation": "Line 2: compiler blocks uninitialized field. Fix: initialize in constructor or declaration."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
+            "label": "Constructor assignment fix",
+            "code": "class UserService {\n  private baseUrl: string;\n\n  constructor(baseUrl: string) {\n    this.baseUrl = baseUrl;\n  }\n\n  fetch(path: string) {\n    return fetch(`${this.baseUrl}${path}`);\n  }\n}",
+            "explanation": "Line 5: definite assignment satisfied — all paths through constructor set baseUrl."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "language": "typescript",
+            "label": "Angular-style definite assignment",
+            "code": "import { Component, Input } from '@angular/core';\n\n@Component({ /* ... */ })\nexport class UserCard {\n  @Input() userId!: string; // set by framework before render\n\n  ngOnInit() {\n    console.log(this.userId.toUpperCase());\n  }\n}",
+            "explanation": "Line 6: ! tells compiler @Input sets userId before ngOnInit — pattern Angular docs recommend."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Local variable definite assignment",
+            "code": "function process(flag: boolean) {\n  let result: string;\n  if (flag) {\n    result = 'ok';\n  }\n  // console.log(result); // Error: used before assigned\n\n  result = result ?? 'default'; // still error — not assigned on all paths\n}",
+            "explanation": "Definite assignment applies to locals too — flag false path leaves result unassigned."
           }
         }
       ]
@@ -120,28 +135,37 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Definite assignment and strictPropertyInitialization across languages",
+          "title": "Initialization rules",
           "headers": [
-            "Aspect",
+            "Rule",
             "TypeScript",
-            "JavaScript / C#"
+            "JavaScript",
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
+              "Uninitialized class field",
+              "Compile error (strict)",
+              "undefined at runtime",
+              "Default value (null/0)"
             ],
             [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
+              "Framework injection",
+              "Use ! or optional",
+              "No checking",
+              "Constructor/DI required"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
+              "Local before assign",
+              "Compile error",
+              "undefined",
+              "Compile error"
+            ],
+            [
+              "Runtime guarantee",
+              "None",
+              "None",
+              "Partial (value types)"
             ]
           ]
         }
@@ -153,45 +177,95 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Definite assignment and strictPropertyInitialization as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "! on every @Input",
+          "body": "Consider input required vs optional in template — userId?: string documents absence."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "strictPropertyInitialization does not analyze methods called from constructor unless this is fully assigned first. Parameter properties (constructor(private x: string)) satisfy initialization. Abstract classes: subclasses must initialize abstract-implied fields. Migration: enable strict, fix fields batch by batch. C# required modifier (C# 11) parallels non-optional required init."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Framework patterns",
+          "headers": [
+            "Pattern",
+            "TS approach",
+            "Risk"
+          ],
+          "rows": [
+            [
+              "Angular @Input",
+              "input!: T or input = input<T>()",
+              "Undefined if parent omits binding"
+            ],
+            [
+              "NestJS inject",
+              "constructor(private svc: Svc)",
+              "Safe — DI sets in ctor"
+            ],
+            [
+              "Manual new",
+              "Inline init or ctor",
+              "Lowest risk"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected",
+          "body": "Disabling strictPropertyInitialization instead of fixing fields. Thinking ! initializes at runtime. Not knowing parameter properties satisfy the checker."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Definite assignment and strictPropertyInitialization: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for definite-assignment.",
-    "Production: validate external input before applying Definite assignment and strictPropertyInitialization; log failures with context.",
-    "60s: Definite assignment and strictPropertyInitialization — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "strictPropertyInitialization: class fields must be set in declaration or constructor.",
+    "name!: T is compile-time only — framework must actually assign.",
+    "Definite assignment analysis applies to locals on all code paths.",
+    "60s: strict ensures fields initialized. Use ctor, inline default, or ! for DI/framework. C# similar for locals. Runtime still undefined if wrong.",
+    "Follow-up: Angular input() signal vs @Input() !"
   ],
   "commonPitfalls": [
-    "Weak answer: \"Definite assignment and strictPropertyInitialization is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Definite assignment and strictPropertyInitialization, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: ! initializes the field — it only silences the compiler.",
+    "Weak: disabling strictPropertyInitialization globally — fix initialization instead.",
+    "Strong: Inline init or constructor assignment first. ! only for proven framework lifecycle. Optional ? when truly optional."
   ],
   "relatedTopicIds": [
+    "typescript-07-non-null-assertion",
     "typescript-07-strict-null-checks",
-    "typescript-07-optional-properties",
-    "typescript-07-non-null-assertion"
+    "typescript-05-classes-and-access-modifiers",
+    "typescript-16-decorators-in-frameworks"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Definite assignment and strictPropertyInitialization",
-      "note": "Foundation link to javascript track for definite-assignment.",
-      "futureTopicSlug": "javascript/null-safety-strict/definite-assignment"
+      "concept": "undefined class fields",
+      "note": "JS class fields default to undefined silently — TypeScript strict catches missing initialization at compile time.",
+      "futureTopicSlug": "javascript/classes/class-fields"
+    },
+    {
+      "language": "typescript",
+      "concept": "parameter properties",
+      "note": "constructor(private x: string) declares and assigns in one line — satisfies strictPropertyInitialization.",
+      "futureTopicSlug": "typescript/classes/classes-and-access-modifiers"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript — strictPropertyInitialization",
+      "url": "https://www.typescriptlang.org/tsconfig#strictPropertyInitialization"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript — Definite Assignment Assertions",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/classes.html#strict-class-initialization"
     }
-  ]
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
 }

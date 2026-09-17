@@ -4,30 +4,42 @@
   "title": "When to use Map versus Object and Set versus Array",
   "moduleId": "javascript-08-collections-and-iterators",
   "order": 5,
-  "hook": "When to use Map versus Object and Set versus Array shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "Map beats plain Object for frequent add/delete with arbitrary keys; Set beats Array for membership tests at scale. Wrong choice shows up as O(n) scans in hot paths and memory churn in caches.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "When to use Map versus Object and Set versus Array is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Object** optimized for small fixed-shape records with string/symbol keys — V8 hidden classes. **Map** handles arbitrary key types and frequent size changes without shape degradation. **Array.includes** is O(n); **Set.has** average O(1). **Array** preserves order with index access O(1); **Set** only membership. Choose by operation profile, not dogma."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "collection",
-              "longForm": "When to use Map versus Object and Set versus Array",
-              "plainDefinition": "The central idea behind \"When to use Map versus Object and Set versus Array\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "amortized O(1)",
+              "longForm": "amortized constant time",
+              "plainDefinition": "Map.set/get and Set.add/has average constant time.",
+              "example": "cache.set(key, val)"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "hidden class",
+              "longForm": "hidden class shape",
+              "plainDefinition": "V8 optimization for objects with stable property set.",
+              "example": "Reuse same keys on many objects"
+            },
+            {
+              "term": "membership test",
+              "longForm": "membership check",
+              "plainDefinition": "Whether value exists — Set.has vs Array.includes.",
+              "example": "seen.has(id) vs seen.includes(id)"
+            },
+            {
+              "term": "key coercion",
+              "longForm": "property key coercion",
+              "plainDefinition": "Object converts keys to string — affects cache key design.",
+              "example": "obj[{}] collides"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand When to use Map versus Object and Set versus Array beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "High-concurrency dedupe with Array.includes on 100k IDs is O(n) per check — Set fixes. LRU caches with string keys often use Map for insertion order + delete performance. JSON APIs use plain objects — Map must convert for wire format."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"When to use Map versus Object and Set versus Array\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Measure first",
+          "body": "Micro-benchmark in V8 version X may differ — profile with DevTools before rewriting working code."
         }
       ]
     },
@@ -53,23 +65,23 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Decision checklist",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where When to use Map versus Object and Set versus Array appears in real code — a function, type annotation, or runtime API."
+              "title": "Record with known fields",
+              "body": "Plain object or class instance."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Dynamic key add/delete",
+              "body": "Map over Object — especially non-string keys."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Unique membership at scale",
+              "body": "Set over Array.includes."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Ordered list with index",
+              "body": "Array — not Set."
             }
           ]
         },
@@ -77,8 +89,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "When to use Map versus Object and Set versus Array flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Collection choice",
+            "source": "flowchart TD\n  Q{Operation?}\n  Q -->|index by number| ARR[Array]\n  Q -->|unique membership| SET[Set]\n  Q -->|key-value dynamic| MAP[Map]\n  Q -->|fixed JSON shape| OBJ[Object]"
           }
         }
       ]
@@ -90,36 +102,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic When to use Map versus Object and Set versus Array",
-            "code": "// When to use Map versus Object and Set versus Array\nconst example = {\n  topic: 'collection-performance',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to When to use Map versus Object and Set versus Array. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Set vs Array dedupe",
+            "code": "function hasSeenArray(arr, id) {\n  return arr.includes(id); // O(n)\n}\n\nconst seen = new Set();\nfunction track(id) {\n  if (seen.has(id)) return false; // O(1) avg\n  seen.add(id);\n  return true;\n}",
+            "explanation": "Set scales for visit tracking; Array.includes scans entire history each time."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "Map as cache with object keys",
+            "code": "const meta = new Map();\nfunction getMeta(component) {\n  if (!meta.has(component)) {\n    meta.set(component, computeExpensive(component));\n  }\n  return meta.get(component);\n}",
+            "explanation": "Object identity as key — impossible cleanly with plain object without stringifying."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Object for fixed DTO",
+            "code": "function toResponse(user) {\n  return {\n    id: user.id,\n    name: user.name,\n    email: user.email,\n  }; // JSON.stringify friendly shape\n}",
+            "explanation": "Fixed field objects optimize well and serialize directly — Map needs Object.fromEntries."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Failure mode — Map in JSON API",
+            "code": "const cache = new Map([[\"k\", 1]]);\n// JSON.stringify(cache); // {}\n\nconst serializable = Object.fromEntries(cache);\nJSON.stringify(serializable); // {\"k\":1}",
+            "explanation": "Map does not JSON.stringify — convert at API boundary if needed."
           }
         }
       ]
@@ -129,28 +141,37 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "When to use Map versus Object and Set versus Array across languages",
+          "title": "Performance mental model",
           "headers": [
-            "Aspect",
+            "Use case",
             "JavaScript",
-            "C# / TypeScript"
+            "C#"
           ],
           "rows": [
             [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
+              "Dynamic cache",
+              "Map",
+              "Dictionary + optional LRU lib"
             ],
             [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
+              "Dedupe",
+              "Set",
+              "HashSet"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
+              "Ordered list",
+              "Array",
+              "List<T>"
+            ],
+            [
+              "JSON DTO",
+              "Object",
+              "record / POCO"
+            ],
+            [
+              "Weak metadata",
+              "WeakMap",
+              "ConditionalWeakTable"
             ]
           ]
         }
@@ -163,7 +184,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating When to use Map versus Object and Set versus Array as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "Array.includes in hot loop with growing array. Map for static JSON-shaped config. Object for object-key cache. Ignoring JSON serialization needs. Premature optimization without profiling."
         }
       ]
     },
@@ -172,31 +193,31 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around When to use Map versus Object and Set versus Array, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "V8 **elements kind** and **dictionary mode** on objects with many deletes. **Map** stays fast for insert/delete. **Set** memory vs Array — Set has overhead per entry but wins on lookup. **WeakMap** not for size-limited LRU — no iteration to evict. For **LRU**, use Map + doubly linked list pattern or library."
         },
         {
           "type": "comparisonTable",
-          "title": "Tradeoffs at senior level",
+          "title": "Senior tradeoffs",
           "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
+            "Topic",
+            "Key insight",
+            "Interview angle"
           ],
           "rows": [
             [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
+              "Object shape",
+              "Hidden class deopt on delete",
+              "When Map wins"
             ],
             [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
+              "Set vs Array",
+              "includes O(n) vs has O(1)",
+              "Event dedupe scale"
             ],
             [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
+              "Serialization",
+              "Map to JSON empty",
+              "Boundary conversion"
             ]
           ]
         },
@@ -204,51 +225,52 @@
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"When to use Map versus Object and Set versus Array just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Says Map always faster than object without context. Uses includes on 1M element array in hot path. Cannot name Big-O of Set.has."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "When to use Map versus Object and Set versus Array: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for collection-performance.",
-    "Production: validate external input before applying When to use Map versus Object and Set versus Array; log failures with context.",
-    "60s: When to use Map versus Object and Set versus Array — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Map: dynamic keys, any type, frequent add/delete.",
+    "Set: unique membership O(1) average vs Array.includes O(n).",
+    "Object: fixed-shape records and JSON.",
+    "Map does not JSON.stringify — convert at boundary.",
+    "60s: Object record vs Map cache vs Set dedupe. Profile first. WeakMap not LRU."
   ],
   "commonPitfalls": [
-    "Weak answer: \"When to use Map versus Object and Set versus Array is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define When to use Map versus Object and Set versus Array, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: \"Always use Map instead of object.\" Strong: \"Object for fixed DTO; Map for dynamic keys and object-key cache.\"",
+    "Weak: \"Array.includes is fine always.\" Strong: \"Set when repeated membership on large collection.\"",
+    "Strong: \"Explain JSON.stringify(Map) empty object — need fromEntries.\""
   ],
   "relatedTopicIds": [
-    "javascript-08-arrays-and-typed-arrays",
     "javascript-08-map-set-weak-collections",
-    "javascript-08-iterators-and-for-of"
+    "javascript-08-arrays-and-typed-arrays",
+    "javascript-08-immutable-patterns"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "When to use Map versus Object and Set versus Array",
-      "note": "Compare When to use Map versus Object and Set versus Array in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/collections-and-iterators/collection-performance"
+      "concept": "ReadonlyMap",
+      "note": "TS ReadonlyMap types immutability at compile; run time still mutable Map unless frozen.",
+      "futureTopicSlug": "typescript/builtins/map"
     },
     {
       "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map When to use Map versus Object and Set versus Array to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/8/collection-performance"
+      "concept": "HashSet",
+      "note": "C# HashSet<T> parallels Set; Dictionary<TKey,TValue> parallels Map.",
+      "futureTopicSlug": "csharp/collections/hashset"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "MDN — Map",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Map"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "MDN — Set",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
 }

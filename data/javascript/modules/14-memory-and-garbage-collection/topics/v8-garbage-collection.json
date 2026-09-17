@@ -4,72 +4,84 @@
   "title": "V8 garbage collection: generations, mark-sweep, and compaction",
   "moduleId": "javascript-14-memory-and-garbage-collection",
   "order": 2,
-  "hook": "V8 garbage collection: generations, mark-sweep, and compaction shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "V8 divides the heap into young (nursery) and old generations. Minor GC scavenges short-lived objects in milliseconds; major GC mark-sweep-compact reclaims the old generation and can pause the main thread — the key to understanding Node.js latency spikes.",
   "sections": [
     {
-      "heading": "What is this?",
+      "heading": "What is V8 garbage collection?",
       "blocks": [
         {
           "type": "prose",
-          "text": "V8 garbage collection: generations, mark-sweep, and compaction is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**V8** manages memory automatically: allocate on the heap, reclaim unreachable objects via **garbage collection**. The **young generation** (nursery) holds new objects; a copying **Scavenge** (minor GC) is fast and frequent. Surviving objects are **promoted** to the **old generation** where **mark-sweep-compact** (major GC) runs less often but can pause longer. **Incremental marking** and **concurrent marking** reduce pause times. The **GC roots** are globals, stack references, and registered handles."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "v8",
-              "longForm": "V8 garbage collection: generations, mark-sweep, and compaction",
-              "plainDefinition": "The central idea behind \"V8 garbage collection: generations, mark-sweep, and compaction\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "Scavenge",
+              "longForm": "minor GC / Scavenge",
+              "plainDefinition": "Copy live young-generation objects to survivor space; discard dead.",
+              "example": "Runs when nursery fills — typically < 5ms"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "mark-sweep",
+              "longForm": "mark-sweep-compact",
+              "plainDefinition": "Mark reachable old-gen objects, sweep unreachable, compact fragmentation.",
+              "example": "Major GC — can pause 10–100ms+ on large heaps"
+            },
+            {
+              "term": "promotion",
+              "longForm": "object promotion",
+              "plainDefinition": "Young object that survives Scavenge moves to old generation.",
+              "example": "Long-lived caches promote quickly"
+            },
+            {
+              "term": "write barrier",
+              "longForm": "write barrier",
+              "plainDefinition": "Tracks old→young references so minor GC does not miss live objects.",
+              "example": "Internal V8 mechanism during incremental marking"
             }
           ]
         }
       ]
     },
     {
-      "heading": "Why does it matter?",
+      "heading": "Why V8 GC matters in production",
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand V8 garbage collection: generations, mark-sweep, and compaction beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "GC pauses cause **tail latency** in APIs and jank in browsers. Allocating many short-lived objects fills the nursery and triggers frequent Scavenge. Retaining objects accidentally — closures, timers, caches — grows old space and triggers expensive major GC. **--expose-gc** and **performance.measureUserAgentSpecificMemory** help diagnose. Unlike C# CLR, V8 runs on the main thread for most work."
         },
         {
           "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"V8 garbage collection: generations, mark-sweep, and compaction\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "variant": "remember",
+          "title": "C# CLR comparison",
+          "body": "CLR has generational GC with LOH (large object heap). V8 old space is similar to Gen2. CLR background GC reduces pauses; V8 uses incremental/concurrent marking. Both promote survivors. JS has no IDisposable — only GC and WeakRef."
         }
       ]
     },
     {
-      "heading": "How it works step by step",
+      "heading": "How generational GC works step by step",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Object lifetime",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where V8 garbage collection: generations, mark-sweep, and compaction appears in real code — a function, type annotation, or runtime API."
+              "title": "Allocate",
+              "body": "New object in nursery (young generation)."
             },
             {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
+              "title": "Minor GC",
+              "body": "Scavenge copies survivors; dead objects discarded."
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Promote",
+              "body": "Objects surviving enough cycles move to old generation."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "Major GC",
+              "body": "Mark-sweep-compact on old space when threshold hit."
             }
           ]
         },
@@ -77,93 +89,102 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "V8 garbage collection: generations, mark-sweep, and compaction flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "V8 generational heap",
+            "source": "flowchart LR\n  N[New space nursery] -->|Scavenge survivors| S[Survivor space]\n  S -->|Promotion| O[Old space]\n  O -->|Major GC| O\n  R[GC roots: stack globals] --> N\n  R --> O"
           }
         }
       ]
     },
     {
-      "heading": "Code walkthrough",
+      "heading": "Code walkthrough: allocation, retention, and GC signals",
       "blocks": [
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic V8 garbage collection: generations, mark-sweep, and compaction",
-            "code": "// V8 garbage collection: generations, mark-sweep, and compaction\nconst example = {\n  topic: 'v8-garbage-collection',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to V8 garbage collection: generations, mark-sweep, and compaction. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Short-lived versus promoted objects",
+            "code": "function processBatch(rows) {\n  return rows.map((row) => ({\n    id: row.id,\n    label: row.name.toUpperCase(),\n  }));\n}\n\n// Many ephemeral objects per call — nursery Scavenge reclaims them\nprocessBatch(largeCsv);",
+            "explanation": "Transient map results die after return — ideal for minor GC. Avoid retaining every batch in a global array."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "Accidental old-gen retention",
+            "code": "const cache = new Map();\nfunction loadUser(id) {\n  const data = fetchProfile(id); // Promise retained by cache key forever\n  cache.set(id, data);\n  return data;\n}\n// Fix: LRU eviction, WeakRef, or TTL cleanup",
+            "explanation": "Unbounded Map holds promises in old generation — major GC cannot reclaim until entries removed."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Observing GC in Node (--expose-gc)",
+            "code": "// node --expose-gc app.mjs\nimport v8 from 'node:v8';\n\nconst before = process.memoryUsage().heapUsed;\nglobal.gc(); // manual major GC when flag set\nconst after = process.memoryUsage().heapUsed;\nconsole.log('Freed MB:', (before - after) / 1024 / 1024);\nconsole.log(v8.getHeapStatistics());",
+            "explanation": "heapUsed drops after gc() if unreachable objects existed. Use in benchmarks, not production."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "WeakRef for optional cache",
+            "code": "const registry = new FinalizationRegistry((id) => {\n  console.log('Object gone:', id);\n});\n\nlet ref = new WeakRef({ data: [1, 2, 3] });\nregistry.register(ref.deref(), 'cache-entry');\n// When object collected, finalizer runs (do not rely on timing)",
+            "explanation": "WeakRef does not prevent GC — use for caches that should not block collection. FinalizationRegistry for cleanup side effects."
           }
         }
       ]
     },
     {
-      "heading": "Compare with C# and TypeScript",
+      "heading": "Compare with C# CLR and TypeScript",
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "V8 garbage collection: generations, mark-sweep, and compaction across languages",
+          "title": "GC model matrix",
           "headers": [
             "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
+            "V8 (JS)",
+            "CLR (C#)",
+            "TypeScript"
           ],
           "rows": [
             [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
+              "Generations",
+              "Young + old",
+              "Gen0/1/2 + LOH",
+              "No runtime GC — emits JS"
             ],
             [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
+              "Pause impact",
+              "Main thread STW phases",
+              "Background GC options",
+              "N/A"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
+              "Disposal",
+              "GC only (+ WeakRef)",
+              "IDisposable + GC",
+              "N/A"
+            ],
+            [
+              "Diagnostics",
+              "DevTools heap snapshot",
+              "dotMemory, PerfView",
+              "N/A"
             ]
           ]
         }
       ]
     },
     {
-      "heading": "Common mistakes",
+      "heading": "Common mistakes to avoid",
       "blocks": [
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating V8 garbage collection: generations, mark-sweep, and compaction as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "GC misconceptions",
+          "body": "Thinking GC frees memory immediately. Assuming null assignment collects instantly — only unreachable graphs are collected. Unbounded caches in old gen. Creating massive temporary strings/arrays per request. Relying on FinalizationRegistry for critical cleanup timing."
         }
       ]
     },
@@ -172,54 +193,29 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around V8 garbage collection: generations, mark-sweep, and compaction, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
-        },
-        {
-          "type": "comparisonTable",
-          "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
-          "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
-          ]
+          "text": "Explain tri-color marking, incremental marking reducing pause, and Orinoco (concurrent) GC in modern V8. Contrast with CLR background GC. When to pool objects in Node hot paths. How detached DOM nodes keep whole trees alive in browsers. Read heap snapshot dominators tree to find retention path."
         },
         {
           "type": "callout",
-          "variant": "warning",
-          "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"V8 garbage collection: generations, mark-sweep, and compaction just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "variant": "tip",
+          "title": "Production tuning",
+          "body": "--max-old-space-size for Node heap cap. Monitor GC pause with clinic.js or Chrome Performance panel. Reduce allocation rate before tuning flags."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "V8 garbage collection: generations, mark-sweep, and compaction: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for v8-garbage-collection.",
-    "Production: validate external input before applying V8 garbage collection: generations, mark-sweep, and compaction; log failures with context.",
-    "60s: V8 garbage collection: generations, mark-sweep, and compaction — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "Young gen Scavenge is fast; old gen mark-sweep-compact can pause.",
+    "Promotion: survivors move to old space — long-lived caches matter.",
+    "GC roots: stack, globals, closures retaining references prevent collection.",
+    "60s: Generational GC — nursery Scavenge vs old mark-sweep-compact. Main-thread pauses. Compare CLR Gen2. Unbounded caches cause major GC pressure.",
+    "Follow-up: how do closures cause memory leaks in old generation?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"V8 garbage collection: generations, mark-sweep, and compaction is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define V8 garbage collection: generations, mark-sweep, and compaction, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: 'GC runs when I set null' — only unreachable object graphs are collected.",
+    "Weak: 'minor GC and major GC are the same' — different algorithms and cost profiles.",
+    "Weak: 'WeakRef prevents collection' — opposite; it does not keep object alive.",
+    "Strong: 'Young Scavenge vs old mark-sweep-compact, promotion, roots, pause impact, retention paths via heap snapshot.'"
   ],
   "relatedTopicIds": [
     "javascript-14-stack-heap-and-references",
@@ -229,26 +225,27 @@
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "V8 garbage collection: generations, mark-sweep, and compaction",
-      "note": "Compare V8 garbage collection: generations, mark-sweep, and compaction in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/memory-and-garbage-collection/v8-garbage-collection"
+      "concept": "No compile-time GC",
+      "note": "TypeScript types erase — memory behavior is pure V8. WeakRef and FinalizationRegistry typed in lib.d.ts.",
+      "futureTopicSlug": "typescript/runtime/memory"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map V8 garbage collection: generations, mark-sweep, and compaction to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/14/v8-garbage-collection"
+      "language": "javascript",
+      "concept": "Closure retention",
+      "note": "Closures keep outer bindings alive — connects GC to scope. See closure-memory-retention topic.",
+      "futureTopicSlug": "javascript/memory-and-garbage-collection/closure-memory-retention"
     }
   ],
   "officialSources": [
     {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
+      "title": "V8 garbage collection",
+      "url": "https://v8.dev/blog/trash-talk"
     },
     {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
+      "title": "Memory management",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management"
     }
   ],
-  "animationHint": "flow"
+  "animationHint": "stack-heap",
+  "scenarioTag": "redis-cache"
 }

@@ -4,30 +4,42 @@
   "title": "Factory, builder, and object composition patterns",
   "moduleId": "javascript-09-structural-typing-patterns",
   "order": 5,
-  "hook": "Factory, builder, and object composition patterns shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "JavaScript favors plain objects and factory functions over deep class hierarchies. Factories hide validation; builders assemble complex configs; composition replaces inheritance without nominal type ceremony.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Factory, builder, and object composition patterns is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "A **factory function** returns a configured object or closure — `createUser()`, `makeLogger(level)`. A **builder** accumulates steps fluently before `build()` — useful for HTTP clients, test fixtures, and query DSLs. **Object composition** merges behaviors with spread, Object.assign, or small mixin functions instead of subclassing. In JS these patterns enforce **invariants at creation** (validation, defaults, private state via closure) because there is no constructor overload syntax like C#."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "factory",
-              "longForm": "Factory, builder, and object composition patterns",
-              "plainDefinition": "The central idea behind \"Factory, builder, and object composition patterns\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "factory function",
+              "longForm": "factory function",
+              "plainDefinition": "Function that returns new objects without new keyword — central JS idiom.",
+              "example": "function createPoint(x, y) { return Object.freeze({ x, y }); }"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "builder pattern",
+              "longForm": "builder pattern",
+              "plainDefinition": "Stepwise API chaining setters until build produces immutable result.",
+              "example": "RequestBuilder.create().timeout(5).retry(3).build()"
+            },
+            {
+              "term": "composition",
+              "longForm": "object composition",
+              "plainDefinition": "Combine small modules instead of extending a base class.",
+              "example": "const svc = { ...authApi, ...logging, ...metrics };"
+            },
+            {
+              "term": "IIFE module",
+              "longForm": "IIFE module pattern",
+              "plainDefinition": "Immediately invoked function exposes public API, hides private vars.",
+              "example": "export const counter = (() => { let n = 0; return { inc() { n++; } }; })();"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Factory, builder, and object composition patterns beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "React hooks, Express middleware stacks, and fetch wrappers all use factories and composition. Misusing `class extends` in JS creates fragile prototype chains and `this` binding bugs. Senior code centralizes **defaults, validation, and telemetry** in factories so call sites stay one line. C# uses constructors + DI; JS uses factory + module scope + optional DI containers (Inversify, tsyringe)."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Factory, builder, and object composition patterns\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Interview trap: class versus factory",
+          "body": "Prefer factory + closure when you need private state without #fields. Prefer class when instanceof semantics or framework requires it (React.Component legacy). Justify tradeoff."
         }
       ]
     },
@@ -53,32 +65,20 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Factory with validation",
           "items": [
-            {
-              "title": "Read the syntax",
-              "body": "Find where Factory, builder, and object composition patterns appears in real code — a function, type annotation, or runtime API."
-            },
-            {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
-            },
-            {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
-            },
-            {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
-            }
+            { "title": "Accept input", "body": "Raw config, env, partial options object." },
+            { "title": "Validate + normalize", "body": "Schema, defaults, freeze/seal if immutable." },
+            { "title": "Attach behavior", "body": "Methods closing over private state or delegating modules." },
+            { "title": "Return public API", "body": "Small surface — hide construction helpers." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Factory, builder, and object composition patterns flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Factory vs builder",
+            "source": "flowchart LR\n  subgraph Factory\n    F1[createConfig opts] --> F2[Validated object]\n  end\n  subgraph Builder\n    B1[new Builder] --> B2[setA] --> B3[setB] --> B4[build]\n  end"
           }
         }
       ]
@@ -90,36 +90,36 @@
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Basic Factory, builder, and object composition patterns",
-            "code": "// Factory, builder, and object composition patterns\nconst example = {\n  topic: 'factory-and-builder-patterns',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Factory, builder, and object composition patterns. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "label": "Factory with defaults and validation",
+            "code": "export function createHttpClient(options = {}) {\n  const timeout = Number(options.timeout ?? 5000);\n  if (!Number.isFinite(timeout) || timeout <= 0) {\n    throw new RangeError('timeout must be positive');\n  }\n  const baseUrl = String(options.baseUrl ?? '').replace(/\\/$/, '');\n\n  return Object.freeze({\n    async get(path, init = {}) {\n      const res = await fetch(`${baseUrl}${path}`, {\n        ...init,\n        signal: AbortSignal.timeout(timeout)\n      });\n      if (!res.ok) throw new Error(`HTTP ${res.status}`);\n      return res.json();\n    }\n  });\n}",
+            "explanation": "Single factory enforces timeout and baseUrl rules — call sites cannot forget validation."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "Fluent builder for test fixtures",
+            "code": "class UserBuilder {\n  #data = { role: 'member', active: true };\n  withId(id) { this.#data.id = id; return this; }\n  asAdmin() { this.#data.role = 'admin'; return this; }\n  inactive() { this.#data.active = false; return this; }\n  build() {\n    if (!this.#data.id) throw new Error('id required');\n    return structuredClone(this.#data);\n  }\n}\n\nconst admin = new UserBuilder().withId('u1').asAdmin().build();",
+            "explanation": "Builder shines for many optional fields — readable tests and seed data."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "C# constructor + DI contrast",
+            "code": "public sealed class HttpClientWrapper\n{\n    private readonly HttpClient _client;\n    public HttpClientWrapper(HttpClient client, Uri baseUrl, TimeSpan timeout)\n    {\n        _client = client;\n        _client.BaseAddress = baseUrl;\n        _client.Timeout = timeout;\n    }\n}\n\n// Registered in DI container — JS often uses factory at module load",
+            "explanation": "C# pushes validation to ctor + DI registration. JS module exports createHttpClient() as lightweight DI."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Failure mode: mutable shared defaults",
+            "code": "const DEFAULTS = { retries: 3, tags: [] };\n\nfunction createJob(opts) {\n  return { ...DEFAULTS, ...opts }; // shallow — tags array shared!\n}\n\nconst a = createJob({ id: 1 });\nconst b = createJob({ id: 2 });\na.tags.push('urgent');\nconsole.log(b.tags); // ['urgent'] — mutation leaked",
+            "explanation": "Clone nested defaults per instance or use structuredClone in factory — common production bug."
           }
         }
       ]
@@ -129,29 +129,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Factory, builder, and object composition patterns across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Construction patterns",
+          "headers": ["Pattern", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Simple object", "Factory function + object literal", "Constructor + new"],
+            ["Many optional params", "Builder or options object", "Builder, record with defaults"],
+            ["Private state", "Closure, #fields, Symbol", "private fields, truly private"],
+            ["Composition", "spread, Object.assign, mixins", "DI, delegation"],
+            ["Immutability", "Object.freeze, structuredClone", "record, init-only props"]
           ]
         }
       ]
@@ -163,7 +148,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating Factory, builder, and object composition patterns as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "Shallow-cloning shared default objects. Exporting mutable singletons callers mutate. Builder without build() validation. Deep class hierarchies where composition would be clearer."
         }
       ]
     },
@@ -172,83 +157,62 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Factory, builder, and object composition patterns, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "Production: factories are the seam for **testing** — inject fake clock, stub fetch, swap Redis. Document required options in TS types; validate in factory for runtime. For libraries, prefer `createX(config)` over global mutable config. Builders should fail fast in build(), not half-constructed states."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Choice", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["Factory function", "Most JS services, tree-shaking", "Frameworks needing class extends"],
+            ["Builder", "10+ optional fields, tests", "Simple 2-field objects — overkill"],
+            ["Class + private fields", "instanceof, legacy React", "this binding in callbacks"],
+            ["Module singleton", "True shared resource (pool)", "Hidden mutable global state"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Factory, builder, and object composition patterns just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Defaulting to class inheritance for every problem. Not mentioning shallow copy of defaults bug. Cannot compare to C# DI and explain where validation lives in JS stack."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Factory, builder, and object composition patterns: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for factory-and-builder-patterns.",
-    "Production: validate external input before applying Factory, builder, and object composition patterns; log failures with context.",
-    "60s: Factory, builder, and object composition patterns — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "JS idiomatic construction: factory functions, options objects, composition over inheritance.",
+    "Validate and normalize in one factory — not at every call site.",
+    "Clone nested defaults — shallow spread shares mutable arrays/objects.",
+    "60s: Factories hide validation and private closure state. Builders for many optional fields. C# uses ctor+DI; JS uses createFn at module boundary. Watch shared DEFAULTS bug.",
+    "Follow-up: design createPaymentClient with retries, timeout, and test doubles."
   ],
   "commonPitfalls": [
-    "Weak answer: \"Factory, builder, and object composition patterns is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Factory, builder, and object composition patterns, show a 5-line example, name one pitfall and one C# difference."
+    "Shared mutable default object mutated by one instance affecting all others.",
+    "Class hierarchies where mixins or composition would reduce coupling.",
+    "Strong answer: factory validates, freezes or clones, C# DI parallel, builder for complex configs."
   ],
   "relatedTopicIds": [
     "javascript-09-duck-typing",
     "javascript-09-runtime-shape-validation",
-    "javascript-09-branding-and-symbols"
+    "javascript-09-nominal-vs-structural"
   ],
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Factory, builder, and object composition patterns",
-      "note": "Compare Factory, builder, and object composition patterns in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/structural-typing-patterns/factory-and-builder-patterns"
+      "concept": "Options object typing",
+      "note": "Partial<Config> & Required<Pick<Config,'id'>> patterns pair with factories that enforce invariants at runtime.",
+      "futureTopicSlug": "typescript/types/options-objects"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Factory, builder, and object composition patterns to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/9/factory-and-builder-patterns"
+      "language": "javascript",
+      "concept": "Module pattern and closures",
+      "note": "IIFE factories predate ES modules — same encapsulation idea as C# private ctor + static Create.",
+      "futureTopicSlug": "javascript/modules/closures"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "MDN — Object composition", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Inheritance_and_the_prototype_chain" },
+    { "title": "javascript.info — Module pattern", "url": "https://javascript.info/modules-intro" }
   ],
   "animationHint": "flow"
 }

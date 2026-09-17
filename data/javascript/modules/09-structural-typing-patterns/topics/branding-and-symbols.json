@@ -4,30 +4,42 @@
   "title": "Branding with Symbol and opaque types in JS",
   "moduleId": "javascript-09-structural-typing-patterns",
   "order": 3,
-  "hook": "Branding with Symbol and opaque types in JS shows up in everyday JavaScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the engine versus C# or TypeScript.",
+  "hook": "Two strings both hold user IDs but must never be swapped. Branding adds a compile-time-only tag in TypeScript and a runtime Symbol marker in JavaScript so structurally identical values stay distinct in your API.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Branding with Symbol and opaque types in JS is a core concept in JavaScript (ECMAScript). At run time, the engine enforces behavior dynamically — there is no compile step unless you add TypeScript on top. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Branding** (or **opaque types**) makes two values with the same runtime shape incompatible at the type level. TypeScript uses a phantom property like `readonly __brand: 'UserId'`. In plain JavaScript you can attach a **unique Symbol** property at creation time so only your factory produces valid values — a lightweight nominal tag. Symbols are **not enumerable**, so they do not leak into JSON.stringify unless you include them explicitly."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "branding",
-              "longForm": "Branding with Symbol and opaque types in JS",
-              "plainDefinition": "The central idea behind \"Branding with Symbol and opaque types in JS\" — how it appears in source code and what the engine does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "brand",
+              "longForm": "branded type",
+              "plainDefinition": "Phantom type tag preventing accidental mixing of primitives with the same underlying representation.",
+              "example": "type UserId = string & { readonly __brand: unique symbol };"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "Symbol",
+              "longForm": "Symbol",
+              "plainDefinition": "ECMAScript primitive for unique property keys — each Symbol() is distinct.",
+              "example": "const TAG = Symbol('validated'); obj[TAG] = true;"
+            },
+            {
+              "term": "opaque type",
+              "longForm": "opaque type",
+              "plainDefinition": "Type whose construction is hidden — callers cannot forge the brand without your factory.",
+              "example": "export type ValidatedEmail = Opaque<string, 'ValidatedEmail'>;"
+            },
+            {
+              "term": "well-known Symbol",
+              "longForm": "well-known Symbol",
+              "plainDefinition": "Global symbols like Symbol.iterator — protocol hooks, not branding secrets.",
+              "example": "obj[Symbol.iterator] = function* () { ... };"
             }
           ]
         }
@@ -38,13 +50,13 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Branding with Symbol and opaque types in JS beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know C#, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Payment systems confuse **accountId** and **transactionId**; auth code passes a raw JWT string where an opaque session token was required. Structural typing allows both strings everywhere. Branding catches swaps at compile time (TS) or makes forgery harder at runtime (Symbol-guarded factories). C# uses distinct **record** types or **strongly typed ids** wrappers — branding is the TS/JS idiom for the same intent without CLR nominal types."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Branding with Symbol and opaque types in JS\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Interview trap: brand at runtime?",
+          "body": "TS brands erase — they do not exist in emitted JS. For runtime proof you need Symbol markers, class instances, or validation. Say both layers when asked."
         }
       ]
     },
@@ -53,32 +65,20 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Branded factory pattern",
           "items": [
-            {
-              "title": "Read the syntax",
-              "body": "Find where Branding with Symbol and opaque types in JS appears in real code — a function, type annotation, or runtime API."
-            },
-            {
-              "title": "Trace execution",
-              "body": "Step through with console.log or the debugger — watch the call stack and event loop if async."
-            },
-            {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
-            },
-            {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
-            }
+            { "title": "Define secret Symbol", "body": "Module-scoped const VALID = Symbol('validated'); not exported." },
+            { "title": "Factory validates input", "body": "Parse email, UUID, etc. — throw if invalid." },
+            { "title": "Attach marker", "body": "Return Object.freeze({ value, [VALID]: true }) or wrap in closure." },
+            { "title": "Consumers check marker", "body": "Only trusted functions accept objects with VALID before use." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Branding with Symbol and opaque types in JS flow",
-            "source": "flowchart TD\n  A[Source code] --> B[Parser / engine]\n  B --> C[Execution context]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Symbol branding flow",
+            "source": "flowchart TD\n  R[Raw string] --> F[Factory validates]\n  F -->|invalid| X[Throw]\n  F -->|valid| M[Attach secret Symbol]\n  M --> U[Trusted API uses value]\n  S[Raw string bypass] --> U\n  U -->|no symbol| X"
           }
         }
       ]
@@ -89,37 +89,37 @@
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Basic Branding with Symbol and opaque types in JS",
-            "code": "// Branding with Symbol and opaque types in JS\nconst example = {\n  topic: 'branding-and-symbols',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Branding with Symbol and opaque types in JS. Line 6: observe output — in JS, shape is checked only when you access properties."
+            "language": "typescript",
+            "label": "TypeScript branded primitive",
+            "code": "declare const UserIdBrand: unique symbol;\nexport type UserId = string & { readonly [UserIdBrand]: never };\n\nexport function UserId(value: string): UserId {\n  if (!/^usr_[a-z0-9]+$/.test(value)) throw new Error('invalid user id');\n  return value as UserId;\n}\n\nfunction loadProfile(id: UserId) { return fetch(`/users/${id}`); }\n\nloadProfile(UserId('usr_abc')); // ok\n// loadProfile('usr_abc'); // compile error — string not assignable to UserId",
+            "explanation": "Brand exists only for the compiler. Runtime value is still a string — pair with validation in UserId()."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Production-shaped usage",
-            "code": "async function handleRequest(payload) {\n  const parsed = JSON.parse(payload);\n  // validate shape before use\n  if (typeof parsed.id !== 'string') {\n    throw new TypeError('id required');\n  }\n  return fetch(`/api/items/${parsed.id}`);\n}",
-            "explanation": "Shows boundary validation — runtime guards because JSON.parse returns any-shaped objects."
+            "label": "Runtime Symbol marker",
+            "code": "const VALID_EMAIL = Symbol('validEmail');\n\nexport function createValidatedEmail(raw) {\n  const email = String(raw).trim().toLowerCase();\n  if (!email.includes('@')) throw new TypeError('invalid email');\n  return Object.freeze({ email, [VALID_EMAIL]: true });\n}\n\nexport function sendReceipt(validated) {\n  if (validated[VALID_EMAIL] !== true) {\n    throw new TypeError('expected validated email from factory');\n  }\n  return queueEmail(validated.email);\n}",
+            "explanation": "Secret Symbol not exported — callers cannot forge validated wrapper without the factory."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "csharp",
-            "label": "Compare with C#",
-            "code": "// C# equivalent sketch\n// public sealed record Item(string Id);\n// var item = new Item(\"abc\");\n// Console.WriteLine(item.Id);",
-            "explanation": "Highlights what C# does differently at compile time versus run time."
+            "label": "C# strongly typed id",
+            "code": "public readonly record struct UserId(string Value)\n{\n    public UserId(string value) : this(Validate(value)) { }\n    private static string Validate(string value) =>\n        value.StartsWith(\"usr_\") ? value : throw new ArgumentException();\n}\n\nvoid Load(UserId id) => _repo.Get(id.Value);",
+            "explanation": "Nominal record wrapper — real runtime type distinct from string. TS brand is compile-only unless you add similar wrapper class."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "javascript",
-            "label": "Failure mode / diagnostic",
-            "code": "try {\n  // force a realistic failure\n  JSON.parse('{ invalid');\n} catch (error) {\n  console.error('Parse failed:', error.message);\n  // in production: return 400, do not throw unhandled\n}",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "Failure mode: JSON strips Symbol brands",
+            "code": "const VALID = Symbol('v');\nconst token = { id: 'abc', [VALID]: true };\n\nconst roundTrip = JSON.parse(JSON.stringify(token));\nconsole.log(roundTrip[VALID]); // undefined — Symbol keys omitted\n\n// Fix: re-validate after deserialize, or store opaque string from server",
+            "explanation": "Branding does not survive JSON. After network/storage, run schema validation again — senior gotcha."
           }
         }
       ]
@@ -129,29 +129,14 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Branding with Symbol and opaque types in JS across languages",
-          "headers": [
-            "Aspect",
-            "JavaScript",
-            "C# / TypeScript"
-          ],
+          "title": "Branding approaches",
+          "headers": ["Technique", "JavaScript / TS", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Mostly at run time",
-              "TS: compile; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Dynamic / duck typing",
-              "TS: structural; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "== versus ===",
-              "Null reference or blocking async"
-            ]
+            ["Compile-time only", "TS brand / opaque", "N/A — types exist in IL for records"],
+            ["Runtime nominal tag", "Secret Symbol, private class field", "Distinct record/class types"],
+            ["Survives JSON", "No — re-validate", "Deserialize to typed record"],
+            ["Enumerable in loops", "Symbol keys skipped", "Properties normal"],
+            ["Zero-cost at runtime (TS)", "Brand erases to string", "Struct wrapper may inline"]
           ]
         }
       ]
@@ -163,7 +148,7 @@
           "type": "callout",
           "variant": "warning",
           "title": "Pitfalls to avoid",
-          "body": "Treating Branding with Symbol and opaque types in JS as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "body": "Assuming TS brands protect runtime security. Exporting the validation Symbol so anyone can forge markers. Using well-known Symbols for secrecy — they are global. Forgetting to re-brand after JSON.parse."
         }
       ]
     },
@@ -172,54 +157,39 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around Branding with Symbol and opaque types in JS, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the engine does — plus when not to use the clever version."
+          "text": "Use brands for **domain invariants** (UserId, Cents, ISO8601 string), not every string. In monorepos, export factory functions only — keep brand symbol private. For APIs crossing process boundaries, prefer server-issued opaque tokens (random bytes) over client-side Symbol branding. Combine zod.transform with branded types: parse then brand in one step."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Pattern", "When it wins", "When it fails"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["TS brand only", "Internal TS codebase", "Runtime plugin boundaries"],
+            ["Symbol factory", "Node modules hiding secret", "Serialization / DTO layers"],
+            ["Wrapper class", "True runtime nominal type", "Heavier than primitives"],
+            ["Newtype in FP libs", "Consistent ecosystem", "Team unfamiliarity"]
           ]
         },
         {
           "type": "callout",
           "variant": "warning",
           "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"Branding with Symbol and opaque types in JS just works\" without mentioning run-time checks, error paths, or comparison to C# and TypeScript. Cannot trace a concrete bug to this concept."
+          "body": "Claiming branded types exist at runtime in emitted JS. Not knowing JSON drops Symbol keys. Cannot map to C# strongly typed ids or explain when branding is overkill."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Branding with Symbol and opaque types in JS: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for branding-and-symbols.",
-    "Production: validate external input before applying Branding with Symbol and opaque types in JS; log failures with context.",
-    "60s: Branding with Symbol and opaque types in JS — explain mechanism, one pitfall, one comparison to C#/TS, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "TS brands are compile-time only — runtime still sees plain string unless you add wrappers.",
+    "Secret Symbol markers give lightweight runtime nominal tags in plain JS modules.",
+    "JSON.stringify removes Symbol keys — re-validate after wire transfer.",
+    "60s: Branding prevents swapping structurally identical values. TS phantom brand; JS Symbol factory; C# record wrapper. Brands do not survive JSON.",
+    "Follow-up: UserId vs OrderId both strings — how do you enforce at API and DB layers?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"Branding with Symbol and opaque types in JS is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using implicit coercion at API boundaries without validation.",
-    "Strong answer: define Branding with Symbol and opaque types in JS, show a 5-line example, name one pitfall and one C# difference."
+    "Treating TypeScript brands as runtime security without validation.",
+    "Exporting the Symbol used for validation so forgery is trivial.",
+    "Strong answer: compile brand + runtime factory, JSON re-parse, map to C# strongly typed id pattern."
   ],
   "relatedTopicIds": [
     "javascript-09-duck-typing",
@@ -229,26 +199,20 @@
   "jsTsCorrelations": [
     {
       "language": "typescript",
-      "concept": "Branding with Symbol and opaque types in JS",
-      "note": "Compare Branding with Symbol and opaque types in JS in typescript — same programmer idea, different compile-time enforcement.",
-      "futureTopicSlug": "typescript/structural-typing-patterns/branding-and-symbols"
+      "concept": "Opaque/branded types",
+      "note": "unique symbol brand or Opaque<T, K> patterns give nominal flavor inside structural TS — erases on emit.",
+      "futureTopicSlug": "typescript/types/branded-types"
     },
     {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map Branding with Symbol and opaque types in JS to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/9/branding-and-symbols"
+      "language": "javascript",
+      "concept": "Symbol as private field",
+      "note": "Private class fields (#) and unexported Symbols hide implementation — branding builds on the same encapsulation idea.",
+      "futureTopicSlug": "javascript/symbols/private-fields"
     }
   ],
   "officialSources": [
-    {
-      "title": "MDN JavaScript reference",
-      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference"
-    },
-    {
-      "title": "javascript.info",
-      "url": "https://javascript.info/"
-    }
+    { "title": "MDN — Symbol", "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol" },
+    { "title": "TypeScript — Type Predicates and Branding patterns", "url": "https://www.typescriptlang.org/docs/handbook/2/narrowing.html" }
   ],
-  "animationHint": "flow"
+  "animationHint": "compare"
 }

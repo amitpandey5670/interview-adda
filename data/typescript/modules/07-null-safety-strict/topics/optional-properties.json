@@ -4,30 +4,36 @@
   "title": "Optional properties (?), undefined, and exactOptionalPropertyTypes",
   "moduleId": "typescript-07-null-safety-strict",
   "order": 2,
-  "hook": "Optional properties (?), undefined, and exactOptionalPropertyTypes shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "The question mark on a property means the key may be absent or undefined — but exactOptionalPropertyTypes draws a finer line between missing and explicitly undefined. C# string? is similar at compile time; neither stops bad JSON at runtime.",
   "sections": [
     {
-      "heading": "What is this?",
+      "heading": "What are optional properties?",
       "blocks": [
         {
           "type": "prose",
-          "text": "Optional properties (?), undefined, and exactOptionalPropertyTypes is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**Optional properties** use `prop?: T` syntax, equivalent to `prop: T | undefined` for read purposes. The key may be **missing** from the object or present with value `undefined`. **`exactOptionalPropertyTypes`** (separate from strict) distinguishes: with it on, you cannot assign `undefined` to an optional property unless the type explicitly includes `undefined`. **`strictNullChecks`** must be on for optional semantics to matter. At runtime JavaScript simply omits keys or sets them to undefined — no compile-time distinction survives emit."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
             {
-              "term": "optional",
-              "longForm": "Optional properties (?), undefined, and exactOptionalPropertyTypes",
-              "plainDefinition": "The central idea behind \"Optional properties (?), undefined, and exactOptionalPropertyTypes\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
+              "term": "optional property",
+              "longForm": "optional property (?)",
+              "plainDefinition": "Property that may be absent; typed as T | undefined when read.",
+              "example": "email?: string"
             },
             {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
+              "term": "exactOptionalPropertyTypes",
+              "longForm": "exactOptionalPropertyTypes",
+              "plainDefinition": "Flag: optional means missing only, not explicitly undefined, unless union includes undefined.",
+              "example": "bio?: string rejects { bio: undefined }"
+            },
+            {
+              "term": "Partial",
+              "longForm": "Partial<T>",
+              "plainDefinition": "Utility making all properties optional — common for PATCH DTOs.",
+              "example": "Partial<User> for update payloads"
             }
           ]
         }
@@ -38,38 +44,38 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand Optional properties (?), undefined, and exactOptionalPropertyTypes beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "REST PATCH endpoints often send partial objects — optional properties model that. Confusing `?` with nullable `| null` causes API bugs: `email?: string` allows missing but not necessarily null unless you add `| null`. Redis and JSON may omit keys or send null — validate at boundaries. C# `string?` on a property is compile-time nullable; TypeScript optional is about key presence."
         },
         {
           "type": "callout",
           "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"Optional properties (?), undefined, and exactOptionalPropertyTypes\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
+          "title": "Three-way distinction",
+          "body": "Required: must be present. Optional (?): may be absent. Nullable (| null): may be null when present. Combine: email?: string | null for all cases."
         }
       ]
     },
     {
-      "heading": "How it works step by step",
+      "heading": "How optional properties work",
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Modeling absence correctly",
           "items": [
             {
-              "title": "Read the syntax",
-              "body": "Find where Optional properties (?), undefined, and exactOptionalPropertyTypes appears in real code — a function, type annotation, or runtime API."
+              "title": "Optional for PATCH",
+              "body": "Partial<T> or explicit optional fields for update DTOs."
             },
             {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
+              "title": "Narrow before use",
+              "body": "if (user.email !== undefined) { send(user.email); }"
             },
             {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
+              "title": "Optional chaining",
+              "body": "user.profile?.bio?.trim() — short-circuit on missing hops."
             },
             {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
+              "title": "exactOptionalPropertyTypes",
+              "body": "Enable when you need missing vs undefined distinction in APIs."
             }
           ]
         },
@@ -77,8 +83,8 @@
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "Optional properties (?), undefined, and exactOptionalPropertyTypes flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Optional property states",
+            "source": "flowchart TD\n  P[prop?: string] --> MISSING[key absent]\n  P --> PRESENT[value: string]\n  P --> UNDEF[value: undefined]\n  EOP[exactOptionalPropertyTypes] -->|blocks| UNDEF"
           }
         }
       ]
@@ -90,27 +96,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic Optional properties (?), undefined, and exactOptionalPropertyTypes",
-            "code": "// Optional properties (?), undefined, and exactOptionalPropertyTypes\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'optional-properties',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to Optional properties (?), undefined, and exactOptionalPropertyTypes. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "Optional vs required",
+            "code": "interface CreateUser {\n  name: string;\n  email?: string;\n}\n\nconst a: CreateUser = { name: \"Ada\" };\nconst b: CreateUser = { name: \"Bob\", email: \"bob@example.com\" };\n\nfunction sendEmail(u: CreateUser) {\n  if (u.email !== undefined) {\n    console.log(u.email.toUpperCase());\n  }\n}",
+            "explanation": "Line 3: email may be absent. Line 9: must narrow before calling string methods — undefined would crash."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
+            "label": "exactOptionalPropertyTypes difference",
+            "code": "interface Config {\n  timeout?: number;\n}\n\n// With exactOptionalPropertyTypes:\n// const bad: Config = { timeout: undefined }; // Error\n\nconst good: Config = {}; // missing is OK\nconst also: Config = { timeout: 30 };",
+            "explanation": "Without the flag, undefined assignment is allowed. With it, optional means key absent only — stricter API contracts."
           }
         },
         {
           "type": "snippet",
           "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "language": "typescript",
+            "label": "PATCH DTO with Partial",
+            "code": "interface User {\n  id: string;\n  name: string;\n  bio?: string;\n}\n\nfunction applyPatch(user: User, patch: Partial<User>): User {\n  return { ...user, ...patch };\n}\n\napplyPatch(user, { bio: \"Engineer\" }); // only bio updated",
+            "explanation": "Partial<User> makes all keys optional for the patch argument — standard REST update pattern."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — optional vs null from API",
+            "code": "interface Profile { nickname?: string; }\n\nfunction display(p: Profile) {\n  return p.nickname.toUpperCase(); // runtime error if key missing\n}\n\nconst fromApi: Profile = JSON.parse('{\"nickname\":null}');\ndisplay(fromApi); // null.toUpperCase() throws",
+            "explanation": "Optional ? does not include null unless you write nickname?: string | null. JSON null needs explicit modeling."
           }
         }
       ]
@@ -120,28 +135,37 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "Optional properties (?), undefined, and exactOptionalPropertyTypes across languages",
+          "title": "Optional / nullable property models",
           "headers": [
-            "Aspect",
+            "Concept",
             "TypeScript",
-            "JavaScript / C#"
+            "JavaScript",
+            "C# NRT"
           ],
           "rows": [
             [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
+              "May be absent",
+              "prop?: T",
+              "key not in object",
+              "N/A (default values)"
             ],
             [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
+              "May be null",
+              "prop: T | null",
+              "value === null",
+              "string?"
             ],
             [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
+              "Compile-time only",
+              "Yes",
+              "N/A",
+              "Yes (warnings)"
+            ],
+            [
+              "PATCH partial",
+              "Partial<T>",
+              "Object.assign",
+              "record with nullable props"
             ]
           ]
         }
@@ -153,45 +177,95 @@
         {
           "type": "callout",
           "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating Optional properties (?), undefined, and exactOptionalPropertyTypes as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
+          "title": "Treating ? as null-safe",
+          "body": "Optional means undefined/missing — not null. API null requires | null in the type."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "exactOptionalPropertyTypes interacts with spread: { ...obj, key: undefined } may delete vs set undefined depending on target. Required<T> and Partial<T> are duals for CRUD DTO layers. For OpenAPI codegen, optional fields map to ? — verify null vs absent in schema. Senior teams document three states: required, optional-absent, nullable-present."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs",
+          "headers": [
+            "Flag / pattern",
+            "Benefit",
+            "Cost"
+          ],
+          "rows": [
+            [
+              "prop?: T",
+              "Simple optional fields",
+              "Conflates missing and undefined"
+            ],
+            [
+              "exactOptionalPropertyTypes",
+              "Precise API contracts",
+              "Migration pain on legacy"
+            ],
+            [
+              "Partial<T>",
+              "PATCH ergonomics",
+              "Cannot express required subset easily"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected",
+          "body": "Saying ? means nullable. Not knowing exactOptionalPropertyTypes exists. Using ! on optional fields instead of narrowing."
         }
       ]
     }
   ],
   "interviewTakeaways": [
-    "Optional properties (?), undefined, and exactOptionalPropertyTypes: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for optional-properties.",
-    "Production: validate external input before applying Optional properties (?), undefined, and exactOptionalPropertyTypes; log failures with context.",
-    "60s: Optional properties (?), undefined, and exactOptionalPropertyTypes — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "prop?: T means key may be absent; type is T | undefined when read.",
+    "exactOptionalPropertyTypes separates missing from undefined.",
+    "? is not the same as | null — model JSON null explicitly.",
+    "60s: Optional for absent keys. Narrow before use. Partial for PATCH. C# string? parallels nullable; TS ? parallels optional key. Runtime: validate API shape.",
+    "Follow-up: Partial vs Pick for update DTOs?"
   ],
   "commonPitfalls": [
-    "Weak answer: \"Optional properties (?), undefined, and exactOptionalPropertyTypes is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define Optional properties (?), undefined, and exactOptionalPropertyTypes, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: email?: string allows null from API — it does not unless | null added.",
+    "Weak: accessing optional without check — use ?. or if !== undefined.",
+    "Strong: Three states: required, optional absent, nullable. exactOptionalPropertyTypes for strict APIs. Partial for patches."
   ],
   "relatedTopicIds": [
     "typescript-07-strict-null-checks",
-    "typescript-07-non-null-assertion",
-    "typescript-07-definite-assignment"
+    "typescript-07-null-safety-vs-csharp-nrt",
+    "typescript-10-partial-required-pick-omit",
+    "typescript-02-null-undefined-void-never"
   ],
   "jsTsCorrelations": [
     {
       "language": "javascript",
-      "concept": "Optional properties (?), undefined, and exactOptionalPropertyTypes",
-      "note": "Foundation link to javascript track for optional-properties.",
-      "futureTopicSlug": "javascript/null-safety-strict/optional-properties"
+      "concept": "missing object keys",
+      "note": "JS returns undefined for missing keys — optional ? documents that behavior at compile time.",
+      "futureTopicSlug": "javascript/objects/property-access"
+    },
+    {
+      "language": "typescript",
+      "concept": "Partial utility",
+      "note": "Partial<T> maps all properties to optional — built on the same optional property semantics.",
+      "futureTopicSlug": "typescript/utility-types/partial-required-pick-omit"
     }
   ],
   "officialSources": [
     {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
+      "title": "TypeScript — exactOptionalPropertyTypes",
+      "url": "https://www.typescriptlang.org/tsconfig#exactOptionalPropertyTypes"
     },
     {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
+      "title": "TypeScript — Optional Properties",
+      "url": "https://www.typescriptlang.org/docs/handbook/2/objects.html#optional-properties"
     }
-  ]
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "csv-import"
 }

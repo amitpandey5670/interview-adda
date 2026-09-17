@@ -4,31 +4,23 @@
   "title": "ReadonlyArray, ReadonlySet, and immutable views",
   "moduleId": "typescript-08-collections-and-typed-data",
   "order": 4,
-  "hook": "ReadonlyArray, ReadonlySet, and immutable views shows up in everyday TypeScript and in senior interviews — this page explains what it is, why it matters, and how it behaves in the compiler versus JavaScript or C#.",
+  "hook": "readonly T[] and ReadonlyArray<T> block mutating methods at compile time — but the underlying array is still mutable at runtime if another reference exists. Immutable views protect callers without copying data.",
   "sections": [
     {
       "heading": "What is this?",
       "blocks": [
         {
           "type": "prose",
-          "text": "ReadonlyArray, ReadonlySet, and immutable views is a core concept in TypeScript. At run time, types erase — the engine still executes JavaScript — but at compile time this concept shapes safe APIs and catches bugs before deploy. This page explains the idea in plain English first, then shows small, explained examples you can run in the browser console or Node.js."
+          "text": "**readonly T[]** (or **ReadonlyArray<T>**) removes mutating methods like `push`, `pop`, and `splice` from the type and makes index assignment an error. **ReadonlySet<T>** and **ReadonlyMap<K,V>** are interfaces describing read-only views. **Readonly<T>** is a mapped type that recursively marks properties readonly. At runtime, `readonly` does nothing — it is purely a compile-time contract. Deep immutability requires recursive Readonly or libraries like Immer."
         },
         {
           "type": "glossary",
           "title": "Key terms",
           "entries": [
-            {
-              "term": "readonly",
-              "longForm": "ReadonlyArray, ReadonlySet, and immutable views",
-              "plainDefinition": "The central idea behind \"ReadonlyArray, ReadonlySet, and immutable views\" — how it appears in source code and what the compiler does with it.",
-              "example": "See the code walkthrough section for a minimal working example."
-            },
-            {
-              "term": "ECMAScript",
-              "longForm": "ECMAScript",
-              "plainDefinition": "The official specification that JavaScript implements. TypeScript is a typed superset that compiles to ECMAScript.",
-              "example": "const, classes, and async/await are ECMAScript features."
-            }
+            { "term": "readonly array", "longForm": "readonly T[]", "plainDefinition": "Array type without mutating methods — index assignment blocked at compile time.", "example": "function sum(nums: readonly number[]): number" },
+            { "term": "ReadonlyArray", "longForm": "ReadonlyArray<T>", "plainDefinition": "Interface equivalent of readonly T[] — same semantics.", "example": "const xs: ReadonlyArray<string> = ['a'];" },
+            { "term": "shallow readonly", "longForm": "shallow immutability", "plainDefinition": "readonly on container — nested objects remain mutable.", "example": "readonly [{ name: 'Ada' }] — can still mutate .name" },
+            { "term": "Readonly<T>", "longForm": "Readonly mapped type", "plainDefinition": "Utility making all properties readonly recursively one level.", "example": "type UserView = Readonly<User>;" }
           ]
         }
       ]
@@ -38,14 +30,9 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "Senior interviews and production code both probe whether you understand ReadonlyArray, ReadonlySet, and immutable views beyond syntax memorization. Misunderstanding here leads to subtle bugs — wrong equality results, leaked memory, untyped JSON boundaries, or async ordering surprises. If you know JavaScript, the comparison sections below help you transfer mental models instead of starting from zero."
+          "text": "Function parameters that should not mutate input should use `readonly T[]` — signals intent and prevents accidental `push`. React props are readonly. Redux state snapshots use readonly types. C# has `IReadOnlyList<T>` with runtime enforcement on the wrapper; TypeScript readonly is erased — a malicious caller can still cast away readonly. Senior interviews probe shallow vs deep immutability and when to use `Readonly<T>` vs `readonly` modifier on arrays."
         },
-        {
-          "type": "callout",
-          "variant": "tip",
-          "title": "Interview trap",
-          "body": "Interviewers often ask \"ReadonlyArray, ReadonlySet, and immutable views\" as a follow-up to a coding exercise. They want mechanism and tradeoffs — not a one-line definition."
-        }
+        { "type": "callout", "variant": "tip", "title": "Covariance note", "body": "readonly arrays are covariant in element type — readonly Animal[] accepts readonly Dog[]. Mutable T[] is invariant." }
       ]
     },
     {
@@ -53,32 +40,20 @@
       "blocks": [
         {
           "type": "steps",
-          "title": "Mental model",
+          "title": "Applying readonly collections",
           "items": [
-            {
-              "title": "Read the syntax",
-              "body": "Find where ReadonlyArray, ReadonlySet, and immutable views appears in real code — a function, type annotation, or runtime API."
-            },
-            {
-              "title": "Trace execution",
-              "body": "Hover types in your editor, then emit JS and read what survives at run time."
-            },
-            {
-              "title": "Compare hosts",
-              "body": "Browser and Node.js may differ — note which APIs are host-specific versus language features."
-            },
-            {
-              "title": "Connect to neighbors",
-              "body": "Use related links at the bottom to connect this topic to closures, types, or async in the same track."
-            }
+            { "title": "Parameter types", "body": "Accept readonly T[] when function only reads — wider assignability from mutable arrays." },
+            { "title": "Return views", "body": "Return readonly slice results without copying — caller cannot mutate via return type." },
+            { "title": "Readonly<T> on objects", "body": "Props interfaces and DTO views — one level deep by default." },
+            { "title": "Deep freeze at runtime", "body": "Object.freeze for runtime — combine with readonly for compile-time." }
           ]
         },
         {
           "type": "diagram",
           "diagram": {
             "type": "mermaid",
-            "title": "ReadonlyArray, ReadonlySet, and immutable views flow",
-            "source": "flowchart TD\n  A[Source code] --> B[TypeScript checker]\n  B --> C[Emit JavaScript]\n  C --> D[Run in V8]\n  D --> E[Observable behavior]"
+            "title": "Shallow readonly vs deep immutability",
+            "source": "flowchart TD\n  R[readonly User[]] --> S[Cannot push/pop]\n  R --> N[Nested address still mutable]\n  D[DeepReadonly User] --> M[All nested props readonly]"
           }
         }
       ]
@@ -90,36 +65,36 @@
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Basic ReadonlyArray, ReadonlySet, and immutable views",
-            "code": "// ReadonlyArray, ReadonlySet, and immutable views\ninterface Example {\n  topic: string;\n  active: boolean;\n}\n\nconst example: Example = {\n  topic: 'readonly-collections',\n  active: true,\n};\n\nconsole.log(example.topic);",
-            "explanation": "Lines 1–4: define a minimal value related to ReadonlyArray, ReadonlySet, and immutable views. Line 6: observe output — in TS, the checker validates shape before emit."
+            "label": "readonly parameter accepts mutable array",
+            "code": "function total(values: readonly number[]): number {\n  return values.reduce((a, b) => a + b, 0);\n}\n\nconst mutable = [1, 2, 3];\ntotal(mutable); // OK — mutable assignable to readonly\n// values.push(4); // error inside total",
+            "explanation": "readonly parameter is bivariant for acceptance — mutable arrays pass in. Mutations blocked on the readonly view inside the function."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Production-shaped usage",
-            "code": "type Payload = { id: string };\n\nfunction parsePayload(raw: unknown): Payload {\n  if (typeof raw !== 'object' || raw === null) throw new Error('invalid');\n  if (!('id' in raw) || typeof raw.id !== 'string') throw new Error('id required');\n  return { id: raw.id };\n}\n\nasync function handleRequest(raw: unknown) {\n  const payload = parsePayload(raw);\n  return fetch(`/api/items/${payload.id}`);\n}",
-            "explanation": "Shows boundary validation — narrow unknown before trusting JSON."
-          }
-        },
-        {
-          "type": "snippet",
-          "snippet": {
-            "language": "javascript",
-            "label": "Compare with JavaScript",
-            "code": "// JavaScript at run time — types erased\nconst item = { id: 'abc' };\nconsole.log(item.id);",
-            "explanation": "Highlights what JavaScript does differently at compile time versus run time."
+            "label": "Shallow readonly trap",
+            "code": "type Row = { cells: string[] };\n\nfunction freezeRows(rows: readonly Row[]): void {\n  rows[0].cells.push('extra'); // compiles — nested array mutable\n}\n\nconst data: Row[] = [{ cells: ['a'] }];\nfreezeRows(data);",
+            "explanation": "readonly Row[] only prevents reassignment of rows array — cells inside each Row remain mutable. Use Readonly<Row> or deep readonly for nested safety."
           }
         },
         {
           "type": "snippet",
           "snippet": {
             "language": "typescript",
-            "label": "Failure mode / diagnostic",
-            "code": "function assertNever(x: never): never {\n  throw new Error('Unexpected value: ' + String(x));\n}\n\n// use after exhaustive switch on discriminated union",
-            "explanation": "Shows explicit failure handling — senior reviewers want to see you design for bad input, not only happy paths."
+            "label": "ReadonlySet and ReadonlyMap views",
+            "code": "function logKeys(map: ReadonlyMap<string, number>): void {\n  for (const [k, v] of map) console.log(k, v);\n  // map.set('x', 1); // error — no set on ReadonlyMap\n}\n\nconst scores = new Map([['ada', 95]]);\nlogKeys(scores);",
+            "explanation": "ReadonlyMap is a typing view — underlying Map still mutable via original reference. Interface omits mutating methods."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Failure mode — cast away readonly",
+            "code": "const config: readonly string[] = ['prod', 'staging'];\n\nfunction mutate(xs: string[]) { xs.push('dev'); }\n\nmutate(config as string[]); // bypasses compile check — runtime mutation",
+            "explanation": "readonly is not enforced at runtime. Cast to mutable type allows mutation. Use Object.freeze in security-sensitive paths."
           }
         }
       ]
@@ -129,29 +104,13 @@
       "blocks": [
         {
           "type": "comparisonTable",
-          "title": "ReadonlyArray, ReadonlySet, and immutable views across languages",
-          "headers": [
-            "Aspect",
-            "TypeScript",
-            "JavaScript / C#"
-          ],
+          "title": "Immutability across languages",
+          "headers": ["Feature", "TypeScript", "JavaScript", "C#"],
           "rows": [
-            [
-              "When checked",
-              "Compile time (types erase at run time)",
-              "JS: run time; C#: compile + CLR"
-            ],
-            [
-              "Type model",
-              "Structural static types",
-              "JS: dynamic; C#: nominal"
-            ],
-            [
-              "Typical pitfall",
-              "Coercion or silent undefined",
-              "any at boundaries",
-              "Null reference or blocking async"
-            ]
+            ["Read-only view", "readonly T[], Readonly<T>", "Object.freeze (shallow)", "IReadOnlyList<T>"],
+            ["Runtime enforcement", "None — erased", "freeze/seal", "Wrapper throws on mutation"],
+            ["Deep immutability", "Manual recursive types", "deep-freeze libraries", "Immutable collections package"],
+            ["Covariance", "readonly arrays covariant", "N/A", "IReadOnlyList covariant"]
           ]
         }
       ]
@@ -159,12 +118,8 @@
     {
       "heading": "Common mistakes",
       "blocks": [
-        {
-          "type": "callout",
-          "variant": "warning",
-          "title": "Pitfalls to avoid",
-          "body": "Treating ReadonlyArray, ReadonlySet, and immutable views as pure syntax without run-time behavior. Skipping validation at JSON or API boundaries. Saying \"it works on my machine\" without noting browser versus Node differences."
-        }
+        { "type": "callout", "variant": "warning", "title": "Assuming runtime immutability", "body": "readonly is compile-time only — cast or shared reference can still mutate." },
+        { "type": "callout", "variant": "warning", "title": "Shallow readonly on nested data", "body": "readonly on outer array does not freeze inner objects — use deep Readonly or validation." }
       ]
     },
     {
@@ -172,83 +127,40 @@
       "blocks": [
         {
           "type": "prose",
-          "text": "How to prove it in production: add logging or DevTools breakpoints around ReadonlyArray, ReadonlySet, and immutable views, write a failing test that captures the edge case, and explain tradeoffs aloud in design review. Senior interviewers want mechanism — what the compiler does — plus when not to use the clever version."
+          "text": "readonly T[] enables covariant element types — important for function parameter typing. `ReadonlyArray` vs `readonly T[]` are identical in modern TS. For React 19+ and signals, readonly props prevent accidental state mutation in child components. Immer produces mutable drafts with readonly snapshots. In performance-critical code, readonly views avoid array copy while documenting intent — copy only when true isolation needed."
         },
         {
           "type": "comparisonTable",
           "title": "Tradeoffs at senior level",
-          "headers": [
-            "Approach",
-            "When it wins",
-            "When it fails"
-          ],
+          "headers": ["Approach", "Wins", "Fails"],
           "rows": [
-            [
-              "Minimal / explicit",
-              "Readable teams, on-call clarity",
-              "More boilerplate"
-            ],
-            [
-              "Clever one-liner",
-              "Short snippets",
-              "Hard to debug under load"
-            ],
-            [
-              "Library abstraction",
-              "Consistent policy",
-              "Hidden cost / bundle size"
-            ]
+            ["readonly param", "No copy, wide input assignability", "Shallow — nested mutable"],
+            ["slice() copy", "True isolation", "O(n) allocation"],
+            ["Object.freeze", "Runtime shallow freeze", "Not deep, perf cost"],
+            ["Immer", "Ergonomics + readonly output", "Library dependency"]
           ]
         },
-        {
-          "type": "callout",
-          "variant": "warning",
-          "title": "What gets you rejected in interviews",
-          "body": "Hand-waving \"ReadonlyArray, ReadonlySet, and immutable views just works\" without mentioning run-time checks, error paths, or comparison to JavaScript and C#. Cannot trace a concrete bug to this concept."
-        }
+        { "type": "callout", "variant": "warning", "title": "What gets you rejected in interviews", "body": "Claiming readonly freezes at runtime. Not knowing shallow vs deep. Unaware readonly arrays are covariant." }
       ]
     }
   ],
   "interviewTakeaways": [
-    "ReadonlyArray, ReadonlySet, and immutable views: know the definition and one concrete code example.",
-    "Tradeoff: prefer explicit, debuggable code over clever shortcuts for readonly-collections.",
-    "Production: validate external input before applying ReadonlyArray, ReadonlySet, and immutable views; log failures with context.",
-    "60s: ReadonlyArray, ReadonlySet, and immutable views — explain mechanism, one pitfall, one comparison to JS/C#, and when you would not use the advanced variant.",
-    "Follow-up: interviewer may ask you to trace a bug or extend the example to async/error paths."
+    "readonly T[] blocks push/pop/splice — compile-time only.",
+    "Mutable arrays assignable to readonly parameters — covariant.",
+    "Shallow readonly — nested objects still mutable.",
+    "60s: Use readonly on params and return views to signal no mutation. Not runtime safe — cast bypasses. Deep immutability needs recursive Readonly or Immer.",
+    "Follow-up: Readonly<T> mapped type, IReadOnlyList in C#."
   ],
   "commonPitfalls": [
-    "Weak answer: \"ReadonlyArray, ReadonlySet, and immutable views is just syntax\" — rejected because interviews probe run-time behavior.",
-    "Using any at API boundaries without validation.",
-    "Strong answer: define ReadonlyArray, ReadonlySet, and immutable views, show a 5-line example, name one pitfall and one C# difference."
+    "Weak: \"readonly makes array immutable at runtime\" — rejected.",
+    "Expecting nested immutability from readonly outer array.",
+    "Strong: \"readonly is erased at emit. Shallow view only. Use deep types or freeze for nested safety.\""
   ],
-  "relatedTopicIds": [
-    "typescript-08-array-and-tuple-types",
-    "typescript-08-map-set-typed",
-    "typescript-08-satisfies-operator"
-  ],
+  "relatedTopicIds": ["typescript-08-array-and-tuple-types", "typescript-10-partial-required-pick-omit", "typescript-08-typed-array-methods"],
   "jsTsCorrelations": [
-    {
-      "language": "javascript",
-      "concept": "ReadonlyArray, ReadonlySet, and immutable views",
-      "note": "Compare ReadonlyArray, ReadonlySet, and immutable views in javascript — same programmer idea, different run-time enforcement.",
-      "futureTopicSlug": "javascript/collections-and-typed-data/readonly-collections"
-    },
-    {
-      "language": "typescript",
-      "concept": "C# correlation",
-      "note": "C# developers: map ReadonlyArray, ReadonlySet, and immutable views to the closest CLR concept — nominal types, Task, or LINQ — and note what differs.",
-      "futureTopicSlug": "csharp/modules/8/readonly-collections"
-    }
+    { "language": "javascript", "concept": "Object.freeze", "note": "JS Object.freeze provides shallow runtime immutability; TS readonly is compile-time only with no runtime cost.", "futureTopicSlug": "javascript/objects/freeze" },
+    { "language": "typescript", "concept": "IReadOnlyList", "note": "C# IReadOnlyList<T> wraps with runtime mutation guards; TS readonly is a type-system contract erased on emit.", "futureTopicSlug": "csharp/collections/ireadonlylist" }
   ],
-  "officialSources": [
-    {
-      "title": "TypeScript handbook",
-      "url": "https://www.typescriptlang.org/docs/handbook/intro.html"
-    },
-    {
-      "title": "TypeScript release notes",
-      "url": "https://www.typescriptlang.org/docs/handbook/release-notes/overview.html"
-    }
-  ],
-  "animationHint": "flow"
+  "officialSources": [{ "title": "TypeScript handbook — readonly", "url": "https://www.typescriptlang.org/docs/handbook/2/objects.html#readonly-properties" }],
+  "animationHint": "compare"
 }
