@@ -1,0 +1,277 @@
+{
+  "id": "aws-09-eni-vpc-attachment",
+  "slug": "eni-vpc-attachment",
+  "title": "Elastic Network Interfaces (ENI) and VPC attachment",
+  "moduleId": "aws-09-ec2-compute",
+  "order": 2,
+  "hook": "Every EC2 instance connects to your VPC through an Elastic Network Interface (ENI). The ENI owns the private IP, security groups, and subnet placement.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An Elastic Network Interface (ENI) is a virtual network card in a Virtual Private Cloud (VPC) subnet. Each EC2 instance has a primary ENI (device index 0) created at launch. You can attach secondary ENIs for multi-homed designs, move ENIs between instances for failover, or assign multiple private IPv4 addresses and IPv6 addresses per ENI. Security groups attach to ENIs, not instances directly."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ENI",
+              "longForm": "Elastic Network Interface",
+              "plainDefinition": "VPC virtual NIC with private IP, MAC, and security groups.",
+              "example": "eni-0abc in subnet-10.0.10.0/24"
+            },
+            {
+              "term": "Primary ENI",
+              "longForm": "Primary network interface",
+              "plainDefinition": "Device index 0 — deleted when instance terminates.",
+              "example": "Launched with instance in chosen subnet."
+            },
+            {
+              "term": "Source/dest check",
+              "longForm": "Source/destination check",
+              "plainDefinition": "When true, instance must be source or dest of traffic — false for routers.",
+              "example": "NAT appliance ENI needs check disabled."
+            },
+            {
+              "term": "Trunking",
+              "longForm": "ENA trunking",
+              "plainDefinition": "Higher ENI density for container hosts on supported types.",
+              "example": "ECS on EC2 with awsvpc mode."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lambda functions in a VPC create ENIs in subnets — scaling Lambda can exhaust IP addresses or ENI limits. Source/destination check must be disabled on firewalls and NAT instances so they can forward traffic. Misplaced ENI = wrong route table association and broken connectivity."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: ENI lives in one subnet, carries SGs and MAC address. Primary ENI defines instance network identity. Secondary ENI for traffic inspection or hot standby."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "ENI lifecycle",
+          "items": [
+            {
+              "title": "Create or launch",
+              "body": "Primary ENI auto-created in selected subnet with primary private IP."
+            },
+            {
+              "title": "Attach secondary",
+              "body": "Create ENI in target subnet, attach to running instance as eth1."
+            },
+            {
+              "title": "Apply security groups",
+              "body": "Up to five SGs per ENI — stateful rules evaluate per ENI."
+            },
+            {
+              "title": "Route traffic",
+              "body": "Subnet route table associated with ENI subnet determines egress path."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Primary and secondary ENI",
+            "source": "flowchart TB\n  EC2[EC2 instance]\n  EC2 --> ENI0[Primary ENI subnet A]\n  EC2 --> ENI1[Secondary ENI subnet B]\n  ENI0 --> SGA[SG app-tier]\n  ENI1 --> SGB[SG inspection]\n  ENI0 --> RTA[Route table A]\n  ENI1 --> RTB[Route table B]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create and attach secondary ENI",
+            "code": "aws ec2 create-network-interface \\\n  --subnet-id subnet-data \\\n  --groups sg-inspect\naws ec2 attach-network-interface \\\n  --network-interface-id eni-0sec \\\n  --instance-id i-0app \\\n  --device-index 1",
+            "explanation": "Secondary ENI can live in different subnet for inspection or management plane."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Disable source/dest check for NAT",
+            "code": "aws ec2 modify-network-interface-attribute \\\n  --network-interface-id eni-0nat \\\n  --no-source-dest-check",
+            "explanation": "Required when instance forwards packets between other hosts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Launch template with multiple ENIs",
+            "code": "NetworkInterfaces:\n  - DeviceIndex: 0\n    SubnetId: !Ref PrivateSubnetA\n    Groups: [!Ref AppSecurityGroup]\n  - DeviceIndex: 1\n    SubnetId: !Ref PrivateSubnetB\n    Groups: [!Ref DataSecurityGroup]",
+            "explanation": "Defines multi-homed instance at launch — avoids manual attach race at boot."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List ENIs for instance",
+            "code": "aws ec2 describe-network-interfaces \\\n  --filters Name=attachment.instance-id,Values=i-0app \\\n  --query 'NetworkInterfaces[].{Id:NetworkInterfaceId,Subnet:SubnetId,IP:PrivateIpAddress,Device:Attachment.DeviceIndex}'",
+            "explanation": "First step when debugging wrong subnet or missing secondary ENI."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Network identity",
+              "ENI holds IP and MAC in VPC",
+              "Container has virtual eth inside task — like secondary ENI per task in awsvpc"
+            ],
+            [
+              "Security",
+              "SG on ENI — stateful",
+              "App firewall in code — no VPC SG unless deployed on EC2/ECS"
+            ],
+            [
+              "Mobility",
+              "Detach ENI, attach to standby instance",
+              "Blue/green by redeploying container to new host"
+            ],
+            [
+              "Limits",
+              "ENI per instance type quota",
+              "No ENI concept on Lambda outside VPC"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forgetting Lambda in VPC consumes subnet IPs via ENIs. Leaving source/dest check enabled on a routing appliance. Attaching ENI in subnet without available IPs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Hyperplane ENIs reduced Lambda cold start for VPC functions but still plan IP capacity (/28 subnets exhaust fast). How to prove it in production: describe-network-interfaces filtered by description \"AWS Lambda\" for IP burn rate; VPC Reachability Analyzer for path through multi-ENI appliance."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Hot standby ENI",
+              "Fast failover by ENI reattach",
+              "Manual or scripted — not automatic like Multi-AZ RDS"
+            ],
+            [
+              "Multiple IPs on one ENI",
+              "Host many TLS certs or containers",
+              "Complex OS-level binding"
+            ],
+            [
+              "ENA Express",
+              "Lower latency P99 on supported instances",
+              "Instance type and region dependent"
+            ],
+            [
+              "IPv6 only ENI",
+              "Simplifies address management",
+              "App and peer support required"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying security groups attach to EC2 instances — they attach to ENIs. Strong answer: primary ENI subnet sets route table; SG is stateful per ENI; Lambda VPC mode creates ENIs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "ENI is the VPC network identity — subnet, private IP, MAC, and security groups.",
+    "Primary ENI is created with the instance; secondary ENIs enable multi-homed and failover patterns.",
+    "Disable source/dest check only on routing/NAT appliances — not ordinary app servers.",
+    "60s: ENI in one subnet, SGs on ENI. Primary at launch. Lambda VPC burns ENIs and IPs. Source/dest off for routers only.",
+    "Follow-up: how does Lambda ENI scaling affect subnet sizing?"
+  ],
+  "commonPitfalls": [
+    "Saying SG attaches to instance — rejected; SG attaches to ENI.",
+    "Strong answer: check ENI subnet route table and SG for each interface separately.",
+    "/28 subnet for Lambda without calculating ENI peak concurrency.",
+    "Moving ENI without updating OS network config on Linux secondary interface."
+  ],
+  "relatedTopicIds": [
+    "aws-09-ec2-instances-amis",
+    "aws-09-ec2-networking-troubleshoot",
+    "aws-11-lambda-in-vpc"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Listen address binding",
+      "note": "Node server binds 0.0.0.0 on all interfaces — on multi-ENI EC2, ensure traffic hits correct SG by binding specific private IP.",
+      "futureTopicSlug": "aws/ec2/multi-homed"
+    },
+    {
+      "language": "typescript",
+      "concept": "VPC Lambda ENIs",
+      "note": "Lambda in VPC is like a headless function with hidden ENIs — unlike a long-running Express server you SSH into.",
+      "futureTopicSlug": "aws/lambda/vpc-eni"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Elastic network interfaces",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-eni.html"
+    },
+    {
+      "title": "Lambda VPC networking",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

@@ -1,0 +1,277 @@
+{
+  "id": "aws-10-s3-storage-classes",
+  "slug": "s3-storage-classes",
+  "title": "S3 storage classes and lifecycle policies",
+  "moduleId": "aws-10-s3-storage",
+  "order": 3,
+  "hook": "S3 storage classes trade cost against retrieval latency — lifecycle rules automate transition from Standard to IA, Glacier, or Deep Archive.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon S3 Standard is default for frequent access. Standard-IA and One Zone-IA reduce cost for infrequent access with retrieval fee. Glacier Instant Retrieval, Flexible Retrieval, and Deep Archive archive tiers with minutes to hours retrieval. Intelligent-Tiering moves objects automatically. Lifecycle configuration transitions or expires by prefix and age."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Standard-IA",
+              "longForm": "S3 Standard-Infrequent Access",
+              "plainDefinition": "Lower storage cost, retrieval fee, 30-day minimum.",
+              "example": "Monthly reports accessed once a quarter."
+            },
+            {
+              "term": "Glacier IR",
+              "longForm": "S3 Glacier Instant Retrieval",
+              "plainDefinition": "Archive with millisecond retrieval, higher storage cost than Flexible.",
+              "example": "Medical images rarely accessed but need instant when needed."
+            },
+            {
+              "term": "Lifecycle rule",
+              "longForm": "S3 lifecycle configuration",
+              "plainDefinition": "Automated transition or expiration based on age and prefix.",
+              "example": "logs/ prefix to Glacier at 90 days, expire at 365."
+            },
+            {
+              "term": "Intelligent-Tiering",
+              "longForm": "S3 Intelligent-Tiering",
+              "plainDefinition": "Auto-moves between frequent and infrequent tiers by access.",
+              "example": "Unknown access pattern datasets."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Logs and backups accumulate — lifecycle prevents runaway Standard storage bills. Minimum storage duration charges apply when leaving IA or Glacier early. Wrong class causes retrieval latency in production incidents."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: match access pattern to class. Lifecycle by prefix age. Watch minimum billable days and retrieval costs."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Lifecycle automation",
+          "items": [
+            {
+              "title": "Classify data",
+              "body": "Hot (Standard), warm (IA), cold (Glacier), archive (Deep Archive)."
+            },
+            {
+              "title": "Define prefix rules",
+              "body": "Separate rules for logs/, backups/, assets/."
+            },
+            {
+              "title": "Set transitions",
+              "body": "Day 30 to IA, day 90 Glacier, expire noncurrent versions."
+            },
+            {
+              "title": "Monitor",
+              "body": "Storage Lens and cost explorer for early transition penalties."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Lifecycle transitions",
+            "source": "flowchart LR\n  STD[Standard] -->|30 days| IA[Standard-IA]\n  IA -->|90 days| GL[Glacier Flexible]\n  GL -->|365 days| DA[Deep Archive]\n  NC[Noncurrent versions] -->|expire 90d| X[Deleted]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Lifecycle configuration",
+            "code": "{\n  \"Rules\": [{\n    \"ID\": \"logs-tiering\",\n    \"Status\": \"Enabled\",\n    \"Filter\": { \"Prefix\": \"logs/\" },\n    \"Transitions\": [\n      { \"Days\": 30, \"StorageClass\": \"STANDARD_IA\" },\n      { \"Days\": 90, \"StorageClass\": \"GLACIER\" }\n    ],\n    \"Expiration\": { \"Days\": 2555 },\n    \"NoncurrentVersionTransitions\": [\n      { \"NoncurrentDays\": 30, \"StorageClass\": \"STANDARD_IA\" }\n    ]\n  }]\n}",
+            "explanation": "Apply via put-bucket-lifecycle-configuration. Prefix filter scopes rule."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Put lifecycle policy",
+            "code": "aws s3api put-bucket-lifecycle-configuration \\\n  --bucket my-app-data \\\n  --lifecycle-configuration file://lifecycle.json",
+            "explanation": "Validate JSON schema before apply — invalid rules rejected."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Restore Glacier object",
+            "code": "aws s3api restore-object \\\n  --bucket my-app-data \\\n  --key archive/2020/report.csv \\\n  --restore-request '{\"Days\":7,\"GlacierJobParameters\":{\"Tier\":\"Standard\"}}'",
+            "explanation": "Flexible Retrieval Standard tier hours; Expedited minutes at premium."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Upload with storage class",
+            "code": "aws s3 cp backup.tar.gz s3://my-app-data/backups/ \\\n  --storage-class STANDARD_IA",
+            "explanation": "Set class at upload for known infrequent data without waiting for lifecycle."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Cost model",
+              "Storage + retrieval + requests",
+              "EBS pay for provisioned GB regardless of read"
+            ],
+            [
+              "Latency",
+              "Glacier minutes to hours",
+              "EBS milliseconds"
+            ],
+            [
+              "Automation",
+              "Lifecycle by age/prefix",
+              "EBS snapshots manual or Data Lifecycle Manager"
+            ],
+            [
+              "Minimum duration",
+              "IA 30d, Glacier 90d penalties",
+              "EBS billed while attached"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Transition to Glacier then need immediate access — retrieval delay. Intelligent-Tiering monitoring fee on small objects. Lifecycle expire rule on wrong prefix deletes production data."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "S3 Glacier Instant for archive with instant read vs Flexible for true archive. How to prove it in production: Storage Lens class breakdown, early deletion charge lines in Cost Explorer, restore drill timing."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Standard only",
+              "Simple hot data",
+              "Highest cost at scale"
+            ],
+            [
+              "Lifecycle tiering",
+              "Automatic cost optimization",
+              "Retrieval surprise on cold data"
+            ],
+            [
+              "Intelligent-Tiering",
+              "Unknown patterns",
+              "Small object monitoring fee"
+            ],
+            [
+              "One Zone-IA",
+              "Cheapest IA",
+              "AZ loss risk — not for DR copies"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Moving all data to Glacier day one gets rejected — retrieval pain. Strong answer: staged transitions, test restore, noncurrent version rules."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Match storage class to access frequency and retrieval tolerance.",
+    "Lifecycle rules filter by prefix — design keys accordingly.",
+    "Minimum storage duration penalties on early deletion from IA/Glacier.",
+    "60s: Standard hot. IA/Glacier cold with retrieval delay. Lifecycle by prefix age. Test restore.",
+    "Follow-up: Intelligent-Tiering vs explicit lifecycle?"
+  ],
+  "commonPitfalls": [
+    "Glacier for data needed daily — weak answer.",
+    "Strong answer: Standard or IA for warm; Glacier for true archive with restore runbook.",
+    "No noncurrent version lifecycle with versioning on — cost explosion.",
+    "Expiring wrong prefix without MFA or policy guard."
+  ],
+  "relatedTopicIds": [
+    "aws-10-s3-durability-consistency",
+    "aws-10-s3-events-hosting",
+    "aws-09-ebs-vs-instance-store"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "TTL cache vs storage class",
+      "note": "Redis TTL evicts hot cache; S3 lifecycle moves cold blobs — different layers of tiering in Node apps.",
+      "futureTopicSlug": "aws/s3/tiering"
+    },
+    {
+      "language": "typescript",
+      "concept": "Archive restore polling",
+      "note": "Restore Glacier object then poll HeadObject Restore header — async pattern like waiting on Promise with backoff.",
+      "futureTopicSlug": "aws/s3/restore"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Storage classes",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/storage-class-intro.html"
+    },
+    {
+      "title": "Lifecycle configuration",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lifecycle-mgmt.html"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "csv-import"
+}

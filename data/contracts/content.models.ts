@@ -1,6 +1,13 @@
 export type Stage = 'foundation' | 'intermediate' | 'advanced';
 
-export type AnimationHint = 'compare' | 'flow' | 'stack-heap' | 'timeline';
+export type AnimationHint =
+  | 'compare'
+  | 'flow'
+  | 'stack-heap'
+  | 'timeline'
+  | 'network-flow'
+  | 'region-map'
+  | 'request-path';
 
 export type ScenarioTag =
   | 'sqs-consumer'
@@ -9,7 +16,13 @@ export type ScenarioTag =
   | 'skiasharp-dispose'
   | 'auth-token'
   | 'csv-import'
-  | 'high-concurrency';
+  | 'high-concurrency'
+  | 'lambda-vpc'
+  | 'step-functions-saga'
+  | 'cloudfront-origin'
+  | 'vpc-troubleshoot'
+  | 'saas-tenant-routing'
+  | 'datasync-migration';
 
 export interface OfficialSource {
   title: string;
@@ -238,7 +251,7 @@ export interface IndexModuleRef {
 }
 
 export interface ContentIndex {
-  language: 'csharp' | 'dotnet' | 'javascript' | 'typescript';
+  language: 'csharp' | 'dotnet' | 'javascript' | 'typescript' | 'aws';
   title: string;
   stages: StageGroup[];
   modules: IndexModuleRef[];

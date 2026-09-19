@@ -1,0 +1,202 @@
+{
+  "id": "aws-02-aws-regions-isolation",
+  "slug": "aws-regions-isolation",
+  "title": "Regions: isolation, compliance, and data residency",
+  "moduleId": "aws-02-global-infrastructure",
+  "order": 1,
+  "hook": "An AWS Region is a separate geographic area with its own power, networking, and control plane. Data stays inside the Region you choose unless you explicitly replicate or read across Regions — that boundary is how compliance and data residency work on AWS.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Region (for example ap-south-1 in Mumbai or eu-west-1 in Ireland) is a fully isolated partition of AWS. Each Region contains multiple Availability Zones. Services you create in a Region — Amazon Elastic Compute Cloud (EC2) instances, Simple Storage Service (S3) buckets, Relational Database Service (RDS) databases — store primary data in that Region. Cross-Region access requires explicit configuration such as S3 Cross-Region Replication or reading from another Region API endpoint."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Region",
+              "longForm": "AWS Region",
+              "plainDefinition": "Geographically isolated AWS partition with its own Availability Zones and service endpoints.",
+              "example": "ap-south-1 serves workloads targeting Indian users and residency rules."
+            },
+            {
+              "term": "Data residency",
+              "longForm": "Data residency requirement",
+              "plainDefinition": "Policy that customer data must remain within a legal geography.",
+              "example": "Healthcare records processed only in an approved Region."
+            },
+            {
+              "term": "Opt-in Region",
+              "longForm": "Opt-in AWS Region",
+              "plainDefinition": "Region disabled by default until enabled in account settings.",
+              "example": "af-south-1 (Cape Town) requires opt-in before deployment."
+            },
+            {
+              "term": "Partition",
+              "longForm": "AWS partition",
+              "plainDefinition": "Isolated cloud instance — aws, aws-cn, aws-us-gov.",
+              "example": "Commercial aws partition Regions do not share data with aws-us-gov."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Wrong Region choice breaks compliance audits, adds latency for primary users, and blocks services not yet available in that Region. Regulators and enterprise customers ask where primary data lives — Region is the first answer."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Region is the residency boundary. I pick Region for law, latency, and service availability — then design multi-AZ inside it."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "How Region isolation works",
+          "items": [
+            {
+              "title": "Account selects a Region",
+              "body": "Every API call targets a Region endpoint. Resources are Regional unless marked global (IAM, Route 53 public hosted zones)."
+            },
+            {
+              "title": "Data stays local by default",
+              "body": "S3 objects, EBS volumes, RDS storage remain in the Region unless replication rules move copies."
+            },
+            {
+              "title": "Cross-Region is explicit",
+              "body": "Snapshots copied to another Region, Aurora Global Database, or S3 Cross-Region Replication — all opt-in with their own billing."
+            },
+            {
+              "title": "Compliance maps to Region",
+              "body": "Certifications and features vary; verify before promising GDPR, HIPAA, or PCI scope in a given Region."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Region isolation boundary",
+            "source": "flowchart LR\n  subgraph R1[\"Region ap-south-1\"]\n    S3a[(S3 bucket)]\n    RDSa[(RDS)]\n  end\n  subgraph R2[\"Region eu-west-1\"]\n    S3b[(S3 replica)]\n  end\n  S3a -->|CRR explicit| S3b\n  Admin[Operator] -->|API scoped to Region| R1"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List enabled Regions for your account",
+            "code": "aws account list-regions \\\n  --region-opt-status-contains ENABLED \\\n  --query \"Regions[].RegionName\" \\\n  --output table",
+            "explanation": "Confirms which Regions are available before CloudFormation deploy. Opt-in Regions appear only after enablement."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Pin CLI commands to a Region",
+            "code": "export AWS_DEFAULT_REGION=ap-south-1\naws ec2 describe-vpcs --query \"Vpcs[].{Id:VpcId,Cidr:CidrBlock}\"",
+            "explanation": "Every CLI call without --region uses the default. Production scripts should set region explicitly to avoid accidental cross-Region resources."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation Region-scoped stack",
+            "code": "AWSTemplateFormatVersion: \"2010-09-09\"\nDescription: Residency-aware bucket in ap-south-1\nResources:\n  DataBucket:\n    Type: AWS::S3::Bucket\n    Properties:\n      BucketName: !Sub \"${AWS::AccountId}-in-residency-data\"\n      BucketEncryption:\n        ServerSideEncryptionConfiguration:\n          - ServerSideEncryptionByDefault:\n              SSEAlgorithm: aws:kms\n      PublicAccessBlockConfiguration:\n        BlockPublicAcls: true\n        BlockPublicPolicy: true\n        IgnorePublicAcls: true\n        RestrictPublicBuckets: true",
+            "explanation": "Stack deploys into the Region where you run aws cloudformation deploy --region ap-south-1. Bucket data never leaves unless you add replication."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Region choice vs on-prem data hall",
+          "headers": ["Aspect", "AWS Region", "On-premises / C# backend"],
+          "rows": [
+            ["Residency boundary", "Region partition + KMS keys in Region", "Physical data center you operate or colocate"],
+            ["Expansion", "Enable new Region or AZ without building a hall", "Capital project for new site"],
+            ["C# ASP.NET Core", "Same deploy artifact; configure AWS SDK Region endpoint", "Deploy to IIS/Kestrel in your hall — you own networking"],
+            ["Audit answer", "Resource ARNs include Region name", "Contract lists facility address and backup site"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Picking us-east-1 by default without checking user latency or residency. Assuming all AWS services exist in every Region. Enabling cross-Region replication without legal review. Confusing global services (IAM) with Regional data stores (RDS)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "A Region is an isolated geographic partition — primary data stays there unless you configure cross-Region copies.",
+    "Choose Region for compliance, latency to users, and service availability before optimizing cost.",
+    "Use KMS keys in the same Region as encrypted data; audit ARNs in CloudTrail for cross-Region calls.",
+    "60s: Region = residency boundary. Multi-AZ inside Region for HA. Cross-Region replication is explicit and billable.",
+    "Follow-up: how do opt-in Regions and AWS Outposts change the residency story?"
+  ],
+  "commonPitfalls": [
+    "Saying 'AWS is global so data is everywhere' gets you rejected — Regions are isolated unless you replicate.",
+    "Strong answer: name the Region, cite residency requirement, then multi-AZ — not 'we use the cloud.'",
+    "Deploying to us-east-1 because tutorials use it while primary users sit in Mumbai.",
+    "Enabling S3 Cross-Region Replication without updating data processing agreements."
+  ],
+  "relatedTopicIds": [
+    "aws-02-aws-availability-zones",
+    "aws-02-aws-choosing-region-az",
+    "aws-05-aws-vpc-cidr-subnets"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "AWS SDK Region configuration",
+      "note": "Node.js Lambda sets AWS_REGION automatically. Browser apps never call AWS directly — wrong Region in backend env vars creates resources far from users, similar to pointing a C# app to the wrong connection string server.",
+      "futureTopicSlug": "aws/sdk/region-configuration"
+    },
+    {
+      "language": "typescript",
+      "concept": "Multi-tenant SaaS Region routing",
+      "note": "TypeScript APIs often route tenants by Region header or subdomain (eu.app.com). Same pattern as choosing an AWS Region per tenant for residency — unlike a single on-prem SQL Server instance serving all tenants.",
+      "futureTopicSlug": "aws/architecture/multi-region-saas"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Global Infrastructure — Regions",
+      "url": "https://aws.amazon.com/about-aws/global-infrastructure/regions_az/"
+    },
+    {
+      "title": "AWS Fault Isolation Boundaries",
+      "url": "https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/regions-and-availability-zones.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "saas-tenant-routing"
+}

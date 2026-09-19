@@ -1,0 +1,241 @@
+{
+  "id": "aws-15-data-movement-security",
+  "slug": "data-movement-security",
+  "title": "Security for data in motion (encryption, IAM, and audit)",
+  "moduleId": "aws-15-data-movement",
+  "order": 4,
+  "hook": "Every byte in transit and at rest during migration needs encryption, least-privilege IAM, and audit trails. A fast DataSync task with a overprivileged role is a compliance incident waiting for an auditor.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In transit: TLS for DataSync, HTTPS for S3, TLS for Kinesis. At rest: SSE-S3 or SSE-KMS on buckets. IAM: task-specific roles scoped to prefix not bucket-wide s3:*. Audit: CloudTrail management and data events, S3 access logging, DataSync task reports. VPC endpoints keep traffic off public internet from private subnets."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "SSE-KMS",
+              "longForm": "server-side encryption with KMS",
+              "plainDefinition": "S3 encryption using AWS Key Management Service (KMS) keys.",
+              "example": "CMK with key policy allowing DataSync role."
+            },
+            {
+              "term": "Least privilege",
+              "longForm": "IAM least privilege",
+              "plainDefinition": "Minimum permissions required for a task.",
+              "example": "s3:PutObject only on migration/ prefix."
+            },
+            {
+              "term": "CloudTrail data events",
+              "longForm": "CloudTrail S3 data events",
+              "plainDefinition": "API-level logging of object read/write operations.",
+              "example": "Who GetObject on sensitive-dataset/ during migration."
+            },
+            {
+              "term": "VPC endpoint",
+              "longForm": "S3 VPC gateway endpoint",
+              "plainDefinition": "Private route to S3 without internet gateway.",
+              "example": "EC2 in private subnet uploads via endpoint."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Migration weekends create temporary broad IAM roles that never get tightened. KMS key policy missing replication role causes silent FAILED replication. Public bucket during rushed cutover is a headline. Senior architects document who can decrypt, who can audit, and enforce SecureTransport."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: TLS in transit, SSE-KMS at rest, prefix-scoped IAM, CloudTrail data events, deny insecure transport bucket policy."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Secure migration checklist",
+          "items": [
+            {
+              "title": "Encryption defaults",
+              "body": "Bucket default encryption SSE-KMS; block public access on."
+            },
+            {
+              "title": "Scoped IAM roles",
+              "body": "DataSync, replication, Glue roles per prefix."
+            },
+            {
+              "title": "KMS key policies",
+              "body": "Grant encrypt/decrypt to each service role explicitly."
+            },
+            {
+              "title": "Audit trail",
+              "body": "CloudTrail data events on sensitive prefixes."
+            },
+            {
+              "title": "Network path",
+              "body": "VPC endpoints; agent outbound 443 only to AWS."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Security layers",
+            "source": "flowchart TB\n  subgraph Transit[In transit]\n    TLS[TLS 1.2+]\n  end\n  subgraph Rest[At rest]\n    KMS[SSE-KMS CMK]\n  end\n  subgraph Access[Access control]\n    IAM[IAM prefix scope]\n    BP[Block public access]\n  end\n  subgraph Audit[Audit]\n    CT[CloudTrail data events]\n  end\n  TLS --> KMS\n  IAM --> KMS\n  CT --> Audit"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — bucket encryption and public block",
+            "code": "Resources:\n  MigrationBucket:\n    Type: AWS::S3::Bucket\n    Properties:\n      BucketName: migration-landing-prod\n      BucketEncryption:\n        ServerSideEncryptionConfiguration:\n          - ServerSideEncryptionByDefault:\n              SSEAlgorithm: aws:kms\n              KMSMasterKeyID: !GetAtt MigrationKey.Arn\n      PublicAccessBlockConfiguration:\n        BlockPublicAcls: true\n        BlockPublicPolicy: true\n        IgnorePublicAcls: true\n        RestrictPublicBuckets: true",
+            "explanation": "Default KMS encryption on every object. Public access fully blocked."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Bucket policy — deny non-TLS access",
+            "code": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [{\n    \"Sid\": \"DenyInsecureTransport\",\n    \"Effect\": \"Deny\",\n    \"Principal\": \"*\",\n    \"Action\": \"s3:*\",\n    \"Resource\": [\n      \"arn:aws:s3:::migration-landing-prod\",\n      \"arn:aws:s3:::migration-landing-prod/*\"\n    ],\n    \"Condition\": {\n      \"Bool\": { \"aws:SecureTransport\": \"false\" }\n    }\n  }]\n}",
+            "explanation": "Denies any HTTP request — forces HTTPS for DataSync and application uploads."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "IAM policy — DataSync role prefix scope",
+            "code": "{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [{\n    \"Effect\": \"Allow\",\n    \"Action\": [\"s3:GetObject\", \"s3:ListBucket\"],\n    \"Resource\": [\n      \"arn:aws:s3:::migration-landing-prod\",\n      \"arn:aws:s3:::migration-landing-prod/incoming/*\"\n    ]\n  }, {\n    \"Effect\": \"Allow\",\n    \"Action\": [\"kms:Decrypt\", \"kms:GenerateDataKey\"],\n    \"Resource\": \"arn:aws:kms:us-east-1:123:key/abc-123\"\n  }]\n}",
+            "explanation": "ListBucket on bucket ARN; object actions only on incoming/ prefix. KMS for SSE-KMS objects."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — enable CloudTrail data events on prefix",
+            "code": "aws cloudtrail put-event-selectors \\\n  --trail-name org-trail \\\n  --event-selectors '[{\n    \"ReadWriteType\": \"All\",\n    \"IncludeManagementEvents\": true,\n    \"DataResources\": [{\n      \"Type\": \"AWS::S3::Object\",\n      \"Values\": [\"arn:aws:s3:::migration-landing-prod/sensitive/*\"]\n    }]\n  }]'",
+            "explanation": "Data events cost per event — scope to sensitive prefix not entire account."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SSE-S3 vs SSE-KMS",
+          "headers": ["Aspect", "SSE-S3", "SSE-KMS"],
+          "rows": [
+            ["Key control", "AWS managed", "Customer CMK rotation/audit"],
+            ["Compliance", "Basic encryption", "Who decrypted audit in CloudTrail"],
+            ["Performance", "Slightly lower overhead", "KMS API quota per request"],
+            ["Cross-account", "Simpler", "Key policy required"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Migration role with s3:* and kms:*. Forgetting replication role in KMS key policy. CloudTrail data events on all buckets — cost explosion. Temporary public bucket 'just for testing'."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: IAM Access Analyzer findings on migration roles. S3 Block Public Access account-level setting. Macie scan on landing bucket for PII before promoting to prod. Post-migration: delete overprivileged roles — automate with IaC only."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Control", "Implementation", "Tradeoff"],
+          "rows": [
+            ["Encryption at rest", "SSE-KMS CMK", "KMS cost and latency"],
+            ["Encryption in transit", "Deny aws:SecureTransport false", "Legacy HTTP clients break"],
+            ["Audit", "Data events on prefix", "Per-event CloudTrail cost"],
+            ["Network", "VPC endpoint", "Endpoint policy maintenance"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'S3 is private so we are secure.' Strong answer: encryption at rest and in transit, least-privilege IAM, audit data events, block public access, KMS key policies for replication."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Encrypt in transit (TLS) and at rest (SSE-KMS); deny insecure transport in bucket policy.",
+    "IAM roles scoped to prefix; KMS key policies for each service role.",
+    "CloudTrail data events on sensitive prefixes — not entire account.",
+    "60s: SSE-KMS CMK. Prefix IAM. Deny HTTP. CloudTrail data events. Block public access. Tighten roles post-migration.",
+    "Follow-up: cross-account replication KMS key policy?"
+  ],
+  "commonPitfalls": [
+    "DataSync role with full bucket admin — rejection in security review.",
+    "Strong answer: PutObject/List on specific prefix only plus KMS grants.",
+    "KMS key policy missing s3 replication role — FAILED replication.",
+    "Account-wide data events — unnecessary CloudTrail cost."
+  ],
+  "relatedTopicIds": [
+    "aws-15-datasync-agents-tasks",
+    "aws-15-s3-cross-region-replication",
+    "aws-15-batch-vs-streaming"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Presigned URL scoping",
+      "note": "Presigned PUT limited to key prefix resembles IAM resource ARN scope — time-bound and path-bound access for partner uploads.",
+      "futureTopicSlug": "typescript/aws/s3-presigned"
+    },
+    {
+      "language": "javascript",
+      "concept": "HTTPS-only Express middleware",
+      "note": "Express redirect HTTP to HTTPS parallels S3 bucket policy aws:SecureTransport deny — enforce encryption in transit at infrastructure boundary.",
+      "futureTopicSlug": "javascript/backend/tls-enforcement"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Protecting data in transit",
+      "url": "https://docs.aws.amazon.com/whitepapers/latest/s3-security-and-data-protection/data-in-transit.html"
+    },
+    {
+      "title": "CloudTrail data events",
+      "url": "https://docs.aws.amazon.com/awscloudtrail/latest/userguide/logging-data-events.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "datasync-migration"
+}

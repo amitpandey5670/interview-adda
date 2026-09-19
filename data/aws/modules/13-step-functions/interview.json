@@ -1,0 +1,87 @@
+{
+  "moduleId": "aws-13-step-functions",
+  "title": "Step Functions interview drills",
+  "items": [
+    {
+      "question": "Design a state machine for order processing: validate → charge → ship, with refund if ship fails.",
+      "answer": "Standard workflow with Task states for each step. After charge succeeds, ship Task has Catch block on States.TaskFailed routing to refund Task (compensator), then Fail state. Refund must be idempotent. Retry on transient errors (throttling) with exponential backoff in Retry block — separate from compensation on business failure. Store order state in execution input/output JSON passed between states. Tradeoff: Standard gives full audit trail for financial workflows; Express would lose history detail.",
+      "followUps": [
+        "How do you make the refund compensator safe to run twice?",
+        "When would you use Parallel instead of sequential Tasks?"
+      ],
+      "sixtySeconds": "Task validate charge ship. Catch on ship fail routes to refund compensator. Retry throttling only. Standard workflow for audit. Idempotent refund."
+    },
+    {
+      "question": "Your team debates Standard versus Express for a payment authorization flow under 30 seconds.",
+      "answer": "Authorization needs durable audit and possible human review — Standard workflow. Full execution history, exactly-once state transition semantics, integrates with CloudWatch and X-Ray per execution. Express suits high-volume streaming (millions/day) where cost per execution matters and you export logs to CloudWatch Logs. Authorization volume is lower but compliance demands history — pick Standard. Express saves money at scale but sacrifices console history granularity.",
+      "followUps": [
+        "Express workflow maximum duration?",
+        "Can you migrate Standard to Express in place?"
+      ],
+      "sixtySeconds": "Payment auth equals Standard for audit and durability. Express for high volume short jobs under 5 min. Auth is compliance sensitive not throughput sensitive."
+    },
+    {
+      "question": "A Map state over 50,000 CSV rows times out. How do you fix it?",
+      "answer": "Map state has 256 KB input limit and execution history grows per iteration. For large datasets: S3 CSV → Lambda splits into chunks → SQS queue → Map with MaxConcurrency over chunk keys, or use Distributed Map (reads from S3 directly, up to 10,000 parallel child executions). Alternative: Glue job for batch, Step Functions orchestrate start/wait/check. Tune MaxConcurrency to avoid Lambda account throttle. Weak answer: single Map over 50k items — hits payload and history limits.",
+      "followUps": [
+        "What is Distributed Map versus inline Map?",
+        "How does ItemReader work with S3?"
+      ],
+      "sixtySeconds": "50k rows too big for inline Map. Distributed Map from S3 or chunk to SQS first. MaxConcurrency limits parallel Lambda. Glue for heavy ETL orchestrated by Step Functions."
+    },
+    {
+      "question": "Explain waitForTaskToken with SQS for a human approval step.",
+      "answer": "Task state with Resource arn:aws:states:::sqs:sendMessage.waitForTaskToken sends message to approval queue including $$.Task.Token. Worker (or human portal Lambda) reads queue, presents approval UI, calls SendTaskSuccess or SendTaskFailure with token. Execution pauses up to heartbeat timeout (default 1 year with heartbeat). Decouples long human wait from Lambda 15-min limit. Tradeoff: operational complexity vs simple polling loop.",
+      "followUps": [
+        "What happens if heartbeat times out?",
+        "How is this different from Activity workers?"
+      ],
+      "sixtySeconds": "sqs sendMessage waitForTaskToken. Token in message. Worker calls SendTaskSuccess when approved. Pauses execution. Heartbeat for long waits. Better than Lambda polling."
+    },
+    {
+      "question": "Choice state routes wrong branch after Lambda returns nested JSON. Debug steps?",
+      "answer": "Choice conditions use JSONPath — likely path typo. Lambda output is wrapped: check $.Payload.field vs $.field depending on sync integration. Use execution event history in console to inspect state output after Task. Test paths with JSONPath evaluator. Common bug: string versus number comparison (\"200\" vs 200). Fix Variable and comparison operator in Choice. Strong answer: always log execution ARN and inspect history before changing ASL blindly.",
+      "followUps": [
+        "How does ResultPath affect Choice input?",
+        "What is Intrinsic function $states.result?"
+      ],
+      "sixtySeconds": "JSONPath typo in Choice. Check Payload wrapper from Lambda. Inspect execution history. String vs number comparison. ResultPath changes what Choice sees."
+    },
+    {
+      "question": "Step Functions execution shows States.Timeout but Lambda finished in 2 seconds. Cause?",
+      "answer": "Task state TimeoutSeconds shorter than Lambda actual duration including cold start, or heartbeat timeout on waitForTaskToken task. Another cause: sync integration timeout default 60 seconds on some services while Lambda timeout is 300. Check state definition TimeoutSeconds and HeartbeatSeconds. Lambda timeout must be less than state timeout. VPC Lambda cold start plus ENI attach can exceed tight state timeout — increase or use Express with proper limits.",
+      "followUps": [
+        "How do Retry intervals interact with TimeoutSeconds?",
+        "Does Lambda async invocation behave differently in Task?"
+      ],
+      "sixtySeconds": "State TimeoutSeconds too low. Lambda cold start VPC ENI. Sync integration 60s default. Match state timeout to Lambda plus buffer. Check Heartbeat on token tasks."
+    },
+    {
+      "question": "Implement saga compensation for reserve-inventory → charge → ship. Which states fail open versus closed?",
+      "answer": "Forward path closed: each step must succeed before next. On ship failure, compensation path runs refund (if charged) and release-inventory — compensators must succeed or escalate to manual ops Fail state with alert. Use Catch with States.ALL or specific error codes. Compensators get their own Retry for transient failures but not infinite — after N tries, Succeed with flag needsManualReview. Idempotent compensators keyed by orderId. Interview gold: distinguish retryable infra errors from business failures triggering compensation.",
+      "followUps": [
+        "What is the difference between Catch and Retry?",
+        "How do you test compensation without real charges?"
+      ],
+      "sixtySeconds": "Forward closed sequential. Catch routes to compensators refund release. Compensators idempotent. Retry infra errors only. Business fail triggers compensation not retry loop."
+    },
+    {
+      "question": "When do you replace Step Functions with SQS plus Lambda for the same workflow?",
+      "answer": "Simple linear pipeline with no branching and tolerance for at-least-once: SQS plus Lambda is cheaper and simpler. Step Functions wins when you need visual audit, complex branching, human approval, parallel coordination, or saga compensation across multiple services. Rule of thumb: 3+ conditional branches or compensation → Step Functions; single queue consumer → SQS. Tradeoff: Step Functions per-transition cost adds up at extreme volume.",
+      "followUps": [
+        "Can Step Functions invoke SQS sendMessage without wait?",
+        "What is EventBridge Pipes versus Step Functions?"
+      ],
+      "sixtySeconds": "SQS plus Lambda for simple linear at-least-once. Step Functions for branching saga human steps audit. Three plus branches or compensation equals Step Functions."
+    },
+    {
+      "question": "How do you monitor Step Functions in production?",
+      "answer": "CloudWatch metrics: ExecutionsStarted, ExecutionsFailed, ExecutionsTimedOut, ExecutionThrottled. Alarm on failed rate and duration p99. Enable logging to CloudWatch Logs (ALL level for debug, ERROR for prod). X-Ray traces linked when enabled on state machine. Tag executions with correlationId in input. DLQ on async integrations. Dashboard per state machine with anomaly detection on failure spike after deploy.",
+      "followUps": [
+        "What log level do you use in production?",
+        "How do you trace one order through nested Map executions?"
+      ],
+      "sixtySeconds": "Alarm ExecutionsFailed TimedOut Throttled. CloudWatch Logs ERROR level prod. X-Ray on state machine. CorrelationId in input. Dashboard per workflow post-deploy."
+    }
+  ]
+}

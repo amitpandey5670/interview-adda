@@ -1,0 +1,237 @@
+{
+  "id": "aws-08-cloudfront-s3",
+  "slug": "cloudfront-s3",
+  "title": "CloudFront with S3 — Origin Access Control (OAC) and legacy OAI",
+  "moduleId": "aws-08-edge-and-cdn",
+  "order": 4,
+  "hook": "Your static site bucket should stay private. Origin Access Control (OAC) lets CloudFront fetch objects with SigV4-signed requests while the rest of the internet gets AccessDenied.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon Simple Storage Service (S3) is the most common CloudFront origin for static sites, SPAs, and downloadable assets. Origin Access Control (OAC) is the current mechanism: CloudFront assumes an IAM service principal and signs GetObject (and optionally PutObject) requests to a private bucket. Origin Access Identity (OAI) is the legacy model using a special CloudFront user in bucket policy — still supported but AWS recommends OAC for new work because it supports all S3 regions, SSE-KMS, and dynamic HTTP methods."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "OAC",
+              "longForm": "Origin Access Control",
+              "plainDefinition": "CloudFront feature that signs S3 requests so only your distribution can read private objects.",
+              "example": "Bucket policy allows s3:GetObject for cloudfront.amazonaws.com with SourceArn condition."
+            },
+            {
+              "term": "OAI",
+              "longForm": "Origin Access Identity",
+              "plainDefinition": "Legacy CloudFront IAM principal embedded in S3 bucket policy.",
+              "example": "Canonical user ID in bucket policy — migrate to OAC."
+            },
+            {
+              "term": "Block Public Access",
+              "longForm": "S3 Block Public Access",
+              "plainDefinition": "Account and bucket-level guardrails preventing public ACLs and policies.",
+              "example": "Keep all four Block Public Access settings ON for static site buckets."
+            },
+            {
+              "term": "Regional domain",
+              "longForm": "S3 regional REST endpoint",
+              "plainDefinition": "bucket.s3.region.amazonaws.com — required origin domain for OAC, not the website endpoint.",
+              "example": "my-app-static.s3.us-east-1.amazonaws.com"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Public S3 buckets caused thousands of data leaks. The correct pattern: Block Public Access ON, no public ACL, bucket policy grants GetObject only to your CloudFront distribution ARN. Users never talk to S3 directly — only CloudFront URLs. OAC also enables SSE-KMS encrypted objects without making keys public. Interviews test whether you know the bucket policy Principal and Condition format, not just 'make bucket private.'"
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: REST endpoint + OAC + bucket policy with Service principal cloudfront.amazonaws.com and AWS:SourceArn = distribution ARN. Block all public access. Do not use S3 website endpoint with OAC."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "OAC request path",
+          "items": [
+            {
+              "title": "Viewer requests CloudFront URL",
+              "body": "https://app.example.com/assets/logo.png — never hits S3 hostname."
+            },
+            {
+              "title": "Edge cache miss",
+              "body": "CloudFront signs GetObject to bucket.s3.region.amazonaws.com using OAC credentials."
+            },
+            {
+              "title": "S3 evaluates bucket policy",
+              "body": "Policy allows action s3:GetObject when SourceArn matches the distribution."
+            },
+            {
+              "title": "Object returned and cached",
+              "body": "Edge stores response per cache behavior TTL."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Private S3 behind CloudFront OAC",
+            "source": "flowchart LR\n  U[User] -->|HTTPS| CF[CloudFront]\n  CF -->|SigV4 GetObject| S3[(Private S3 bucket)]\n  X[Direct S3 URL] -.->|AccessDenied| S3\n  CF -->|bucket policy\\nSourceArn check| S3"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — OAC, distribution, and bucket policy",
+            "code": "Resources:\n  StaticOAC:\n    Type: AWS::CloudFront::OriginAccessControl\n    Properties:\n      OriginAccessControlConfig:\n        Name: app-static-oac\n        OriginAccessControlOriginType: s3\n        SigningBehavior: always\n        SigningProtocol: sigv4\n\n  StaticBucket:\n    Type: AWS::S3::Bucket\n    Properties:\n      BucketName: app-static-prod-123456789012\n      PublicAccessBlockConfiguration:\n        BlockPublicAcls: true\n        BlockPublicPolicy: true\n        IgnorePublicAcls: true\n        RestrictPublicBuckets: true\n\n  StaticDistribution:\n    Type: AWS::CloudFront::Distribution\n    Properties:\n      DistributionConfig:\n        Enabled: true\n        Origins:\n          - Id: S3Origin\n            DomainName: !GetAtt StaticBucket.RegionalDomainName\n            OriginAccessControlId: !GetAtt StaticOAC.Id\n            S3OriginConfig:\n              OriginAccessIdentity: ''\n        DefaultCacheBehavior:\n          TargetOriginId: S3Origin\n          ViewerProtocolPolicy: redirect-to-https\n          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6\n\n  StaticBucketPolicy:\n    Type: AWS::S3::BucketPolicy\n    Properties:\n      Bucket: !Ref StaticBucket\n      PolicyDocument:\n        Version: '2012-10-17'\n        Statement:\n          - Sid: AllowCloudFrontServicePrincipal\n            Effect: Allow\n            Principal:\n              Service: cloudfront.amazonaws.com\n            Action: s3:GetObject\n            Resource: !Sub '${StaticBucket.Arn}/*'\n            Condition:\n              StringEquals:\n                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${StaticDistribution}'",
+            "explanation": "OAC resource links to S3 origin. Bucket policy grants GetObject only when request comes from that specific distribution ARN. Empty OriginAccessIdentity retires OAI on new origins."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — verify bucket is not public and test direct access",
+            "code": "aws s3api get-public-access-block --bucket app-static-prod-123456789012\n\n# Should return AccessDenied (good)\naws s3api get-object \\\n  --bucket app-static-prod-123456789012 \\\n  --key index.html /tmp/index.html\n\n# CloudFront URL should work\ncurl -sI https://app.example.com/index.html | head -5",
+            "explanation": "Direct S3 API call without CloudFront credentials fails. Only CloudFront OAC-signed requests succeed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — sync build output to S3 with correct cache headers",
+            "code": "aws s3 sync ./dist/browser s3://app-static-prod-123456789012/ \\\n  --delete \\\n  --cache-control 'public, max-age=31536000, immutable' \\\n  --exclude 'index.html' \\\n  --exclude '*.html'\n\naws s3 cp ./dist/browser/index.html s3://app-static-prod-123456789012/index.html \\\n  --cache-control 'no-cache, must-revalidate' \\\n  --content-type 'text/html'",
+            "explanation": "Deploy hashed assets with long TTL. index.html short TTL so CloudFront fetches new script references after sync without invalidation."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — SSE-KMS bucket with OAC",
+            "code": "StaticBucket:\n  Type: AWS::S3::Bucket\n  Properties:\n    BucketEncryption:\n      ServerSideEncryptionConfiguration:\n        - ServerSideEncryptionByDefault:\n            SSEAlgorithm: aws:kms\n            KMSMasterKeyID: !GetAtt AppKey.Arn\n# OAC supports KMS — ensure KMS key policy allows CloudFront via S3\n# OAI did not support KMS the same way; common migration driver",
+            "explanation": "OAC + KMS is a senior talking point. Key policy must allow S3 to decrypt; CloudFront accesses via S3's KMS integration."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "S3 + CloudFront vs public static hosting",
+          "headers": ["Aspect", "Private S3 + OAC + CloudFront", "Public S3 or GitHub Pages"],
+          "rows": [
+            ["Security", "No direct object URL access", "Bucket scrape or hotlink risk"],
+            ["TLS", "Custom domain ACM at edge", "Depends on platform"],
+            ["Deploy", "aws s3 sync + optional invalidation", "git push or sync"],
+            ["Angular prerender", "Upload browser/ folder to S3", "Same build output, different origin"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using S3 static website endpoint (s3-website-) as origin with OAC — use REST regional domain. Forgetting AWS:SourceArn condition — any distribution in the account could read. Leaving Block Public Access off 'temporarily.' Mixing OAI and OAC on the same origin without policy update."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "OAI migration: create OAC, attach to origin, add new bucket policy statement, deploy, verify CloudFront, remove OAI statement, delete OAI. Cross-account S3 origin requires bucket policy in asset account and distribution in CDN account with correct SourceArn. How to prove it in production: attempt direct https://bucket.s3.region.amazonaws.com/key — must 403; CloudWatch S3 4xx should not spike from internet scanners if policy is tight. Use S3 server access logging only if needed — CloudFront access logs are usually enough."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Risk"],
+          "rows": [
+            ["OAC + private bucket", "Least privilege, KMS support", "Policy drift breaks entire site"],
+            ["S3 website endpoint", "Simple redirect rules", "No OAC, public or complex"],
+            ["Separate buckets per env", "Blast radius", "More distributions or behaviors"],
+            ["Lambda@Edge + S3", "Dynamic image resize", "Cost and cold start at origin-request"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'make the bucket public read-only for CloudFront.' Strong answer: OAC with Service principal, SourceArn condition, Block Public Access on, REST endpoint origin."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "OAC signs SigV4 GetObject to private S3; bucket policy allows cloudfront.amazonaws.com with AWS:SourceArn = distribution ARN.",
+    "Use S3 regional REST domain as origin, not the website endpoint; keep Block Public Access enabled.",
+    "Deploy with content-hashed assets (long Cache-Control) and short TTL on index.html — sync via aws s3 sync in CI.",
+    "60s: Private bucket, OAC on distribution, bucket policy SourceArn, users only hit CloudFront. OAI is legacy.",
+    "Follow-up: how does OAC differ for SSE-KMS objects versus SSE-S3?"
+  ],
+  "commonPitfalls": [
+    "Public bucket for static hosting — rejection answer due to data leak history and missing defense in depth.",
+    "Strong answer: OAC + private bucket + SourceArn condition + no website endpoint.",
+    "Bucket policy missing SourceArn — any CloudFront distribution in account could read.",
+    "403 on all paths because OriginAccessControlId not attached to origin."
+  ],
+  "relatedTopicIds": [
+    "aws-08-cdn-fundamentals",
+    "aws-08-cloudfront-distributions",
+    "aws-08-cloudfront-caching"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Angular GitHub Pages vs S3 deploy",
+      "note": "ng build output goes to dist/project/browser. Same files deploy to S3; CloudFront replaces GitHub's CDN. base href must match CloudFront path prefix if not at root.",
+      "futureTopicSlug": "angular/deployment/github-pages"
+    },
+    {
+      "language": "typescript",
+      "concept": "Environment-specific asset URLs",
+      "note": "environment.prod.ts apiUrl points to CloudFront /api/* behavior, not raw S3. Type-safe config prevents shipping dev bucket URLs to production bundles.",
+      "futureTopicSlug": "typescript/config/environment"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Restrict access to an Amazon S3 origin (OAC)",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html"
+    },
+    {
+      "title": "Migrate from OAI to OAC",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html#migrate-from-oai-to-oac"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "cloudfront-origin"
+}

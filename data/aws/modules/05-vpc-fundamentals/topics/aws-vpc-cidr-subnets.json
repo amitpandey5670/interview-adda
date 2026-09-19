@@ -1,0 +1,229 @@
+{
+  "id": "aws-05-aws-vpc-cidr-subnets",
+  "slug": "aws-vpc-cidr-subnets",
+  "title": "VPC, CIDR planning, and public versus private subnets",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 1,
+  "hook": "A Virtual Private Cloud (VPC) is your isolated network in AWS. You carve its Classless Inter-Domain Routing (CIDR) block into subnets per Availability Zone — public subnets reach the internet through an Internet Gateway; private subnets do not expose inbound internet paths by default.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A VPC spans a Region with a private IP CIDR such as 10.0.0.0/16. Subnets are subdivisions bound to one Availability Zone — for example 10.0.1.0/24 in ap-south-1a. Whether a subnet is public or private is determined by its route table: public subnets have 0.0.0.0/0 pointing to an Internet Gateway; private subnets do not. Naming a subnet 'private' without correct routing does not make it private."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "VPC",
+              "longForm": "Virtual Private Cloud",
+              "plainDefinition": "Isolated virtual network in an AWS Region for your resources.",
+              "example": "10.0.0.0/16 VPC hosting production and staging tiers."
+            },
+            {
+              "term": "CIDR",
+              "longForm": "Classless Inter-Domain Routing",
+              "plainDefinition": "Notation for IP address ranges (network prefix + mask).",
+              "example": "/24 subnet provides 256 addresses (251 usable after AWS reserves five)."
+            },
+            {
+              "term": "Public subnet",
+              "longForm": "Public subnet (routing intent)",
+              "plainDefinition": "Subnet whose route table sends default traffic to an Internet Gateway.",
+              "example": "ALB and NAT Gateway subnets are typically public."
+            },
+            {
+              "term": "Private subnet",
+              "longForm": "Private subnet (routing intent)",
+              "plainDefinition": "Subnet without direct IGW default route; outbound via NAT or VPC endpoints.",
+              "example": "Application servers and RDS subnets."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Poor CIDR planning forces painful migrations when you add EKS, Lambda VPC attachments, or peered networks. Putting databases in public subnets expands attack surface. Interview whiteboards start with VPC CIDR and subnet layout — get this wrong and every follow-up question breaks."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: /16 VPC, /24 per AZ for public and private pairs, reserve space for growth. Public = IGW route; private = NAT or endpoints."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "CIDR and subnet layout",
+          "items": [
+            {
+              "title": "Pick VPC CIDR",
+              "body": "Common /16 (65,536 IPs) avoids overlap with on-prem and other VPCs you will peer."
+            },
+            {
+              "title": "Subnet per AZ",
+              "body": "One public and one private /24 per AZ minimum for HA."
+            },
+            {
+              "title": "Associate route tables",
+              "body": "Public RT: 0.0.0.0/0 → igw. Private RT: 0.0.0.0/0 → nat (same AZ)."
+            },
+            {
+              "title": "Reserve future blocks",
+              "body": "Leave unused /24 ranges for EKS, transit, or additional tiers."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "VPC CIDR layout example",
+            "source": "flowchart TB\n  VPC[\"VPC 10.0.0.0/16\"]\n  VPC --> PA[\"Public 10.0.1.0/24 AZ-a\"]\n  VPC --> PB[\"Public 10.0.2.0/24 AZ-b\"]\n  VPC --> PrA[\"Private 10.0.10.0/24 AZ-a\"]\n  VPC --> PrB[\"Private 10.0.20.0/24 AZ-b\"]\n  VPC --> R[\"Reserved 10.0.100.0/24 future\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "VPC with public and private subnets",
+            "code": "AppVpc:\n  Type: AWS::EC2::VPC\n  Properties:\n    CidrBlock: 10.0.0.0/16\n    EnableDnsSupport: true\n    EnableDnsHostnames: true\nPublicSubnetA:\n  Type: AWS::EC2::Subnet\n  Properties:\n    VpcId: !Ref AppVpc\n    CidrBlock: 10.0.1.0/24\n    AvailabilityZone: !Select [0, !GetAZs '']\n    MapPublicIpOnLaunch: true\nPrivateSubnetA:\n  Type: AWS::EC2::Subnet\n  Properties:\n    VpcId: !Ref AppVpc\n    CidrBlock: 10.0.10.0/24\n    AvailabilityZone: !Select [0, !GetAZs '']\n    MapPublicIpOnLaunch: false",
+            "explanation": "MapPublicIpOnLaunch alone does not make a subnet public — route table with IGW route does. DNS flags enable internal and public hostnames."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Verify subnet CIDR and AZ",
+            "code": "aws ec2 describe-subnets \\\n  --filters Name=vpc-id,Values=vpc-0abc123 \\\n  --query \"Subnets[].{Id:SubnetId,Cidr:CidrBlock,AZ:AvailabilityZone,Public:MapPublicIpOnLaunch}\" \\\n  --output table",
+            "explanation": "Audit existing VPC before adding tiers — overlapping CIDR with peer VPC breaks peering."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Calculate usable IPs in /24",
+            "code": "# AWS reserves 5 IPs per subnet: network, router, DNS, future, broadcast\n# /24 = 256 - 5 = 251 usable addresses for ENIs",
+            "explanation": "Large EKS clusters consume many IPs — /28 is too small for node groups; plan /24 or larger for data planes."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "VPC subnets vs on-prem VLANs",
+          "headers": ["Aspect", "AWS VPC subnets", "On-premises / C# backend"],
+          "rows": [
+            ["Isolation", "Route table + security groups", "VLANs + firewall rules"],
+            ["DHCP/DNS", "AmazonProvidedDNS at VPC+2", "Internal DHCP and Active Directory DNS"],
+            ["Public tier", "Subnet with IGW route + ALB", "DMZ VLAN with reverse proxy"],
+            ["ASP.NET Core", "Kestrel on private EC2; ALB in public subnet", "IIS in DMZ; SQL on internal VLAN"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using default VPC layout in production without planning. /28 subnets for EKS (IP exhaustion). Calling subnet private without removing IGW route. Overlapping CIDR with VPN on-prem range."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: VPC IPAM or custom spreadsheet tracking allocated CIDRs; CloudWatch metrics on Subnet IP utilization for EKS; flow logs showing unexpected public subnet traffic. Secondary CIDR blocks extend VPC when primary /16 fills — plan before emergency. IPv6 dual-stack adds /56 — different routing via egress-only IGW for private IPv6 outbound."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Cost / risk"],
+          "rows": [
+            ["/16 VPC + /24 subnets", "Simple mental model, room to grow", "May waste IP space — acceptable on AWS"],
+            ["Single shared private RT", "Fewer resources", "One NAT AZ failure kills all egress"],
+            ["Per-AZ private RT + NAT", "AZ fault isolation", "Three NAT Gateway hourly charges"],
+            ["Secondary CIDR", "Expand without new VPC", "Routing complexity; some services need explicit subnet placement"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Drawing one big subnet for all AZs or placing RDS in a public subnet 'because it needs internet for patches' (use NAT). Strong answer: CIDR map, subnet per AZ, public only for ALB/NAT, private for app and data."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "VPC CIDR is your private address space; subnets are AZ-scoped slices with route table defining public vs private.",
+    "Public subnet = default route to Internet Gateway; private subnet uses NAT Gateway or VPC endpoints for outbound.",
+    "Reserve CIDR blocks early — EKS and Lambda ENIs consume IPs fast.",
+    "60s: /16 VPC, /24 public+private per AZ, IGW route = public. DB always private. Plan non-overlapping CIDR for peering.",
+    "Follow-up: when would you add a secondary CIDR to a VPC?"
+  ],
+  "commonPitfalls": [
+    "Naming subnet 'private' without route table change gets you rejected — routing defines privacy.",
+    "Strong answer: draw CIDR map with IGW and NAT routes labeled per subnet.",
+    "Using /28 for Kubernetes nodes — IP exhaustion during scale-out.",
+    "Overlapping 10.0.0.0/16 with on-prem VPN range breaks routing."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-internet-gateway",
+    "aws-05-aws-route-tables",
+    "aws-05-aws-multi-az-vpc-patterns",
+    "aws-02-aws-availability-zones"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Lambda in VPC ENI consumption",
+      "note": "Each Node.js Lambda in a VPC consumes subnet IPs — same as C# Lambda cold start attaching ENI; plan subnet size unlike stateless on-prem VMs sharing one IP via NAT.",
+      "futureTopicSlug": "aws/lambda/vpc-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Environment VPC per stage",
+      "note": "Separate dev/stage/prod VPC CIDR blocks (10.1.0.0/16, 10.2.0.0/16) mirror separate on-prem VLANs for C# test vs production SQL Server networks.",
+      "futureTopicSlug": "aws/vpc/multi-environment"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "VPC and subnet sizing",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html"
+    },
+    {
+      "title": "VPC with public and private subnets",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Scenario2.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

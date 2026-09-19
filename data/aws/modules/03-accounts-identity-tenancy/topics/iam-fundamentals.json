@@ -1,0 +1,238 @@
+{
+  "id": "aws-03-iam-fundamentals",
+  "slug": "iam-fundamentals",
+  "title": "IAM fundamentals (users, roles, policies, and trust)",
+  "moduleId": "aws-03-accounts-identity-tenancy",
+  "order": 3,
+  "hook": "Identity and Access Management (IAM) answers two questions for every AWS API call: who is making the request, and are they allowed to do it? Roles with temporary credentials beat long-lived access keys in production.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IAM is the authorization layer for AWS. Principals (users, roles, federated identities) authenticate and present credentials. Policies (JSON documents) define Allow and Deny for actions on resources with optional conditions. Roles are assumable identities with trust policies defining who can call sts:AssumeRole. AWS Lambda, EC2, and ECS tasks use execution roles — the service assumes the role on your behalf. IAM is global per account but policies often reference Regional resources."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Principal",
+              "longForm": "IAM principal",
+              "plainDefinition": "An identity that can be authenticated — user, role, or federated user.",
+              "example": "arn:aws:iam::123456789012:role/AppTaskRole"
+            },
+            {
+              "term": "Trust policy",
+              "longForm": "IAM role trust policy",
+              "plainDefinition": "Resource-based policy on a role defining which principals can assume it.",
+              "example": "Lambda service principal lambda.amazonaws.com can assume execution role."
+            },
+            {
+              "term": "Least privilege",
+              "longForm": "Principle of least privilege",
+              "plainDefinition": "Grant only the minimum actions and resources required for a task.",
+              "example": "s3:GetObject on one bucket prefix, not s3:* on *."
+            },
+            {
+              "term": "STS",
+              "longForm": "Security Token Service",
+              "plainDefinition": "Issues temporary security credentials after successful authentication or role assumption.",
+              "example": "Session tokens expire in 1–12 hours depending on configuration."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "IAM is the most tested AWS topic in senior interviews. Misconfigured roles cause data breaches; overly broad AdministratorAccess on application roles signals inexperience. You must explain policy evaluation order: explicit Deny wins, then Allow, then implicit deny. Combine identity policies, resource policies, SCPs, and permission boundaries in enterprise answers."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Users for humans, roles for services. Temporary credentials via STS. Least privilege with conditions — never AdministratorAccess on app roles."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Policy evaluation for an API call",
+          "items": [
+            {
+              "title": "Authenticate principal",
+              "body": "Access key, session token, or web identity federation proves identity."
+            },
+            {
+              "title": "Gather all policies",
+              "body": "Identity policy, resource policy, SCP, permission boundary, session policy."
+            },
+            {
+              "title": "Evaluate",
+              "body": "Explicit Deny overrides any Allow. If no Allow matches, implicit deny."
+            },
+            {
+              "title": "Condition keys",
+              "body": "aws:SourceIp, aws:SecureTransport, s3:prefix further restrict access."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IAM role assumption",
+            "source": "flowchart LR\n  LAMBDA[Lambda function] -->|sts:AssumeRole| ROLE[Execution role]\n  ROLE -->|temporary creds| S3[(S3 bucket)]\n  TRUST[Trust policy] -.->|allows lambda.amazonaws.com| ROLE\n  PERM[Permission policy] -.->|s3:GetObject| ROLE"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: Lambda execution role",
+            "code": "Resources:\n  LambdaRole:\n    Type: AWS::IAM::Role\n    Properties:\n      AssumeRolePolicyDocument:\n        Version: '2012-10-17'\n        Statement:\n          - Effect: Allow\n            Principal:\n              Service: lambda.amazonaws.com\n            Action: sts:AssumeRole\n      ManagedPolicyArns:\n        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole\n      Policies:\n        - PolicyName: ReadAppBucket\n          PolicyDocument:\n            Version: '2012-10-17'\n            Statement:\n              - Effect: Allow\n                Action: s3:GetObject\n                Resource: arn:aws:s3:::app-data-prod/*",
+            "explanation": "Trust policy allows Lambda service to assume role. Permission policy grants only GetObject on one bucket prefix."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: simulate policy before deploy",
+            "code": "aws iam simulate-principal-policy \\\n  --policy-source-arn arn:aws:iam::123456789012:role/AppTaskRole \\\n  --action-names s3:GetObject s3:DeleteObject \\\n  --resource-arns arn:aws:s3:::app-data-prod/report.csv",
+            "explanation": "Policy simulator tests Allow/Deny without making live API calls — use in CI for critical roles."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: create user with MFA and no console password",
+            "code": "aws iam create-user --user-name break-glass-admin\naws iam enable-mfa-device \\\n  --user-name break-glass-admin \\\n  --serial-number arn:aws:iam::123456789012:mfa/break-glass-admin \\\n  --authentication-code1 123456 \\\n  --authentication-code2 789012",
+            "explanation": "Human access via IAM Identity Center (SSO) preferred; MFA mandatory for break-glass local users."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: deny insecure transport",
+            "code": "Policies:\n  - PolicyName: S3TlsOnly\n    PolicyDocument:\n      Version: '2012-10-17'\n      Statement:\n        - Effect: Deny\n          Action: s3:*\n          Resource: '*'\n          Condition:\n            Bool:\n              aws:SecureTransport: 'false'",
+            "explanation": "Explicit Deny on non-TLS S3 calls — condition keys enforce encryption in transit regardless of other Allows."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare users versus roles",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "When to use users vs roles",
+          "headers": ["Principal", "Use for", "Avoid"],
+          "rows": [
+            ["IAM role", "Lambda, EC2, CI/CD, cross-account", "N/A — default for services"],
+            ["IAM user", "Legacy break-glass, programmatic only with MFA", "Application runtime credentials"],
+            ["Federated SSO", "Human console and CLI via Identity Center", "Shared passwords across team"],
+            ["Root user", "Account setup only", "Daily operations — ever"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Embedding access keys in source code or Lambda environment without rotation. Attaching AdministratorAccess to execution roles. Trust policies with overly broad Principal without aws:SourceAccount or ExternalId conditions on cross-account roles."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Policy evaluation is deterministic: every applicable policy is checked; explicit Deny always wins; an Allow must exist in identity or resource policy and not be blocked by SCP or permission boundary. Cross-account S3 access requires both identity policy on the caller and bucket policy on the resource (or ACL — avoid ACLs). How to prove it in production: CloudTrail LookupEvents for AccessDenied, IAM Access Analyzer for unused permissions, and iam simulate-principal-policy in CI pipelines for role regression tests."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Security win", "Cost / risk"],
+          "rows": [
+            ["Role per microservice", "Blast radius contained", "More roles to manage — use IaC"],
+            ["Permission boundaries", "Cap max permissions for delegated admins", "Does not replace least-privilege identity policies"],
+            ["ABAC with session tags", "Dynamic tenant scoping in policy", "Complex condition keys; harder to debug"],
+            ["IAM Identity Center SSO", "No long-lived human keys", "Requires IdP integration and session discipline"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'IAM users for Lambda' or 'AdministratorAccess is fine for dev' — strong answer: roles with temporary credentials, least privilege scoped to resource ARN, simulate policies, and never commit access keys."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "IAM controls who can call which AWS API — roles for services, SSO for humans, no root for daily ops.",
+    "Explicit Deny beats Allow; implicit deny if no match — check SCPs when debugging AccessDenied.",
+    "Use policy simulator and Access Analyzer in CI; rotate and eliminate long-lived access keys.",
+    "60s: Principal authenticates, policies authorize. Roles + STS for services. Least privilege with resource ARNs and conditions. Deny wins. Cross-account needs trust + resource policy.",
+    "Follow-up: how does ABAC with aws:PrincipalTag differ from RBAC?"
+  ],
+  "commonPitfalls": [
+    "Using IAM users with access keys in Lambda — saying that gets you rejected because roles provide temporary auto-rotated credentials.",
+    "Strong answer: execution role with scoped policy; secrets via Secrets Manager; simulate-principal-policy in CI.",
+    "Attaching AWS managed AdministratorAccess to application roles.",
+    "Cross-account role trust without ExternalId or aws:SourceAccount condition — confused deputy risk."
+  ],
+  "relatedTopicIds": [
+    "aws-03-organizations-and-scps",
+    "aws-03-multi-tenant-isolation-overview",
+    "aws-01-control-plane-data-plane",
+    "aws-01-shared-responsibility-model"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Default credential chain in AWS SDK v3",
+      "note": "Node SDK automatically uses execution role credentials on Lambda/ECS — no hardcoded keys. Locally, ~/.aws/credentials or SSO profile. Same pattern as GCP workload identity — environment provides credentials.",
+      "futureTopicSlug": "aws/sdk/credential-provider-chain"
+    },
+    {
+      "language": "typescript",
+      "concept": "Type-safe IAM policy documents",
+      "note": "CDK and IAM Policy Simulator help catch overly broad Action: '*' at synth time. Treat IAM JSON like application code — review in PRs with tests.",
+      "futureTopicSlug": "aws/identity/cdk-iam-patterns"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "IAM policy evaluation logic",
+      "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_evaluation-logic.html"
+    },
+    {
+      "title": "IAM best practices",
+      "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

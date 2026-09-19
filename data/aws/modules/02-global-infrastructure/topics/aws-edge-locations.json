@@ -1,0 +1,202 @@
+{
+  "id": "aws-02-aws-edge-locations",
+  "slug": "aws-edge-locations",
+  "title": "Edge locations and Regional Edge Caches",
+  "moduleId": "aws-02-global-infrastructure",
+  "order": 3,
+  "hook": "Edge locations are CloudFront Points of Presence (PoPs) that cache content close to users. Regional Edge Caches sit between PoPs and your origin Region — they cut latency and origin load but are not places to run your EC2 instances.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS operates hundreds of edge locations worldwide for Amazon CloudFront, AWS Global Accelerator, Route 53, and AWS WAF. A PoP terminates user connections and serves cached objects. Regional Edge Caches (RECs) are larger mid-tier caches in AWS Regions — when a PoP misses, it may fetch from REC before hitting your S3 bucket or Application Load Balancer origin. Edge infrastructure is for delivery and routing, not for hosting your primary database or application servers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "PoP",
+              "longForm": "Point of Presence",
+              "plainDefinition": "Edge site where CloudFront caches and serves content to nearby users.",
+              "example": "User in Delhi hits a PoP with cached JavaScript bundle."
+            },
+            {
+              "term": "REC",
+              "longForm": "Regional Edge Cache",
+              "plainDefinition": "Mid-tier cache between PoPs and origin in an AWS Region.",
+              "example": "PoP miss fetches from REC before calling S3 in ap-south-1."
+            },
+            {
+              "term": "Origin",
+              "longForm": "CloudFront origin",
+              "plainDefinition": "Upstream source CloudFront fetches on cache miss.",
+              "example": "Private S3 bucket or HTTPS Application Load Balancer."
+            },
+            {
+              "term": "TTL",
+              "longForm": "Time to live",
+              "plainDefinition": "How long edge keeps an object before revalidating with origin.",
+              "example": "Cache-Control max-age=86400 for static assets."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Serving static assets directly from an S3 Regional endpoint adds round-trip latency for distant users and exposes your origin to every request. Edge caching improves page load for React or Angular apps and absorbs traffic spikes. Misunderstanding edge versus Region causes candidates to say they 'deploy to edge' when they mean CloudFront in front of a Regional origin."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Edge caches delivery; Region runs compute and data. CloudFront PoP near user, origin stays in my VPC or S3 Region."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "CloudFront cache hierarchy",
+          "items": [
+            {
+              "title": "DNS resolves to nearest PoP",
+              "body": "Route 53 or CloudFront domain maps user to geographically close edge."
+            },
+            {
+              "title": "PoP serves cache hit",
+              "body": "If object is fresh per TTL, response never reaches origin."
+            },
+            {
+              "title": "PoP misses to REC",
+              "body": "Regional Edge Cache may satisfy request before origin fetch."
+            },
+            {
+              "title": "Origin fetch on full miss",
+              "body": "S3, ALB, or API Gateway in home Region returns object; edge stores copy."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Edge cache tiers",
+            "source": "flowchart LR\n  U[User] --> PoP[Edge PoP]\n  PoP -->|HIT| U\n  PoP -->|MISS| REC[Regional Edge Cache]\n  REC -->|MISS| O[Origin in ap-south-1]\n  O --> REC --> PoP --> U"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create CloudFront distribution (CLI excerpt)",
+            "code": "aws cloudfront create-distribution \\\n  --origin-domain-name my-bucket.s3.ap-south-1.amazonaws.com \\\n  --default-root-object index.html",
+            "explanation": "Real templates use JSON distribution config; this shows origin Region domain. Users hit edge, not S3 Regional endpoint directly."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation CloudFront with S3 origin",
+            "code": "Distribution:\n  Type: AWS::CloudFront::Distribution\n  Properties:\n    DistributionConfig:\n      Enabled: true\n      Origins:\n        - Id: S3Origin\n          DomainName: !GetAtt StaticBucket.RegionalDomainName\n          S3OriginConfig:\n            OriginAccessIdentity: \"\"\n          OriginAccessControlId: !GetAtt OriginAccessControl.Id\n      DefaultCacheBehavior:\n        TargetOriginId: S3Origin\n        ViewerProtocolPolicy: redirect-to-https\n        CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "explanation": "OriginAccessControl keeps S3 private. Default cache policy controls TTL and forwarded headers — critical for SPAs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Test cache headers from edge",
+            "code": "curl -sI \"https://d111111abcdef8.cloudfront.net/app.js\" | grep -i x-cache",
+            "explanation": "X-Cache: Hit from cloudfront confirms edge served response. Miss means origin fetch — check TTL and cache key."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Edge CDN vs on-prem static hosting",
+          "headers": ["Aspect", "CloudFront edge", "On-premises / C# backend"],
+          "rows": [
+            ["Static assets", "Cached at PoPs globally", "Served from your data center — distant users pay RTT"],
+            ["API traffic", "Can forward /api/* to ALB with TTL 0", "Kestrel behind F5/ARR in one site"],
+            ["TLS", "Terminated at edge", "You manage certs on load balancer"],
+            ["Invalidation", "Pay per path invalidation", "Deploy new files to IIS wwwroot — instant locally"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Confusing edge PoPs with Regions — you cannot run RDS at edge. Caching authenticated API responses because Authorization was not in cache key. Making S3 bucket public instead of Origin Access Control. Relying on invalidation instead of versioned asset filenames."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Edge PoPs cache content near users; Regional Edge Caches reduce origin load between PoPs and Region.",
+    "Origins live in AWS Regions — edge is delivery layer, not compute layer.",
+    "Use versioned URLs for static assets; mass invalidation is slow and costs money.",
+    "60s: User → PoP → REC → origin Region. Edge = latency + offload. No EC2 at PoP. OAC for private S3.",
+    "Follow-up: how do cache key and TTL differ for /api/* versus /assets/*?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we host at the edge' for EC2 workloads gets you rejected — edge is CDN/routing.",
+    "Strong answer: CloudFront distribution, origin in Region, cache behaviors per path pattern.",
+    "Caching personalized JSON because query string was ignored in cache key.",
+    "Public S3 website endpoint instead of CloudFront with Origin Access Control."
+  ],
+  "relatedTopicIds": [
+    "aws-02-aws-global-traffic-routing",
+    "aws-02-aws-regions-isolation",
+    "aws-05-aws-internet-gateway"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "SPA asset delivery",
+      "note": "React build output (main.[hash].js) maps cleanly to long TTL at edge — same as versioning files in on-prem IIS with cache-busting query strings, but CloudFront scales globally without shipping disks.",
+      "futureTopicSlug": "aws/cloudfront/spa-hosting"
+    },
+    {
+      "language": "typescript",
+      "concept": "API vs static cache behaviors",
+      "note": "Angular/Node apps often split /api to origin ALB with TTL 0 while /assets cache for a year — mirrors separating static files from ASP.NET Core Kestrel API on-prem.",
+      "futureTopicSlug": "aws/cloudfront/api-behaviors"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon CloudFront Developer Guide",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html"
+    },
+    {
+      "title": "How CloudFront delivers content",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/HowCloudFrontWorks.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "cloudfront-origin"
+}

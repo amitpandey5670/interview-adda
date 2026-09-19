@@ -1,0 +1,96 @@
+{
+  "moduleId": "aws-14-cloudwatch-observability",
+  "title": "CloudWatch observability interview drills",
+  "items": [
+    {
+      "question": "Lambda errors spiked 10× but no alarm fired. Your on-call was not paged. What alarm design failed?",
+      "answer": "Likely alarm on raw Errors count without anomaly detection or missing dimension (wrong FunctionName), or period too long smoothing the spike, or alarm in INSUFFICIENT_DATA because metric not published. Fix: alarm on Errors/Sum with period 60s, threshold > 0 for 2 consecutive periods, plus composite with Invocations to catch error rate percentage. Use metric math m1/m2*100. Confirm SNS subscription confirmed. Test alarm with synthetic error. Weak design: alarm only on absolute count when traffic is variable.",
+      "followUps": [
+        "When is INSUFFICIENT_DATA dangerous?",
+        "Composite alarm versus single metric?"
+      ],
+      "sixtySeconds": "Wrong dimension or period smoothed spike. Alarm error rate not raw count. Two periods threshold. SNS confirmed. Test synthetically. INSUFFICIENT_DATA means no data treated as OK."
+    },
+    {
+      "question": "SQS ApproximateAgeOfOldestMessage is 600 seconds. Walk your debug runbook.",
+      "answer": "Step 1: Confirm consumer running — Lambda ConcurrentExecutions, event source mapping enabled. Step 2: Lambda Errors and Throttles metrics. Step 3: DLQ depth — poison messages? Step 4: Logs Insights filter @message like /ERROR|Task timed out/ on function log group. Step 5: X-Ray trace slowest segment — downstream RDS or VPC ENI. Step 6: Visibility timeout versus handler duration. Fix root cause before scaling blindly. Dashboard should correlate queue metrics with Lambda in one pane.",
+      "followUps": [
+        "What if ConcurrentExecutions is zero?",
+        "How do you distinguish visibility timeout from insufficient concurrency?"
+      ],
+      "sixtySeconds": "Age 600s runbook: consumers running? Lambda errors throttles? DLQ depth? Logs Insights errors? X-Ray slow segment? Visibility timeout? Fix root cause not just scale."
+    },
+    {
+      "question": "Custom metrics bill is $3,000/month. How do you reduce cardinality without losing signal?",
+      "answer": "High-cardinality dimensions (userId, requestId per PutMetricData) explode cost. Aggregate: emit per-tenant not per-user, use percentile stats on fewer dimensions. Prefer Embedded Metric Format (EMF) in structured logs — CloudWatch extracts without per-metric API charge pattern. Sample: emit 1% of detailed metrics, always emit aggregates. Delete unused custom metrics. Use Logs Insights for ad-hoc high-cardinality queries instead of metrics. Tradeoff: less per-user granularity in metrics, more log query work.",
+      "followUps": [
+        "What is EMF and how does Lambda support it?",
+        "How many dimensions per metric is safe?"
+      ],
+      "sixtySeconds": "Drop userId dimension. Aggregate per tenant. EMF from logs cheaper. Sample detailed metrics. Logs Insights for ad-hoc. Delete unused custom metrics."
+    },
+    {
+      "question": "Design alarms for a payment Lambda + SQS pipeline that pages only on customer impact.",
+      "answer": "Primary: ApproximateAgeOfOldestMessage > 120s for 3 periods (processing lag). Secondary composite: AND Errors/Sum > 5% of Invocations (quality). DLQ ApproximateNumberOfMessagesVisible > 0 (poison). Avoid paging on single Lambda throttle blip — use anomaly detection on Duration p99. OK actions notify recovery. Runbook link in alarm description. SNS to PagerDuty with severity. Do not alarm on queue depth alone during planned drain.",
+      "followUps": [
+        "Why alarm age not just depth?",
+        "How do you handle planned maintenance?"
+      ],
+      "sixtySeconds": "Page on oldest message age SLA breach plus error rate composite. DLQ any message pages. Anomaly on duration. OK action on recovery. Runbook in description. Not depth alone."
+    },
+    {
+      "question": "X-Ray shows Lambda segment fine but total trace 8 seconds. Where is time going?",
+      "answer": "Downstream subsegments missing — enable X-Ray on called services or SDK instrumentation. Likely: RDS connection outside subsegment, HTTP call without traced client, or SQS receive not traced. VPC ENI cold start shows in init subsegment. Async invocation breaks trace unless propagation headers passed. Fix: AWS SDK X-Ray plugin, active tracing on Lambda, annotate external calls. Logs Insights join trace_id from structured log to find untraced gap.",
+      "followUps": [
+        "How does X-Ray sampling affect this investigation?",
+        "Lambda active tracing versus SDK only?"
+      ],
+      "sixtySeconds": "Missing subsegments for downstream. Enable SDK tracing RDS HTTP. VPC init subsegment for cold start. Propagate trace header async. Join trace_id in logs."
+    },
+    {
+      "question": "Write a Logs Insights query to find duplicate SQS processing in Lambda logs.",
+      "answer": "Assuming structured JSON with messageId: fields @timestamp, messageId, @message | filter @message like /processing/ | stats count() by messageId | filter count > 1 | sort count desc. Correlate with @requestId and @duration. Add filter on errorCode if duplicates correlate with retries. Export to CloudWatch metric filter for ongoing duplicate rate alarm. Strong answer: instrument messageId in every log line at receive and delete.",
+      "followUps": [
+        "How long do Insights queries scan?",
+        "Metric filter from log pattern example?"
+      ],
+      "sixtySeconds": "stats count by messageId filter count greater 1. Structured JSON messageId required. Correlate requestId. Metric filter for ongoing duplicate alarm."
+    },
+    {
+      "question": "Your team has 200 log groups with no retention. Finance flagged the bill. Action plan?",
+      "answer": "Audit: put-retention-policy per group — 7 days dev, 30 days prod, 90 days compliance. Use account-level data protection if PII. Archive to S3 via subscription filter + Firehose for long-term cheap storage. Delete empty groups. Prevent: IaC default retention on creation. Metric: IncomingBytes per group identifies noisy loggers. Tradeoff: shorter retention means older incidents need S3 archive query.",
+      "followUps": [
+        "CloudWatch Logs pricing drivers?",
+        "Subscription filter to OpenSearch versus S3?"
+      ],
+      "sixtySeconds": "Set retention 7 30 90 by env. Archive compliance to S3 Firehose. Delete empty groups. IaC default retention. IncomingBytes finds noisy services."
+    },
+    {
+      "question": "How do you correlate CloudWatch metrics, logs, and X-Ray for one failed checkout?",
+      "answer": "Checkout request generates correlationId at edge, passed through API Gateway, Lambda (log field), SQS message attribute, worker Lambda. X-Ray trace ID equals root — log it as trace_id. Search Logs Insights correlationId across log groups. X-Ray console filter by annotation. Metrics: filter Dimensions on correlationId not possible — use aggregated error metric plus drill-down via logs. Production pattern: single structured log schema with correlationId, trace_id, messageId, orderId.",
+      "followUps": [
+        "Does X-Ray trace ID equal log @requestId?",
+        "API Gateway access logs correlation?"
+      ],
+      "sixtySeconds": "correlationId end to end in structured logs. trace_id from X-Ray in same log line. Insights search correlationId. Metrics aggregate drill via logs not per-request metric."
+    },
+    {
+      "question": "Lambda in VPC has 10-second cold starts. Which observability signals prove ENI is the cause?",
+      "answer": "CloudWatch InitDuration metric spike on cold starts. X-Ray init subsegment long with no business logic. Reports concurrent ENI limit if scaling. Compare VPC versus non-VPC same code — delta isolates ENI. Logs show Init Report duration maxMemoryUsed. Fix observability first: dashboard InitDuration p99 before switching to hyperplane (improved ENI) or reducing VPC scope. Strong answer: prove with InitDuration not guess.",
+      "followUps": [
+        "What is Hyperplane ENI?",
+        "Does provisioned concurrency hide InitDuration?"
+      ],
+      "sixtySeconds": "InitDuration metric p99 spike. X-Ray init subsegment. Compare VPC vs non-VPC. ENI limit Reports. Dashboard InitDuration before architecture change."
+    },
+    {
+      "question": "When do you choose CloudWatch anomaly detection over static thresholds?",
+      "answer": "Traffic with daily/weekly seasonality — static threshold pages every Monday morning spike. Anomaly detection bands adapt to pattern. Use for Invocations, Duration p99, Error rate baselines. Still set absolute ceiling for safety (errors > 50% always pages). Combine: anomaly for trend, static for hard SLA breach. Tradeoff: anomaly needs 2 weeks learning, INSUFFICIENT_DATA during new service launch — use static until baseline exists.",
+      "followUps": [
+        "How many periods for anomaly band?",
+        "Can you combine anomaly AND static in composite?"
+      ],
+      "sixtySeconds": "Anomaly for seasonal traffic patterns. Static ceiling for hard SLA. Two week learning period. Composite both. New service use static until baseline."
+    }
+  ]
+}

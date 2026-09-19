@@ -1,0 +1,238 @@
+{
+  "id": "aws-08-cloudfront-api-alb",
+  "slug": "cloudfront-api-alb",
+  "title": "CloudFront with API Gateway and ALB (dynamic and hybrid origins)",
+  "moduleId": "aws-08-edge-and-cdn",
+  "order": 5,
+  "hook": "Static assets belong on S3 at the edge, but your REST API still lives on Application Load Balancer (ALB) or Amazon API Gateway. CloudFront can front both — giving you one domain, edge TLS, and AWS WAF — if you treat /api/* as uncached and forward the right headers.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Custom origins let CloudFront proxy dynamic traffic to HTTPS endpoints: Application Load Balancer (ALB) targets in EC2 or Amazon Elastic Container Service (ECS), or Amazon API Gateway (HTTP API or REST API) for serverless. The /api/* cache behavior typically uses CachingDisabled, forwards all viewer headers (especially Host and Authorization), and allows POST/PUT/PATCH/DELETE. CloudFront adds latency on cache miss but provides global anycast entry, DDoS mitigation with AWS Shield Standard, and a single ACM certificate for app.example.com serving both static and API paths."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Custom origin",
+              "longForm": "custom origin",
+              "plainDefinition": "Non-S3 origin — ALB, API Gateway, or any HTTPS server.",
+              "example": "api-alb-123.us-east-1.elb.amazonaws.com as origin domain."
+            },
+            {
+              "term": "Origin request policy",
+              "longForm": "origin request policy",
+              "plainDefinition": "Controls which viewer headers, cookies, and query strings CloudFront sends to the origin.",
+              "example": "AllViewer policy forwards Host so ALB listener rule matches."
+            },
+            {
+              "term": "ALB",
+              "longForm": "Application Load Balancer",
+              "plainDefinition": "Layer 7 load balancer routing HTTP requests to targets in a VPC.",
+              "example": "ECS Fargate service behind HTTPS listener on 443."
+            },
+            {
+              "term": "API Gateway",
+              "longForm": "Amazon API Gateway",
+              "plainDefinition": "Managed API front door with throttling, auth, and Lambda or HTTP integrations.",
+              "example": "HTTP API with JWT authorizer integrated with Lambda."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Teams put CloudFront in front of APIs for WAF bot control, geographic blocking, and custom domain TLS — not for caching POST bodies. Misconfiguration causes 502 Bad Gateway (wrong protocol, expired cert on origin), 403 from API Gateway (Host header mismatch), or worse — cached JSON shared across users. Hybrid architectures (SPA on S3, API on ALB) are standard for Angular and React apps; interviews expect you to diagram behaviors and explain why TTL is zero on API paths."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: one distribution, /api/* → ALB or API Gateway with CachingDisabled + AllViewer, static on S3. CloudFront value for APIs = WAF + edge TLS + DDoS, not origin offload."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Dynamic request through CloudFront",
+          "items": [
+            {
+              "title": "Viewer POST /api/orders",
+              "body": "TLS terminates at edge; WAF rules evaluate first if attached."
+            },
+            {
+              "title": "Behavior matches /api/*",
+              "body": "CachingDisabled — every request forwards to origin (no shared cache risk)."
+            },
+            {
+              "title": "Origin request includes Host",
+              "body": "ALB listener rule for api.internal.example.com or API Gateway custom domain must match forwarded Host."
+            },
+            {
+              "title": "Response returns through edge",
+              "body": "Set-Cookie and Cache-Control: private pass through to browser; not stored at edge."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Hybrid CloudFront architecture",
+            "source": "flowchart TB\n  U[Browser] --> CF[CloudFront\\napp.example.com]\n  CF -->|/assets/* cache HIT| S3[(S3 OAC)]\n  CF -->|/api/* TTL 0| ALB[ALB HTTPS]\n  ALB --> ECS[ECS / EC2 targets]\n  CF -.->|optional| APIGW[API Gateway HTTP API]\n  APIGW --> L[Lambda]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — ALB origin with API behavior",
+            "code": "Resources:\n  HybridDistribution:\n    Type: AWS::CloudFront::Distribution\n    Properties:\n      DistributionConfig:\n        Enabled: true\n        Origins:\n          - Id: S3Static\n            DomainName: !GetAtt StaticBucket.RegionalDomainName\n            OriginAccessControlId: !GetAtt StaticOAC.Id\n            S3OriginConfig:\n              OriginAccessIdentity: ''\n          - Id: ApiAlb\n            DomainName: !GetAtt AppAlb.DNSName\n            CustomOriginConfig:\n              HTTPSPort: 443\n              OriginProtocolPolicy: https-only\n              OriginSSLProtocols: [TLSv1.2]\n        CacheBehaviors:\n          - PathPattern: '/api/*'\n            TargetOriginId: ApiAlb\n            ViewerProtocolPolicy: https-only\n            AllowedMethods:\n              - GET\n              - HEAD\n              - OPTIONS\n              - PUT\n              - POST\n              - PATCH\n              - DELETE\n            CachedMethods:\n              - GET\n              - HEAD\n            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled\n            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewer\n            Compress: true\n        DefaultCacheBehavior:\n          TargetOriginId: S3Static\n          ViewerProtocolPolicy: redirect-to-https\n          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "explanation": "ALB origin uses https-only. API behavior disables cache but allows all methods. AllViewer forwards Host header ALB needs for listener rules."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — API Gateway HTTP API as custom origin",
+            "code": "Resources:\n  HttpApi:\n    Type: AWS::ApiGatewayV2::Api\n    Properties:\n      Name: app-http-api\n      ProtocolType: HTTP\n\n  ApiDomain:\n    Type: AWS::ApiGatewayV2::DomainName\n    Properties:\n      DomainName: api-origin.internal.example.com\n      DomainNameConfigurations:\n        - CertificateArn: !Ref InternalCert\n          EndpointType: REGIONAL\n\n  CloudFrontApiOrigin:\n    Type: AWS::CloudFront::Distribution\n    Properties:\n      DistributionConfig:\n        Origins:\n          - Id: HttpApiOrigin\n            DomainName: !GetAtt ApiDomain.RegionalDomainName\n            CustomOriginConfig:\n              HTTPSPort: 443\n              OriginProtocolPolicy: https-only\n        CacheBehaviors:\n          - PathPattern: '/v1/*'\n            TargetOriginId: HttpApiOrigin\n            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad\n            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac",
+            "explanation": "API Gateway needs a custom domain for stable origin hostname. CloudFront viewer domain (app.example.com) differs from origin domain — Host forwarding is critical."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — smoke test API through CloudFront",
+            "code": "# POST through CloudFront (not direct ALB)\ncurl -s -o /dev/null -w '%{http_code}\\n' \\\n  -X POST 'https://app.example.com/api/health' \\\n  -H 'Authorization: Bearer eyJhbG...' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"ping\":true}'\n\n# Compare direct ALB (should match status; use internal VPN)\ncurl -s -o /dev/null -w '%{http_code}\\n' \\\n  -X POST 'https://api-alb-123.us-east-1.elb.amazonaws.com/api/health' \\\n  -H 'Host: app.example.com'",
+            "explanation": "200 through CloudFront confirms behavior routing and header forwarding. 502 often means SSL or security group; 403 often means Host mismatch on API Gateway."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — CloudFront Function viewer request rewrite (SPA API prefix)",
+            "code": "cat > rewrite-api.js <<'EOF'\nfunction handler(event) {\n  var request = event.request;\n  if (request.uri.startsWith('/api/')) {\n    request.headers['x-forwarded-prefix'] = { value: '/api' };\n  }\n  return request;\n}\nEOF\n\naws cloudfront create-function \\\n  --name strip-api-prefix \\\n  --function-config Comment='Tag API requests',Runtime=cloudfront-js-2.0 \\\n  --function-code fileb://rewrite-api.js",
+            "explanation": "CloudFront Functions run at viewer request for sub-millisecond header tweaks. Lambda@Edge needed if you must call AWS APIs or rewrite to a different origin dynamically."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CloudFront API proxy vs dev server proxy",
+          "headers": ["Aspect", "CloudFront /api/* → ALB", "Angular proxy.conf.json / Vite proxy"],
+          "rows": [
+            ["Scope", "Production global entry", "Local dev only"],
+            ["Caching", "Must disable for auth APIs", "No cache by default"],
+            ["WAF", "AWS WAF at edge", "None unless added"],
+            ["CORS", "Same origin if SPA and API share domain", "Proxy hides CORS in dev"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Caching GET /api/users with default policy. Not forwarding Host to API Gateway custom domain. ALB security group allows 0.0.0.0/0 instead of AWS managed prefix list for CloudFront. Using WebSocket through CloudFront to ALB — WebSocket needs separate architecture. Double TLS misconfiguration causing 502."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Choose API Gateway when you want built-in throttling, usage plans, and Lambda integration; choose ALB when you have long-lived containers, WebSocket on separate domain, or gRPC (not via CloudFront). CloudFront to regional API Gateway adds ~extra hop on miss — measure TTFB. How to prove it in production: compare OriginLatency metric with direct ALB access from same region; 502 spike maps to target health or cert expiry. AWS managed prefix list com.amazonaws.global.cloudfront.origin-facing for ALB ingress is tighter than 0.0.0.0/0."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Origin", "Best for", "CloudFront caveat"],
+          "rows": [
+            ["ALB + ECS", "Container APIs, connection reuse", "Forward Host; restrict SG to CloudFront prefix list"],
+            ["API Gateway HTTP", "Serverless, JWT authorizers", "Custom domain required; stage in Host"],
+            ["API Gateway REST", "Legacy features, request validation", "Higher latency and cost than HTTP API"],
+            ["CloudFront only for static", "Simplest API path", "Lose edge WAF on API unless separate subdomain"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying CloudFront caches your API for performance without mentioning TTL 0 and auth headers. Strong answer: CloudFront in front of API is for security and single domain; caching only on explicitly public idempotent GETs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Hybrid distribution: S3 for static, ALB or API Gateway for /api/* with CachingDisabled and AllViewer origin request policy.",
+    "Forward Host header — API Gateway and ALB listener rules depend on it; 403/502 often means header or SSL mismatch.",
+    "Restrict ALB ingress to CloudFront managed prefix list; never open API port to the entire internet when CloudFront fronts it.",
+    "60s: One domain, two origins, API TTL 0, WAF at edge. CloudFront value = TLS + WAF + DDoS, not caching POST.",
+    "Follow-up: API Gateway vs ALB as origin — when would you pick each?"
+  ],
+  "commonPitfalls": [
+    "Enabling cache on authenticated GET /api/me — rejection answer because responses leak across users.",
+    "Strong answer: CachingDisabled default for /api/*; optional short TTL only on public read endpoints with explicit cache key.",
+    "ALB security group open to 0.0.0.0/0 on 443 bypassing CloudFront protection.",
+    "API Gateway 403 because CloudFront sends wrong Host — origin domain must match API custom domain config."
+  ],
+  "relatedTopicIds": [
+    "aws-08-cloudfront-distributions",
+    "aws-08-cloudfront-caching",
+    "aws-08-cloudfront-s3",
+    "aws-08-cdn-fundamentals"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "fetch base URL in production",
+      "note": "Angular HttpClient and fetch use relative /api when SPA and API share CloudFront domain — no CORS preflight. Absolute ALB URL in bundle breaks when CloudFront is required for WAF.",
+      "futureTopicSlug": "javascript/browser/fetch-api"
+    },
+    {
+      "language": "typescript",
+      "concept": "proxy.conf.json vs production CloudFront",
+      "note": "Dev proxy maps /api to localhost:5000. Production maps same path via CloudFront behavior to ALB. environment.ts must not hardcode internal ALB DNS in client bundle.",
+      "futureTopicSlug": "angular/tooling/dev-server-proxy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Use various origins with CloudFront",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/DownloadDistS3AndCustomOrigins.html"
+    },
+    {
+      "title": "Restrict access with AWS managed prefix lists",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/LocationsOfEdgeServers.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "cloudfront-origin"
+}

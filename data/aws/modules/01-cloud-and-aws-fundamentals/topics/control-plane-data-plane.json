@@ -1,0 +1,191 @@
+{
+  "id": "aws-01-control-plane-data-plane",
+  "slug": "control-plane-data-plane",
+  "title": "Control plane versus data plane (who configures vs who serves traffic)",
+  "moduleId": "aws-01-cloud-and-aws-fundamentals",
+  "order": 3,
+  "hook": "The control plane is where you create and configure resources. The data plane is where your users' requests actually flow. Confusing the two leads to wrong answers about outages, permissions, and blast radius.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every AWS service has a control plane API for management operations (create VPC, attach policy, update Auto Scaling group) and a data plane for workload traffic (HTTP requests through Application Load Balancer, object GET/PUT to Simple Storage Service (S3), SQL queries to Relational Database Service (RDS)). Control plane calls use IAM credentials and often hit regional endpoints like ec2.amazonaws.com. Data plane endpoints serve application traffic at high scale."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Control plane",
+              "longForm": "Management API plane",
+              "plainDefinition": "APIs that create, update, delete, and describe resources.",
+              "example": "aws ec2 run-instances is a control plane call."
+            },
+            {
+              "term": "Data plane",
+              "longForm": "Data processing plane",
+              "plainDefinition": "Where customer workload traffic is processed.",
+              "example": "A user downloading a file from S3 hits the data plane."
+            },
+            {
+              "term": "Regional endpoint",
+              "longForm": "AWS regional service endpoint",
+              "plainDefinition": "DNS name scoped to a Region for API calls.",
+              "example": "s3.us-east-1.amazonaws.com for data plane in us-east-1."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Outages are often plane-specific: S3 data plane may be healthy while the console (control plane) is degraded. IAM policies can allow data plane access (s3:GetObject) while denying control plane (s3:CreateBucket). Service Control Policies (SCPs) and permission boundaries frequently target control plane actions to prevent infrastructure tampering while allowing application traffic."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: control plane configures; data plane serves. Different endpoints, different IAM actions, different failure modes."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Tracing a deploy then a request",
+          "items": [
+            {
+              "title": "Control plane: create ALB",
+              "body": "elasticloadbalancing API registers listeners and target groups."
+            },
+            {
+              "title": "Control plane: register targets",
+              "body": "EC2 instances join the target group via API."
+            },
+            {
+              "title": "Data plane: user HTTP GET",
+              "body": "Traffic flows through ALB to healthy targets — no run-instances call involved."
+            },
+            {
+              "title": "Observability split",
+              "body": "CloudTrail logs control plane; access logs and metrics cover data plane."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Control vs data plane",
+            "source": "flowchart LR\n  Admin[IAM principal] -->|control plane API| CP[AWS management APIs]\n  CP -->|creates| RES[ALB / EC2 / S3 bucket]\n  User[End user] -->|data plane traffic| DP[ALB / S3 / RDS]\n  RES --> DP"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: control plane vs data plane actions",
+            "code": "# Control plane — creates infrastructure\naws elbv2 create-load-balancer \\\n  --name app-alb --subnets subnet-a subnet-b --scheme internet-facing\n\n# Data plane — application traffic (curl hits ALB DNS, not this CLI)\ncurl -s https://app-alb-123456789.us-east-1.elb.amazonaws.com/health",
+            "explanation": "create-load-balancer is management API. curl exercises the data plane listener your users hit."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: ALB control plane resource",
+            "code": "Resources:\n  AppLoadBalancer:\n    Type: AWS::ElasticLoadBalancingV2::LoadBalancer\n    Properties:\n      Scheme: internet-facing\n      Subnets:\n        - !Ref PublicSubnetA\n        - !Ref PublicSubnetB\n  Listener:\n    Type: AWS::ElasticLoadBalancingV2::Listener\n    Properties:\n      LoadBalancerArn: !Ref AppLoadBalancer\n      Port: 443\n      Protocol: HTTPS",
+            "explanation": "CloudFormation drives the control plane to declare listeners. User HTTPS traffic is data plane once deployed."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: IAM policy scoped to data plane only",
+            "code": "aws iam create-policy --policy-name S3DataPlaneRead \\\n  --policy-document '{\n    \"Version\": \"2012-10-17\",\n    \"Statement\": [{\n      \"Effect\": \"Allow\",\n      \"Action\": [\"s3:GetObject\", \"s3:PutObject\"],\n      \"Resource\": \"arn:aws:s3:::app-uploads/*\",\n      \"Condition\": {\"Bool\": {\"aws:SecureTransport\": \"true\"}}\n    }]\n  }'",
+            "explanation": "Grant s3:GetObject/PutObject (data plane) without s3:DeleteBucket (control plane). Split permissions by plane in production roles."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare planes across services",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Plane examples",
+          "headers": ["Service", "Control plane example", "Data plane example"],
+          "rows": [
+            ["S3", "CreateBucket, PutBucketPolicy", "GetObject, PutObject"],
+            ["EC2", "RunInstances, TerminateInstances", "SSH/RDP to instance (your app traffic)"],
+            ["RDS", "CreateDBInstance, ModifyDBInstance", "SQL connections on port 5432"],
+            ["Lambda", "CreateFunction, UpdateFunctionCode", "Invoke API processing events"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Granting s3:* when the app only needs GetObject. Assuming a console outage means your API is down. Forgetting CloudTrail only captures control plane API calls, not S3 object access (use S3 server access logging)."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Control plane APIs manage resources; data plane handles customer workload traffic.",
+    "IAM policies should separate management actions from data access — least privilege per plane.",
+    "Use CloudTrail for control plane audit; use service-specific logs for data plane.",
+    "60s: Configure via control plane, serve via data plane. Different endpoints, IAM actions, and outage profiles. s3:CreateBucket vs s3:GetObject is the classic split.",
+    "Follow-up: how do VPC endpoints affect control plane versus data plane traffic?"
+  ],
+  "commonPitfalls": [
+    "Saying CloudTrail logs all S3 access — saying that gets you rejected because object GET/PUT needs S3 access logging or CloudTrail data events.",
+    "Strong answer: CloudTrail management events for control plane; enable data events or access logs for object-level audit.",
+    "Giving application roles ec2:* instead of only what deployment needs.",
+    "Diagnosing user-facing outage by checking only the AWS Health Dashboard control plane status."
+  ],
+  "relatedTopicIds": [
+    "aws-01-shared-responsibility-model",
+    "aws-03-iam-fundamentals",
+    "aws-04-osi-layers-aws-services",
+    "aws-01-aws-service-map"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "AWS SDK client calls",
+      "note": "SDK calls like s3.send(new PutObjectCommand()) hit the S3 data plane API. CloudFormation deploys via control plane. Your Express app serving users is yet another data plane unless it only calls AWS APIs.",
+      "futureTopicSlug": "aws/sdk/control-vs-data"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS API endpoints",
+      "url": "https://docs.aws.amazon.com/general/latest/gr/rande.html"
+    },
+    {
+      "title": "CloudTrail supported services",
+      "url": "https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-aws-service-specific-topics.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "cloudfront-origin"
+}

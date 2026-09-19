@@ -1,0 +1,197 @@
+{
+  "id": "aws-01-billing-and-resources",
+  "slug": "billing-and-resources",
+  "title": "Billing, quotas, and resource limits (pay for what you use)",
+  "moduleId": "aws-01-cloud-and-aws-fundamentals",
+  "order": 5,
+  "hook": "AWS bills in fine-grained units — per hour, per gigabyte, per million requests. Service quotas cap how much you can provision until you request increases. Cost surprises usually come from untagged dev resources and data transfer, not the headline compute price.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS uses pay-as-you-go pricing with no upfront contracts for most services. A t3.micro EC2 instance bills per second; S3 bills storage plus requests; data transfer out to the internet has its own rate card. Service quotas (formerly limits) define maximum resources per Region — for example default EC2 On-Demand instance count. AWS Budgets and Cost Explorer help forecast and attribute spend. Consolidated billing through Organizations rolls up charges across accounts."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Cost Explorer",
+              "longForm": "AWS Cost Explorer",
+              "plainDefinition": "Console tool to visualize and filter historical spend by service, tag, or account.",
+              "example": "Filter last 30 days by tag Environment=prod."
+            },
+            {
+              "term": "Service quota",
+              "longForm": "AWS service quota",
+              "plainDefinition": "Soft or hard cap on resource count or rate per account per Region.",
+              "example": "Default 20 EC2 On-Demand instances per Region."
+            },
+            {
+              "term": "Data transfer",
+              "longForm": "AWS data transfer pricing",
+              "plainDefinition": "Charges for bytes leaving AWS boundaries, especially to the public internet.",
+              "example": "S3 GET served to users worldwide adds egress cost."
+            },
+            {
+              "term": "RI",
+              "longForm": "Reserved Instance",
+              "plainDefinition": "Commitment discount for steady-state EC2 or RDS usage over 1–3 years.",
+              "example": "40% savings for always-on database primary."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior engineers own cost as a non-functional requirement. Interviews ask how you would detect a runaway bill, attribute spend to a team, or right-size infrastructure. Quota errors during deploy pipelines (LimitExceeded) are as common as permission errors — know how to request increases proactively."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Mention tags, Budgets alarms, and reviewing data transfer — not just 'turn off instances at night.'"
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Cost attribution workflow",
+          "items": [
+            {
+              "title": "Tag at creation",
+              "body": "Environment, Team, Application tags on every billable resource."
+            },
+            {
+              "title": "Activate cost allocation tags",
+              "body": "Enable tags in Billing console so Cost Explorer can group by them."
+            },
+            {
+              "title": "Set Budgets alarms",
+              "body": "Alert at 80% of monthly forecast; SNS notifies on-call."
+            },
+            {
+              "title": "Review anomalies",
+              "body": "Cost Anomaly Detection flags unexpected spikes (e.g., NAT Gateway hours)."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Billing flow across accounts",
+            "source": "flowchart LR\n  ACC1[Dev account] --> CB[Consolidated billing]\n  ACC2[Prod account] --> CB\n  CB --> INV[Monthly invoice]\n  TAGS[Cost allocation tags] --> CE[Cost Explorer]\n  CE --> BUD[AWS Budgets alarm]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: cost and usage report query",
+            "code": "aws ce get-cost-and-usage \\\n  --time-period Start=2026-09-01,End=2026-09-14 \\\n  --granularity DAILY \\\n  --metrics UnblendedCost \\\n  --group-by Type=TAG,Key=Environment \\\n  --filter '{\"Tags\":{\"Key\":\"Application\",\"Values\":[\"orders-api\"]}}'",
+            "explanation": "Cost Explorer API groups spend by tag. Requires cost allocation tags activated in billing settings."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: monthly budget with alarm",
+            "code": "Resources:\n  MonthlyBudget:\n    Type: AWS::Budgets::Budget\n    Properties:\n      Budget:\n        BudgetName: prod-monthly\n        BudgetLimit:\n          Amount: 5000\n          Unit: USD\n        TimeUnit: MONTHLY\n        BudgetType: COST\n        CostFilters:\n          TagKeyValue:\n            - user:Environment$prod\n      NotificationsWithSubscribers:\n        - Notification:\n            NotificationType: ACTUAL\n            ComparisonOperator: GREATER_THAN\n            Threshold: 80\n          Subscribers:\n            - SubscriptionType: SNS\n              Address: arn:aws:sns:us-east-1:123456789012:billing-alerts",
+            "explanation": "Budgets trigger SNS at 80% of actual spend — operational guardrail before invoice shock."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: request quota increase",
+            "code": "aws service-quotas request-service-quota-increase \\\n  --service-code vpc \\\n  --quota-code L-F678F1CE \\\n  --desired-value 10 \\\n  --region us-east-1",
+            "explanation": "Hitting VPC per Region limit during CI deploy? Request increase before production launch, not during incident."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare pricing models",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "EC2 pricing options",
+          "headers": ["Model", "Best for", "Risk"],
+          "rows": [
+            ["On-Demand", "Spiky or unknown load", "Highest unit cost"],
+            ["Reserved / Savings Plans", "Steady baseline", "Commitment if workload changes"],
+            ["Spot", "Fault-tolerant batch", "Interruption with 2-minute notice"],
+            ["Dedicated Host", "License compliance (BYOL)", "Highest management overhead"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Leaving NAT Gateways and idle Elastic IPs running in dev. Forgetting inter-AZ data transfer is billed. Not activating cost allocation tags — tags exist on resources but do not appear in Cost Explorer until enabled."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "AWS bills per service dimension — compute time, storage, requests, and especially data transfer out.",
+    "Service quotas cap provisioning; request increases before launch, not during deploy failure.",
+    "Tag everything at creation and activate cost allocation tags for team attribution.",
+    "60s: Pay-as-you-go with tags and Budgets. Big surprises: egress, NAT Gateway, untagged dev. Quotas cause LimitExceeded — use Service Quotas API. Consolidated billing via Organizations.",
+    "Follow-up: how do Savings Plans differ from Reserved Instances?"
+  ],
+  "commonPitfalls": [
+    "Saying 'AWS is cheap' without mentioning egress and NAT — that answer ignores the most common bill spikes.",
+    "Strong answer: attribute with tags, alarm with Budgets, right-size compute, put CloudFront in front of S3 to cut egress.",
+    "Deploying without checking VPC or EC2 quotas in the target Region.",
+    "Creating resources without mandatory tags — finance cannot allocate spend."
+  ],
+  "relatedTopicIds": [
+    "aws-01-what-is-cloud-computing",
+    "aws-03-tags-and-environments",
+    "aws-03-aws-account-boundary",
+    "aws-04-nat-routing-gateways"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Lambda billing vs EC2",
+      "note": "Lambda bills per invocation and GB-second — great for sporadic Node handlers. Always-on Express on EC2 bills 24/7 regardless of traffic. Pick compute model based on utilization curve.",
+      "futureTopicSlug": "aws/compute/cost-comparison"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Pricing",
+      "url": "https://aws.amazon.com/pricing/"
+    },
+    {
+      "title": "Service Quotas",
+      "url": "https://docs.aws.amazon.com/servicequotas/latest/userguide/intro.html"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

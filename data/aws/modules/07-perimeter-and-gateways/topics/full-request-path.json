@@ -1,0 +1,202 @@
+{
+  "id": "aws-07-full-request-path",
+  "slug": "full-request-path",
+  "title": "Full request path (client to target)",
+  "moduleId": "aws-07-perimeter-and-gateways",
+  "order": 6,
+  "hook": "Tracing one HTTPS request from a browser through Domain Name System (DNS), Amazon CloudFront, AWS WAF, an Application Load Balancer (ALB), security groups, and finally to an Amazon Elastic Compute Cloud (EC2) or Elastic Container Service (ECS) target is the perimeter interview capstone — every hop has rules that can drop traffic.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A typical public web API path: Route53 resolves app.example.com to CloudFront; CloudFront terminates TLS and forwards to an ALB origin (or Lambda@Edge); AWS WAF Web ACL filters at CloudFront or ALB; ALB listener rules route to a target group; security groups on ALB ENI and target ENI must both allow the flow; Network Access Control Lists (NACLs) on subnets optionally filter. Response path reverses with stateful SG return and stateless NACL outbound rules."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "Route53", "longForm": "Amazon Route 53", "plainDefinition": "DNS service mapping hostnames to CloudFront or ALB endpoints.", "example": "app.example.com ALIAS to d111111.cloudfront.net." },
+            { "term": "CloudFront", "longForm": "Amazon CloudFront", "plainDefinition": "Content delivery network (CDN) edge caching and TLS termination.", "example": "Cache GET /static/* at edge; forward /api/* to ALB." },
+            { "term": "Origin", "longForm": "CloudFront origin", "plainDefinition": "Backend source CloudFront fetches from on cache miss.", "example": "ALB DNS name as custom origin with HTTPS only." },
+            { "term": "Target group", "longForm": "ALB target group", "plainDefinition": "Registered backends receiving balanced traffic from ALB.", "example": "ECS Fargate tasks on port 8080 in awsvpc mode." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "503 errors without logs often mean a hop silently dropped traffic — wrong security group, WAF block, or target failing health checks. Senior interviews ask you to narrate the full path and which diagnostic tool applies per hop: WAF sampled requests, ALB access logs, VPC Flow Logs, target application logs."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Debug order",
+          "body": "DNS resolves? CloudFront/WAF block? ALB healthy targets? SG chain ALB→target? App listening on port?"
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Client to target packet story",
+          "items": [
+            { "title": "DNS", "body": "Client resolves app.example.com → CloudFront edge or Route53 alias to ALB." },
+            { "title": "TLS at edge", "body": "CloudFront or ALB terminates HTTPS; certificate from ACM." },
+            { "title": "WAF evaluation", "body": "Web ACL rules allow or block before origin fetch." },
+            { "title": "ALB routing", "body": "Listener rule forwards to target group; health checks gate targets." },
+            { "title": "SG + NACL", "body": "ALB SG allows 443 inbound; target SG allows 8080 from ALB SG; NACL stateless rules if custom." },
+            { "title": "Application", "body": "Node/Express or NestJS handles HTTP; response reverses path." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Full request path",
+            "source": "sequenceDiagram\n  participant C as Client\n  participant R as Route53\n  participant CF as CloudFront\n  participant W as AWS WAF\n  participant A as ALB\n  participant S as Security groups\n  participant T as ECS target\n  C->>R: DNS query\n  R-->>C: CloudFront IP\n  C->>CF: HTTPS GET /api/orders\n  CF->>W: Evaluate Web ACL\n  W->>A: Forward on allow\n  A->>S: Check ALB/target SGs\n  S->>T: HTTP to port 8080\n  T-->>C: JSON response"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — CloudFront to ALB with WAF",
+            "code": "Distribution:\n  Type: AWS::CloudFront::Distribution\n  Properties:\n    DistributionConfig:\n      WebACLId: !GetAtt CloudFrontWebAcl.Arn\n      Origins:\n        - Id: alb-origin\n          DomainName: !GetAtt Alb.DNSName\n          CustomOriginConfig:\n            OriginProtocolPolicy: https-only\n      DefaultCacheBehavior:\n        TargetOriginId: alb-origin\n        ViewerProtocolPolicy: redirect-to-https\n        AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]\n        CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+            "explanation": "Managed CachingDisabled policy for dynamic APIs. WAF Web ACL ID on distribution for edge filtering."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — trace DNS to CloudFront",
+            "code": "dig +short app.example.com\ncurl -sI https://app.example.com/api/health | grep -E 'HTTP|x-cache|via'",
+            "explanation": "x-cache: Hit from cloudfront confirms edge path. Miss forwards to ALB origin."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — ALB target health",
+            "code": "aws elbv2 describe-target-health \\\n  --target-group-arn $TG_ARN \\\n  --query 'TargetHealthDescriptions[*].[Target.Id,TargetHealth.State,TargetHealth.Reason]'",
+            "explanation": "Target unhealthy with running container implicates SG or wrong port in target group."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — VPC Reachability Analyzer",
+            "code": "aws ec2 create-network-insights-path \\\n  --source ip.10.0.10.5 \\\n  --destination-port 8080 \\\n  --protocol tcp \\\n  --destination arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer/app/alb/abc",
+            "explanation": "Analyzes SG, NACL, and route table path from source IP to ALB — faster than manual SG guessing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Observability per hop",
+          "headers": ["Hop", "AWS diagnostic", "Node.js / TypeScript signal"],
+          "rows": [
+            ["WAF block", "get-sampled-requests, CloudWatch BlockedRequests", "No app log — request never arrived"],
+            ["ALB 502", "Target health, access logs", "App crash — logs in CloudWatch/container"],
+            ["SG drop", "VPC Flow Logs REJECT", "No application log — SYN timeout"],
+            ["App 500", "Target logs, X-Ray trace", "Stack trace in TypeScript error handler"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "CloudFront origin protocol HTTP to ALB that only listens HTTPS. ALB security group allows 443 but target SG blocks ALB SG on app port. Caching enabled on POST /api/* — stale or broken mutations."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "CloudFront origin-facing security group should allow only CloudFront managed prefix list (or use Origin Access Control for S3). ALB preserves X-Forwarded-For; trust proxy settings in Express/NestJS matter for audit logs. How to prove it in production: end-to-end synthetic canary in CloudWatch Synthetics; correlate ALB request count with WAF AllowedRequests; Flow Logs on target subnet during incident."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Path variant", "Win", "Cost / risk"],
+          "rows": [
+            ["CloudFront + ALB + WAF", "Global edge + L7 routing", "More hops to debug"],
+            ["ALB only (no CF)", "Simpler path", "No edge cache; origin exposed to global clients"],
+            ["API Gateway + Lambda", "Serverless scale", "Different path — no ALB target SG chain"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Stopping at 'check security groups' without naming every hop. Strong answer: DNS → CloudFront → WAF → ALB listener → target group health → dual SG chain → NACL if custom → app — with the right diagnostic per layer."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Full path: Route53 → CloudFront → WAF → ALB → security groups → target (ECS/EC2).",
+    "WAF can block before origin; unhealthy targets cause ALB 502 without app logs.",
+    "Both ALB SG and target SG must allow the flow; NACL outbound ephemeral if custom NACL.",
+    "60s: Narrate each hop. DNS first. Edge TLS and WAF. ALB routes to healthy targets. SG chain is top cause of silent drops. Flow Logs and Reachability Analyzer prove path.",
+    "Follow-up: how does Origin Access Control change the S3 origin path?"
+  ],
+  "commonPitfalls": [
+    "Debugging only application logs when WAF blocked at edge — gets you rejected; no request reached origin.",
+    "Strong answer: check WAF metrics and sampled requests before SSH to EC2.",
+    "Target SG allows 0.0.0.0/0 instead of ALB SG reference.",
+    "CloudFront caching dynamic API responses — users see stale data after deploy."
+  ],
+  "relatedTopicIds": [
+    "aws-07-security-groups",
+    "aws-07-network-acls",
+    "aws-07-alb-nlb-gwlb",
+    "aws-07-waf-shield",
+    "aws-06-hybrid-scenario"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "trust proxy and X-Forwarded-For",
+      "note": "Express app.set('trust proxy', true) needed behind ALB/CloudFront for accurate client IP in logs — without it, req.ip shows ALB private IP.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Health check endpoint design",
+      "note": "NestJS /health should hit dependencies lightly — ALB health check failures drain targets before TypeScript exceptions appear in user-facing 502s.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "CloudFront how it works", "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Introduction.html" },
+    { "title": "VPC Reachability Analyzer", "url": "https://docs.aws.amazon.com/vpc/latest/reachability/what-is-reachability-analyzer.html" }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "cloudfront-origin"
+}

@@ -1,0 +1,236 @@
+{
+  "id": "aws-14-cloudwatch-logs",
+  "slug": "cloudwatch-logs",
+  "title": "CloudWatch Logs (groups, streams, and Logs Insights)",
+  "moduleId": "aws-14-cloudwatch-observability",
+  "order": 2,
+  "hook": "CloudWatch Logs stores application output in log groups and streams. When metrics show a spike, Logs Insights queries answer why — if you logged structured JSON with correlation IDs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Log group is the container (/aws/lambda/my-fn). Log stream is a sequence from one instance. Retention defaults to never expire. Logs Insights runs SQL-like queries across groups. Subscription filters stream to Lambda, Kinesis, or Firehose. Metric filters turn log patterns into CloudWatch metrics."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Log group",
+              "longForm": "CloudWatch log group",
+              "plainDefinition": "Named container for related log streams.",
+              "example": "/aws/lambda/payment-processor"
+            },
+            {
+              "term": "Logs Insights",
+              "longForm": "CloudWatch Logs Insights",
+              "plainDefinition": "Interactive query language for log analysis.",
+              "example": "filter @message like /ERROR/ | stats count() by bin(5m)"
+            },
+            {
+              "term": "Retention",
+              "longForm": "log retention period",
+              "plainDefinition": "Days before automatic log deletion.",
+              "example": "30 days on prod Lambda groups"
+            },
+            {
+              "term": "Structured logging",
+              "longForm": "JSON structured logs",
+              "plainDefinition": "Machine-parseable fields in each log line.",
+              "example": "{\"level\":\"error\",\"orderId\":\"ord-1\",\"trace_id\":\"1-abc\"}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Unstructured printf debugging does not scale across 50 Lambda functions. Structured logs with orderId and trace_id make Insights queries fast during incidents. No retention policy means infinite storage cost."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: JSON logs with correlationId. Insights filter and stats. Retention per env. Metric filter for error pattern alarm."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Incident log investigation",
+          "items": [
+            {
+              "title": "Identify log groups",
+              "body": "Lambda, API Gateway, Step Functions execution logs."
+            },
+            {
+              "title": "Time-bound query",
+              "body": "Narrow to incident window in Insights."
+            },
+            {
+              "title": "Filter and parse",
+              "body": "filter on errorCode; parse JSON fields."
+            },
+            {
+              "title": "Correlate",
+              "body": "Join trace_id across groups for full path."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Log flow",
+            "source": "flowchart LR\n  L[Lambda] -->|JSON stdout| LG[/aws/lambda/fn]\n  LG --> INS[Logs Insights]\n  LG --> MF[Metric filter]\n  MF --> M[Error count metric]\n  LG --> SF[Subscription filter]\n  SF --> FH[Firehose to S3]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — structured log helper",
+            "code": "function log(level: string, fields: Record<string, unknown>) {\n  console.log(JSON.stringify({\n    level,\n    timestamp: new Date().toISOString(),\n    service: 'payment-processor',\n    ...fields,\n  }));\n}\n\nlog('info', { orderId: 'ord-1', action: 'charge_start', messageId: 'msg-abc' });",
+            "explanation": "Consistent fields enable Insights queries: fields orderId | filter level = 'error'"
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Logs Insights — duplicate messageId detection",
+            "code": "QUERY='fields @timestamp, messageId, orderId\n| filter ispresent(messageId)\n| stats count() as cnt by messageId\n| filter cnt > 1\n| sort cnt desc'\n\naws logs start-query \\\n  --log-group-name /aws/lambda/payment-processor \\\n  --start-time $(date -u -v-1H +%s) \\\n  --end-time $(date -u +%s) \\\n  --query-string \"$QUERY\"",
+            "explanation": "Proves duplicate SQS processing — pairs with idempotency metrics."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — log group with retention",
+            "code": "Resources:\n  PaymentLogGroup:\n    Type: AWS::Logs::LogGroup\n    Properties:\n      LogGroupName: /aws/lambda/payment-processor\n      RetentionInDays: 30\n  ErrorMetricFilter:\n    Type: AWS::Logs::MetricFilter\n    Properties:\n      LogGroupName: !Ref PaymentLogGroup\n      FilterPattern: '{ $.level = \"error\" }'\n      MetricTransformations:\n        - MetricName: PaymentErrors\n          MetricNamespace: Custom/Payments\n          MetricValue: '1'",
+            "explanation": "JSON filter pattern on structured level field creates alarmable metric."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — set retention on existing groups",
+            "code": "for group in $(aws logs describe-log-groups --query 'logGroups[].logGroupName' --output text); do\n  aws logs put-retention-policy \\\n    --log-group-name \"$group\" \\\n    --retention-in-days 14\ndone",
+            "explanation": "Bulk retention fix after cost audit — dev groups can be 7 days."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CloudWatch Logs vs ELK stack",
+          "headers": ["Aspect", "CloudWatch Logs", "Elasticsearch"],
+          "rows": [
+            ["Query", "Logs Insights", "KQL/Lucene"],
+            ["Retention cost", "Per GB ingested/stored", "Cluster sizing"],
+            ["Lambda native", "Automatic log group", "Shipper agent needed"],
+            ["Correlation", "@requestId, custom fields", "Same with mapping"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "printf strings only — cannot query. No retention — bill surprise. Logging secrets or PII. Huge payloads in log lines — cost and truncation."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: IncomingBytes metric per log group identifies noisy loggers. Insights query scancost scales with data scanned — narrow time range. Cross-account observability via OAM or centralized logging account. Lambda Powertools Logger standardizes structure."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "When", "Downside"],
+          "rows": [
+            ["JSON structured", "All production services", "Discipline required"],
+            ["Metric filter", "Known error patterns", "Pattern maintenance"],
+            ["Firehose archive", "Compliance long retention", "Query latency"],
+            ["Verbose debug logs", "Dev only", "Prod cost if left on"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'I grep CloudWatch in the console.' Strong answer: structured JSON, Insights queries, correlation IDs, retention policy, metric filters for alarms."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Log group + streams; set retention; structured JSON for Insights.",
+    "Logs Insights: filter, parse, stats — primary incident tool.",
+    "Metric filters turn log patterns into alarmable metrics.",
+    "60s: JSON logs correlationId. Insights filter stats. Retention 30d prod. Metric filter errors.",
+    "Follow-up: subscription filter to Firehose for compliance archive?"
+  ],
+  "commonPitfalls": [
+    "Unstructured logs — cannot query at scale.",
+    "Strong answer: JSON with orderId messageId trace_id on every line.",
+    "Never-expire retention on 200 groups.",
+    "Logging full credit card numbers — compliance violation."
+  ],
+  "relatedTopicIds": [
+    "aws-14-cloudwatch-metrics",
+    "aws-14-cloudwatch-alarms",
+    "aws-14-lambda-sqs-debug-runbook"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Pino / Winston structured logging",
+      "note": "Pino JSON output maps directly to CloudWatch Insights field extraction — same pattern as serilog structured logging in .NET.",
+      "futureTopicSlug": "typescript/backend/logging"
+    },
+    {
+      "language": "javascript",
+      "concept": "console.log in Lambda",
+      "note": "Each console.log is a log event — batch into single JSON line to reduce Events count and improve queryability.",
+      "futureTopicSlug": "javascript/aws/lambda-logging"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "CloudWatch Logs Insights",
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/AnalyzingLogData.html"
+    },
+    {
+      "title": "Log group retention",
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/Working-with-log-groups-and-streams.html"
+    }
+  ],
+  "animationHint": "flow"
+}

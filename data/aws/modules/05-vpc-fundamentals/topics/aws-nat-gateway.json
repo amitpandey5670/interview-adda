@@ -1,0 +1,229 @@
+{
+  "id": "aws-05-aws-nat-gateway",
+  "slug": "aws-nat-gateway",
+  "title": "NAT Gateway versus alternatives (NAT instance, egress-only)",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 3,
+  "hook": "A NAT Gateway lets instances in private subnets initiate outbound internet connections without accepting inbound connections from the internet. It lives in a public subnet, uses an Elastic IP, and is the managed replacement for legacy NAT instances.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Network Address Translation (NAT) Gateway is a managed service that translates private IP outbound traffic to its Elastic IP. Private subnet route tables point 0.0.0.0/0 to the NAT Gateway in the same Availability Zone. NAT Gateway is highly available within an AZ but AZ-specific — deploy one NAT per AZ for production. Alternatives: NAT instance (self-managed EC2, legacy), VPC endpoints (avoid NAT for AWS API traffic to S3/DynamoDB), egress-only Internet Gateway for IPv6 outbound."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "NAT Gateway",
+              "longForm": "NAT Gateway",
+              "plainDefinition": "Managed outbound internet translation for private subnets.",
+              "example": "Private EC2 yum update via NAT in public subnet."
+            },
+            {
+              "term": "SNAT",
+              "longForm": "Source network address translation",
+              "plainDefinition": "Rewrites source IP to NAT public IP for outbound packets.",
+              "example": "10.0.10.5 → NAT EIP when calling api.github.com."
+            },
+            {
+              "term": "NAT instance",
+              "longForm": "NAT instance (legacy)",
+              "plainDefinition": "EC2 you manage as NAT — patch, scale, and HA yourself.",
+              "example": "t3.micro with iptables MASQUERADE — not recommended for production."
+            },
+            {
+              "term": "Gateway endpoint",
+              "longForm": "VPC gateway endpoint",
+              "plainDefinition": "Private route to S3/DynamoDB without NAT.",
+              "example": "Route s3 prefix list to vpce — saves NAT data processing charges."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Private subnets are standard for app and data tiers — they still need outbound HTTPS for patches, package managers, and external APIs. One shared NAT across AZs is a frequent outage pattern when that AZ fails. NAT Gateway hourly and per-GB charges surprise teams who skip VPC endpoints for S3-heavy workloads."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: NAT per AZ in public subnet, private RT 0.0.0.0/0 → nat in same AZ. Cut NAT bill with gateway endpoints for S3/DynamoDB."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Outbound path through NAT",
+          "items": [
+            {
+              "title": "Allocate Elastic IP",
+              "body": "NAT Gateway requires EIP in public subnet."
+            },
+            {
+              "title": "Create NAT in public subnet",
+              "body": "One NAT per AZ; place in public subnet with IGW route."
+            },
+            {
+              "title": "Private route table",
+              "body": "0.0.0.0/0 → nat-gateway-id for subnets in that AZ."
+            },
+            {
+              "title": "Security group egress",
+              "body": "Instance SG must allow outbound HTTPS; NAT does not replace SG."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "NAT outbound flow",
+            "source": "flowchart LR\n  EC2[Private EC2 10.0.10.5] -->|443 outbound| NAT[NAT Gateway + EIP]\n  NAT --> IGW[Internet Gateway]\n  IGW --> API[api.github.com]\n  API --> IGW --> NAT --> EC2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "NAT Gateway per AZ",
+            "code": "NatEipA:\n  Type: AWS::EC2::EIP\n  Domain: vpc\nNatGatewayA:\n  Type: AWS::EC2::NatGateway\n  Properties:\n    AllocationId: !GetAtt NatEipA.AllocationId\n    SubnetId: !Ref PublicSubnetA\nPrivateRouteA:\n  Type: AWS::EC2::Route\n  Properties:\n    RouteTableId: !Ref PrivateRouteTableA\n    DestinationCidrBlock: 0.0.0.0/0\n    NatGatewayId: !Ref NatGatewayA",
+            "explanation": "Repeat for each AZ with separate private route table — never share one NAT route across AZs in HA design."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Test outbound from private instance",
+            "code": "aws ssm start-session --target i-0private123\n# on instance:\ncurl -sI https://pypi.org | head -1\ntraceroute -n 8.8.8.8",
+            "explanation": "Success confirms NAT path. Failure: check route table, NAT state, SG egress, NACL."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "S3 gateway endpoint to reduce NAT traffic",
+            "code": "S3Endpoint:\n  Type: AWS::EC2::VPCEndpoint\n  Properties:\n    VpcId: !Ref AppVpc\n    ServiceName: !Sub \"com.amazonaws.${AWS::Region}.s3\"\n    RouteTableIds:\n      - !Ref PrivateRouteTableA\n    VpcEndpointType: Gateway",
+            "explanation": "S3 traffic stays on AWS network — no NAT GB charge. Interface endpoints needed for most other services."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "NAT Gateway vs corporate proxy",
+          "headers": ["Aspect", "NAT Gateway", "On-premises / C# backend"],
+          "rows": [
+            ["Outbound internet", "SNAT to Elastic IP", "Corporate HTTP proxy with auth"],
+            ["Patching NuGet/npm", "Direct HTTPS via NAT", "Proxy.pac or NuGet.config proxy"],
+            ["HA", "NAT per AZ (managed)", "Dual proxy appliances"],
+            ["AWS API traffic", "VPC endpoints avoid NAT", "Direct internet or ExpressRoute to AWS"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single NAT for all AZs. NAT in private subnet (must be public). Forgetting EIP Domain vpc. No outbound SG rule on instance. Ignoring VPC endpoints and paying NAT per GB for S3 access."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: CloudWatch NAT Gateway metrics BytesOutToDestination and ErrorPortAllocation; VPC flow logs showing SNAT to NAT EIP; Cost Explorer NAT line item — often reduced 30–50% with S3/DynamoDB gateway endpoints and interface endpoints for ECR/API. NAT instance only when regulatory requirement demands packet inspection you implement yourself — otherwise managed NAT. IPv6 private subnets use egress-only IGW instead of NAT for outbound."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Option", "Benefit", "Cost / risk"],
+          "rows": [
+            ["Managed NAT Gateway", "AZ-resilient within AZ, no patching", "Hourly + per-GB — expensive at scale"],
+            ["NAT instance", "Custom inspection, cheaper at huge scale", "You own HA, patching, bandwidth"],
+            ["Gateway + interface endpoints", "Private AWS API access, lower NAT bill", "Interface endpoint hourly per AZ"],
+            ["Single NAT all AZs", "Lower cost", "AZ outage kills all egress — rejected in prod interviews"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "One NAT in one AZ serving three AZs private subnets. Strong answer: NAT per AZ, endpoints for S3/ECR, monitor ErrorPortAllocation during high connection bursts."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "NAT Gateway provides outbound-only internet from private subnets; place in public subnet with Elastic IP.",
+    "Deploy NAT per AZ with matching private route table — single NAT is an AZ single point of failure.",
+    "VPC endpoints reduce NAT traffic and cost for AWS service API calls.",
+    "60s: Private RT → NAT (same AZ) → IGW → internet. Inbound blocked. NAT per AZ. Endpoints for S3.",
+    "Follow-up: NAT Gateway versus egress-only IGW for IPv6?"
+  ],
+  "commonPitfalls": [
+    "One NAT for entire VPC gets you rejected — name per-AZ NAT and route tables.",
+    "Strong answer: diagram NAT in public subnet, private route, optional S3 endpoint.",
+    "NAT in private subnet — creation fails or no IGW path.",
+    "ErrorPortAllocation during connection storms — need more NAT capacity or connection pooling."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-internet-gateway",
+    "aws-05-aws-route-tables",
+    "aws-05-aws-elastic-vs-ephemeral-ip",
+    "aws-05-aws-multi-az-vpc-patterns"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "npm ci in private subnet CI",
+      "note": "CodeBuild in private subnet needs NAT or VPC endpoints for npm registry — same as on-prem build agent using corporate proxy to reach npm for Node deploy artifacts.",
+      "futureTopicSlug": "aws/codebuild/vpc-egress"
+    },
+    {
+      "language": "typescript",
+      "concept": "External API calls from Lambda VPC",
+      "note": "TypeScript Lambda calling Stripe API from private subnet uses NAT SNAT — C# Lambda same pattern; unlike on-prem server with direct internet routing.",
+      "futureTopicSlug": "aws/lambda/nat-egress"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "NAT Gateways",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html"
+    },
+    {
+      "title": "Gateway endpoints",
+      "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "lambda-vpc"
+}

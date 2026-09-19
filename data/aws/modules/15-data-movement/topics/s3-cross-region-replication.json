@@ -1,0 +1,236 @@
+{
+  "id": "aws-15-s3-cross-region-replication",
+  "slug": "s3-cross-region-replication",
+  "title": "S3 Cross-Region Replication (CRR) and Same-Region Replication (SRR)",
+  "moduleId": "aws-15-data-movement",
+  "order": 2,
+  "hook": "Amazon S3 replication asynchronously copies new objects to a destination bucket — same account or cross-account, same region or cross-region. It is ongoing disaster recovery and locality, not a one-time migration tool for existing objects.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Cross-Region Replication (CRR) copies objects to a bucket in another region. Same-Region Replication (SRR) copies within one region — often for log aggregation or compliance copies. Requires versioning on source and destination. Replication rule filters by prefix or tags. Replication Time Control (RTC) adds 15-minute SLA. Existing objects need S3 Batch Replication."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CRR",
+              "longForm": "Cross-Region Replication",
+              "plainDefinition": "Automatic copy of new objects to another AWS region.",
+              "example": "us-east-1 primary → eu-west-1 DR bucket."
+            },
+            {
+              "term": "SRR",
+              "longForm": "Same-Region Replication",
+              "plainDefinition": "Replication within the same region to another bucket.",
+              "example": "App bucket → audit-log bucket same region."
+            },
+            {
+              "term": "RTC",
+              "longForm": "Replication Time Control",
+              "plainDefinition": "Paid SLA for replication within 15 minutes.",
+              "example": "Regulated DR with S3 Replication Time metric."
+            },
+            {
+              "term": "Batch Replication",
+              "longForm": "S3 Batch Replication",
+              "plainDefinition": "One-time replication of existing objects before rule existed.",
+              "example": "Backfill 10 TB uploaded before CRR enabled."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Teams enable CRR and wonder why pre-existing data is missing in DR — replication is not retroactive. KMS key policies must allow replication role in both regions. Delete marker replication is optional — understand whether DR should see deletes."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: versioning required both buckets. New objects only unless Batch Replication. Check object replication status. RTC for minute-level RPO."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "CRR setup checklist",
+          "items": [
+            {
+              "title": "Enable versioning",
+              "body": "Source and destination buckets both versioned."
+            },
+            {
+              "title": "Create replication rule",
+              "body": "Destination bucket, IAM role, prefix filter optional."
+            },
+            {
+              "title": "KMS permissions",
+              "body": "Replication role decrypt source CMK, encrypt destination CMK."
+            },
+            {
+              "title": "Backfill existing",
+              "body": "S3 Batch Replication job for objects before rule."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "CRR flow",
+            "source": "flowchart LR\n  PUT[PUT object\\nus-east-1] --> SRC[(source bucket)]\n  SRC -->|async replicate| DST[(dest bucket\\neu-west-1)]\n  SRC -->|status PENDING| META[object metadata]\n  DST -->|status REPLICA| META"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — enable versioning and replication",
+            "code": "aws s3api put-bucket-versioning \\\n  --bucket primary-us-east-1 \\\n  --versioning-configuration Status=Enabled\n\naws s3api put-bucket-replication \\\n  --bucket primary-us-east-1 \\\n  --replication-configuration '{\n    \"Role\": \"arn:aws:iam::123:role/s3-replication-role\",\n    \"Rules\": [{\n      \"Status\": \"Enabled\",\n      \"Priority\": 1,\n      \"Filter\": {\"Prefix\": \"prod/\"},\n      \"Destination\": {\n        \"Bucket\": \"arn:aws:s3:::dr-eu-west-1\",\n        \"ReplicationTime\": {\"Status\": \"Enabled\", \"Time\": {\"Minutes\": 15}}\n      }\n    }]\n  }'",
+            "explanation": "RTC enabled in Destination.ReplicationTime. Prefix prod/ limits replication scope."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — check object replication status",
+            "code": "aws s3api head-object \\\n  --bucket primary-us-east-1 \\\n  --key prod/data/file.json \\\n  --query '{Replication:ReplicationStatus,VersionId:VersionId}'",
+            "explanation": "PENDING, COMPLETED, FAILED, REPLICA — FAILED needs IAM or KMS fix."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — replication role trust policy excerpt",
+            "code": "Resources:\n  ReplicationRole:\n    Type: AWS::IAM::Role\n    Properties:\n      AssumeRolePolicyDocument:\n        Statement:\n          - Effect: Allow\n            Principal:\n              Service: s3.amazonaws.com\n            Action: sts:AssumeRole\n      Policies:\n        - PolicyName: ReplicateObjects\n          PolicyDocument:\n            Statement:\n              - Effect: Allow\n                Action: [s3:GetObjectVersionForReplication, s3:ReplicateObject]\n                Resource: ['arn:aws:s3:::primary-us-east-1/*', 'arn:aws:s3:::dr-eu-west-1/*']",
+            "explanation": "S3 service assumes role for replication — not your application role."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — S3 Batch Replication for backlog",
+            "code": "aws s3control create-job \\\n  --account-id 123456789012 \\\n  --operation '{\"S3ReplicateObject\":{}}' \\\n  --report '{\"Bucket\":\"arn:aws:s3:::batch-reports\",\"Prefix\":\"replication/\",\"Format\":\"Report_CSV_JSON\",\"Enabled\":true,\"ReportScope\":\"AllTasks\"}' \\\n  --manifest '{\"Spec\":{\"Format\":\"S3InventoryReport_CSV_20211130\",\"Fields\":[\"Bucket\",\"Key\"]},\"Location\":{\"ObjectArn\":\"arn:aws:s3:::batch-reports/manifest.csv\",\"ETag\":\"abc\"}}' \\\n  --priority 10 \\\n  --role-arn arn:aws:iam::123:role/s3-batch-role",
+            "explanation": "Batch job replicates existing objects listed in manifest — run once after enabling CRR rule."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CRR vs DataSync",
+          "headers": ["Aspect", "S3 CRR", "DataSync"],
+          "rows": [
+            ["Trigger", "New S3 PUT automatic", "Scheduled task"],
+            ["Source", "S3 bucket only", "NFS/SMB/S3"],
+            ["Existing objects", "Batch Replication needed", "Full initial copy"],
+            ["Use case", "Ongoing DR sync", "Migration cutover"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Expecting retroactive replication. Versioning off on destination. KMS key policy missing replication role. Bidirectional replication without delete marker strategy — delete loops."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: S3 Replication metrics OperationsPendingReplication, ReplicationLatency. Failover drill: promote DR bucket read, document RPO from RTC metric. Cross-account: destination bucket policy trusts source account replication role."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Requirement", "Solution", "Note"],
+          "rows": [
+            ["Ongoing DR", "CRR + RTC", "Not one-time copy"],
+            ["Backlog", "Batch Replication", "After rule created"],
+            ["On-prem to S3", "DataSync", "Not CRR"],
+            ["Multi-destination", "Multiple rules", "Priority ordering"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'enable CRR and all data copies.' Strong answer: versioning, new objects only, Batch for backlog, check FAILED status, KMS policies."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "CRR replicates new objects after rule — Batch Replication for existing backlog.",
+    "Versioning required on source and destination; check ReplicationStatus on objects.",
+    "RTC for 15-minute RPO SLA; standard CRR is best-effort async.",
+    "60s: Versioning both buckets. New objects only. Batch backlog. KMS role. FAILED status debug.",
+    "Follow-up: replicate delete markers yes or no for DR?"
+  ],
+  "commonPitfalls": [
+    "Missing pre-rule objects in DR — expected CRR behavior not bug.",
+    "Strong answer: run S3 Batch Replication manifest job once.",
+    "KMS FAILED replication status — key policy omission.",
+    "Bidirectional replication without delete strategy."
+  ],
+  "relatedTopicIds": [
+    "aws-15-datasync-agents-tasks",
+    "aws-15-data-movement-security",
+    "aws-15-batch-vs-streaming"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Database read replicas",
+      "note": "S3 CRR async copy parallels PostgreSQL async replica — lag exists, promote DR is failover not instant consistency.",
+      "futureTopicSlug": "typescript/databases/replication"
+    },
+    {
+      "language": "javascript",
+      "concept": "CDN cache invalidation vs new object",
+      "note": "Versioned S3 keys with CRR — new version replicates; overwriting same key creates new version ID tracked by versioning.",
+      "futureTopicSlug": "javascript/aws/s3-versioning"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Replication configuration",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-add-config.html"
+    },
+    {
+      "title": "Replication Time Control",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/replication-time-control.html"
+    }
+  ],
+  "animationHint": "region-map"
+}

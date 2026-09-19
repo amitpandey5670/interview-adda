@@ -1,0 +1,267 @@
+{
+  "id": "aws-18-tenancy-models-silo-pool-bridge",
+  "slug": "tenancy-models-silo-pool-bridge",
+  "title": "Tenancy models (silo, pool, and bridge)",
+  "moduleId": "aws-18-saas-and-interview",
+  "order": 1,
+  "hook": "SaaS tenancy models describe how you isolate customers. Silo dedicates resources per tenant; pool shares infrastructure with logical isolation; bridge mixes both — pooled compute with siloed data or premium tiers on dedicated stacks.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Silo model: separate database, compute, or account per tenant — maximum isolation, highest cost. Pool model: shared application and database with tenant_id column partitioning — best economies of scale. Bridge model: pooled control plane with tiered data isolation — free tier pooled, enterprise silo. AWS SaaS Lens maps these to Well-Architected tradeoffs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Silo",
+              "longForm": "Silo tenancy",
+              "plainDefinition": "Dedicated resources per tenant",
+              "example": "Enterprise customer own RDS instance"
+            },
+            {
+              "term": "Pool",
+              "longForm": "Pooled tenancy",
+              "plainDefinition": "Shared infra, logical isolation",
+              "example": "tenant_id on every row"
+            },
+            {
+              "term": "Bridge",
+              "longForm": "Bridge tenancy",
+              "plainDefinition": "Mix pooled and silo by tier",
+              "example": "Free pooled, premium silo DB"
+            },
+            {
+              "term": "Tenant",
+              "longForm": "SaaS tenant",
+              "plainDefinition": "Customer organization using your product",
+              "example": "Acme Corp tenant_id=42"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Top SaaS architecture interview question: \"how do you isolate tenants?\" Wrong answer ignores blast radius and cost. Right answer names model, tradeoffs, and migration path between tiers."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: silo = dedicated, pool = shared with logical isolation, bridge = tiered mix."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Classify tenant tiers",
+              "body": "Free/starter → pool. Enterprise/regulated → silo or bridge."
+            },
+            {
+              "title": "Design isolation boundary",
+              "body": "Network, compute, data — which layers silo vs pool."
+            },
+            {
+              "title": "Implement tenant context",
+              "body": "Every request carries tenant_id; enforce in middleware and DB queries."
+            },
+            {
+              "title": "Plan tier migration",
+              "body": "Path from pool to silo without data loss — export/import or logical replication."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Tenancy models",
+            "source": "flowchart TB\n  POOL[Pooled tier\\nshared DB tenant_id] --> BRIDGE[Bridge tier\\npooled app silo DB]\n  BRIDGE --> SILO[Silo tier\\ndedicated stack per tenant]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Tenant context middleware",
+            "code": "export function tenantMiddleware(req: Request, res: Response, next: NextFunction) {\n  const tenantId = req.headers['x-tenant-id'] as string;\n  if (!tenantId) return res.status(400).json({ error: 'Missing tenant' });\n  req.tenantId = tenantId;\n  next();\n}",
+            "explanation": "Every pooled request must resolve tenant context before data access."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "sql",
+            "label": "Pooled row-level isolation",
+            "code": "CREATE TABLE orders (\n  tenant_id UUID NOT NULL,\n  order_id UUID NOT NULL,\n  amount DECIMAL,\n  PRIMARY KEY (tenant_id, order_id)\n);\nCREATE INDEX idx_orders_tenant ON orders(tenant_id);",
+            "explanation": "Composite key ensures queries always scope by tenant."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Silo — dedicated stack per tenant",
+            "code": "Resources:\n  TenantDb:\n    Type: AWS::RDS::DBInstance\n    Properties:\n      DBInstanceIdentifier: !Sub tenant-${TenantId}-db\n      DBInstanceClass: db.r6g.large",
+            "explanation": "CloudFormation per-tenant stack for silo enterprise tier."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Repository always scopes tenant",
+            "code": "async getOrders(tenantId: string): Promise<Order[]> {\n  return this.db.query(\n    'SELECT * FROM orders WHERE tenant_id = $1',\n    [tenantId]\n  );\n}",
+            "explanation": "Missing tenant_id in query is cross-tenant data leak — top SaaS bug."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Isolation",
+              "Silo dedicated stack",
+              "Single DB with user_id column"
+            ],
+            [
+              "Cost",
+              "Pool amortizes infra",
+              "Per-customer VM costly"
+            ],
+            [
+              "Upgrade",
+              "Bridge tier migration path",
+              "Hard cutover from shared to dedicated"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Pool model without tenant_id on every table and query. Silo for all customers on day one — burn rate kills startup. No migration path from pool to silo."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: integration tests that attempt cross-tenant access must fail; per-tier cost attribution; silo provisioning time SLA for enterprise onboarding."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Pool default",
+              "Lowest cost to start",
+              "Blast radius if bug"
+            ],
+            [
+              "Silo enterprise",
+              "Compliance ready",
+              "Ops overhead per tenant"
+            ],
+            [
+              "Bridge tiered",
+              "Revenue-aligned isolation",
+              "Complex routing logic"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "One model for all tiers without tradeoff discussion — rejected. Strong answer: pool for scale, silo for enterprise, bridge for tiered product."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Silo = dedicated, pool = shared logical isolation, bridge = tiered mix.",
+    "Pool requires tenant_id on every query — no exceptions.",
+    "Bridge aligns isolation with pricing tiers.",
+    "60s: Pool for scale and cost. Silo for compliance and blast radius. Bridge tiers free pooled to enterprise silo. SaaS Lens framework.",
+    "Follow-up: how migrate tenant from pool to silo?"
+  ],
+  "commonPitfalls": [
+    "Missing tenant_id filter — cross-tenant data leak, instant rejection.",
+    "Strong answer: middleware tenant context, composite keys, integration tests for isolation.",
+    "Silo everything day one — unsustainable burn.",
+    "No enterprise upgrade path documented."
+  ],
+  "relatedTopicIds": [
+    "aws-18-vpc-per-tenant-vs-pool",
+    "aws-18-data-partitioning-strategies",
+    "aws-18-saas-reference-architecture"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Multi-tenant Express",
+      "note": "Subdomain acme.app.com resolves tenant — same pattern as pooled SaaS routing.",
+      "futureTopicSlug": "javascript/saas/multi-tenant"
+    },
+    {
+      "language": "typescript",
+      "concept": "Branded types for tenantId",
+      "note": "type TenantId = string & { __brand: 'TenantId' } prevents passing wrong ID at compile time.",
+      "futureTopicSlug": "typescript/saas/tenancy"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Lens — AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html"
+    },
+    {
+      "title": "SaaS architecture fundamentals",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-architecture-fundamentals.html"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "saas-tenant-routing"
+}

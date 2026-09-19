@@ -1,0 +1,277 @@
+{
+  "id": "aws-11-lambda-concurrency-dlq",
+  "slug": "lambda-concurrency-dlq",
+  "title": "Lambda concurrency, throttling, and DLQ",
+  "moduleId": "aws-11-lambda-serverless",
+  "order": 5,
+  "hook": "Account and function concurrency limits cap parallel executions — throttling returns 429; async failures land in Dead Letter Queues after retries.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS Lambda scales concurrent executions per Region. Default account limit is 1000 (soft quota). Reserved concurrency guarantees capacity for a function but subtracts from unreserved pool. Provisioned concurrency is pre-warmed. Asynchronous invokes retry twice (1 min, 2 min) then route to configured DLQ on function or failed event source mapping."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Reserved concurrency",
+              "longForm": "Lambda reserved concurrency",
+              "plainDefinition": "Maximum concurrent executions dedicated to function.",
+              "example": "Reserve 50 for payment processor."
+            },
+            {
+              "term": "Throttling",
+              "longForm": "Lambda throttling",
+              "plainDefinition": "429 when no concurrency capacity available.",
+              "example": "Burst exceeds account unreserved pool."
+            },
+            {
+              "term": "Async DLQ",
+              "longForm": "Lambda async dead letter queue",
+              "plainDefinition": "SQS or SNS target for failed async invokes.",
+              "example": "DeadLetterConfig TargetArn on function."
+            },
+            {
+              "term": "Unreserved concurrency",
+              "longForm": "Unreserved account concurrency",
+              "plainDefinition": "Account limit minus sum of reserved concurrency.",
+              "example": "1000 account - 200 reserved = 800 shared."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "One function reserved concurrency=900 can starve others. Throttling during flash sale loses orders unless SQS buffers. DLQ without alarm means silent data loss."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: account limit, reserved vs provisioned, 429 throttling, async DLQ with alarm, SQS buffer for smooth spikes."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Concurrency and failure handling",
+          "items": [
+            {
+              "title": "Set account limit",
+              "body": "Request increase before peak; monitor ConcurrentExecutions."
+            },
+            {
+              "title": "Reserve if needed",
+              "body": "Critical function minimum capacity; avoid hogging account."
+            },
+            {
+              "title": "Configure DLQ",
+              "body": "DeadLetterConfig on async functions; mapping DLQ for poll failures."
+            },
+            {
+              "title": "Alarm and redrive",
+              "body": "CloudWatch alarm on DLQ depth; fix and reprocess messages."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Concurrency and DLQ flow",
+            "source": "flowchart TB\n  Invokes[Incoming invokes] --> Pool{Concurrency available?}\n  Pool -->|yes| Run[Execute]\n  Pool -->|no| T429[429 Throttled]\n  Run -->|async fail| Retry[Retry x2]\n  Retry -->|still fail| DLQ[(DLQ)]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Function with DLQ and reserved concurrency",
+            "code": "Worker:\n  Type: AWS::Lambda::Function\n  Properties:\n    ReservedConcurrentExecutions: 25\n    DeadLetterConfig:\n      TargetArn: !GetAtt WorkerDLQ.Arn\n    Runtime: nodejs20.x\n    Handler: index.handler\nWorkerDLQ:\n  Type: AWS::SQS::Queue",
+            "explanation": "Reserved caps max parallel; DLQ captures async failures after retries."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Set reserved concurrency",
+            "code": "aws lambda put-function-concurrency \\\n  --function-name PaymentProcessor \\\n  --reserved-concurrent-executions 50",
+            "explanation": "Set to 0 disables function — useful emergency kill switch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Get account concurrency settings",
+            "code": "aws lambda get-account-settings \\\n  --query 'AccountLimit.{Concurrent:ConcurrentExecutions,Unreserved:UnreservedConcurrentExecutions}'",
+            "explanation": "Shows account ceiling and unreserved remainder."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CloudWatch throttles metric",
+            "code": "aws cloudwatch get-metric-statistics \\\n  --namespace AWS/Lambda \\\n  --metric-name Throttles \\\n  --dimensions Name=FunctionName,Value=PaymentProcessor \\\n  --start-time 2026-09-14T12:00:00Z \\\n  --end-time 2026-09-14T13:00:00Z \\\n  --period 60 \\\n  --statistics Sum",
+            "explanation": "Non-zero throttles during peak — need SQS buffer or limit increase."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Backpressure",
+              "429 throttle or SQS queue depth",
+              "SQS visibility timeout in EC2 worker"
+            ],
+            [
+              "Failure capture",
+              "DLQ after async retries",
+              "SQS DLQ on consumer fail"
+            ],
+            [
+              "Capacity guarantee",
+              "Reserved concurrency",
+              "ASG desired capacity"
+            ],
+            [
+              "Cost of idle",
+              "Provisioned concurrency hourly",
+              "EC2 always on"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Reserved concurrency=account limit on one function blocks all others. DLQ configured but no alarm. Sync API invoke errors not going to DLQ — only async uses function DLQ."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Step Functions orchestrates retries and saga compensation beyond raw Lambda DLQ. How to prove it in production: ConcurrentExecutions vs ReservedConcurrentExecutions graphs, Throttles metric, DLQ ApproximateNumberOfMessagesVisible alarm."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "No reserved",
+              "Flexible pool sharing",
+              "Noisy neighbor throttling"
+            ],
+            [
+              "Reserved moderate",
+              "Protect critical path",
+              "Reduces shared pool"
+            ],
+            [
+              "SQS fronting Lambda",
+              "Absorb spikes",
+              "End-to-end latency"
+            ],
+            [
+              "Step Functions saga",
+              "Complex retry/compensate",
+              "Orchestration cost"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Expecting DLQ on API Gateway sync errors gets rejected — DLQ is async invoke path. Strong answer: sync 502 to client; async DLQ + alarm."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Account concurrency limit shared — reserved subtracts from pool.",
+    "429 throttling when capacity exhausted — use SQS buffer or increase limit.",
+    "Async invokes retry twice then DLQ — monitor DLQ depth.",
+    "60s: Reserved concurrency caps function. 429 on throttle. Async DLQ after 2 retries. Sync errors not to DLQ.",
+    "Follow-up: reserved concurrency 0 effect?"
+  ],
+  "commonPitfalls": [
+    "Reserved = entire account limit on one function — starves others.",
+    "Strong answer: reserve modest amount; SQS buffer; request limit increase.",
+    "No DLQ alarm — silent failure.",
+    "Confusing sync errors with async DLQ behavior."
+  ],
+  "relatedTopicIds": [
+    "aws-11-lambda-triggers",
+    "aws-11-lambda-execution-environment",
+    "aws-10-s3-events-hosting"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Promise rejection in async invoke",
+      "note": "Unhandled rejection fails async invoke → retry → DLQ — like unhandledRejection in Node without catch.",
+      "futureTopicSlug": "aws/lambda/error-handling"
+    },
+    {
+      "language": "typescript",
+      "concept": "Saga with Step Functions",
+      "note": "Typed state machine compensates failed steps — stronger than DLQ alone for multi-step business transactions.",
+      "futureTopicSlug": "aws/step-functions/saga"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Lambda concurrency",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html"
+    },
+    {
+      "title": "Dead-letter queues",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/invocation-async.html#invocation-dlq"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "step-functions-saga"
+}

@@ -1,0 +1,198 @@
+{
+  "id": "aws-06-privatelink",
+  "slug": "privatelink",
+  "title": "AWS PrivateLink (private service access)",
+  "moduleId": "aws-06-vpc-connectivity",
+  "order": 5,
+  "hook": "AWS PrivateLink lets consumers reach a provider service using private IP addresses in the consumer Virtual Private Cloud (VPC) — without VPC peering, without public internet exposure, and without routing the provider's entire network into yours.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "PrivateLink is built on Interface VPC endpoint technology. A provider creates an endpoint service backed by a Network Load Balancer (NLB) in their VPC. Consumers create Interface endpoints in their VPC that map to that service. AWS also uses PrivateLink for Interface VPC endpoints to AWS services like Amazon S3 Interface (where supported) and Secrets Manager — but interview questions usually contrast customer-owned endpoint services versus AWS-managed ones."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "Endpoint service", "longForm": "VPC endpoint service", "plainDefinition": "Provider-side PrivateLink offering identified by a service name.", "example": "com.amazonaws.vpce.us-east-1.vpce-svc-0abc." },
+            { "term": "Interface endpoint", "longForm": "Interface VPC endpoint (consumer)", "plainDefinition": "ENI in consumer VPC sending traffic to the provider service.", "example": "Tenant VPC endpoint for fraud-scoring API." },
+            { "term": "Allowed principals", "longForm": "Principal allow list", "plainDefinition": "AWS accounts or IAM principals permitted to create endpoint connections.", "example": "Allow arn:aws:iam::111122223333:root only." },
+            { "term": "Acceptance required", "longForm": "Manual connection acceptance", "plainDefinition": "Provider must approve each consumer endpoint connection.", "example": "Pending → accept-vpc-endpoint-connections." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "SaaS vendors expose APIs to thousands of customers without public internet attack surface or pairwise VPC peering. Enterprises consume third-party services with traffic on the AWS backbone. Interviews contrast PrivateLink (service exposure) with peering (full CIDR routing) and with public NLB plus IP allow lists."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "SaaS pattern",
+          "body": "Provider NLB → endpoint service → per-customer Interface endpoint — scales cleaner than peering every tenant VPC."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Provider and consumer roles",
+          "items": [
+            { "title": "Provider publishes NLB", "body": "Targets are service instances in provider private subnets." },
+            { "title": "Create endpoint service", "body": "Link NLB; configure allowed principals and acceptance policy." },
+            { "title": "Consumer creates endpoint", "body": "Interface endpoint in consumer subnets with security group allowing clients." },
+            { "title": "Connect and resolve DNS", "body": "Use private DNS or endpoint-specific DNS name; provider accepts pending connection if required." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "PrivateLink data plane",
+            "source": "flowchart LR\n  CAPP[Consumer app] --> ENI[Consumer endpoint ENI]\n  ENI --> PL[AWS PrivateLink]\n  PL --> NLB[Provider NLB]\n  NLB --> SVC[Service targets]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — provider endpoint service",
+            "code": "EndpointService:\n  Type: AWS::EC2::VPCEndpointService\n  Properties:\n    NetworkLoadBalancerArns:\n      - !Ref ServiceNlb\n    AcceptanceRequired: true\n    AllowedPrincipals:\n      - !Sub arn:aws:iam::${ConsumerAccountId}:root",
+            "explanation": "Provider exposes NLB as a service. AllowedPrincipals restricts who can initiate connections."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — consumer Interface endpoint",
+            "code": "aws ec2 create-vpc-endpoint \\\n  --vpc-id vpc-consumer \\\n  --service-name com.amazonaws.vpce.us-east-1.vpce-svc-0abc123 \\\n  --vpc-endpoint-type Interface \\\n  --subnet-ids subnet-a subnet-b \\\n  --security-group-ids sg-endpoint-clients",
+            "explanation": "Consumer-side creation mirrors AWS service Interface endpoints — subnets per AZ and security group required."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — accept pending connection",
+            "code": "aws ec2 accept-vpc-endpoint-connections \\\n  --service-id vpce-svc-0abc123 \\\n  --vpc-endpoint-ids vpce-0consumer",
+            "explanation": "When AcceptanceRequired is true, connections stay pending until provider accepts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — audit endpoint connections",
+            "code": "aws ec2 describe-vpc-endpoint-connections \\\n  --filters Name=service-id,Values=vpce-svc-0abc123 \\\n  --query 'VpcEndpointConnections[*].[VpcEndpointId,VpcEndpointState,CreationTimestamp]'",
+            "explanation": "Compliance reviews use this to list active consumer attachments."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SaaS API consumption",
+          "headers": ["Aspect", "PrivateLink", "Public HTTPS API (Node/TS)"],
+          "rows": [
+            ["Network path", "Private ENI to provider NLB", "Internet to public ALB or API Gateway"],
+            ["Onboarding", "Endpoint + allow list per account", "API key and OAuth only"],
+            ["DNS", "Private hosted zone or vpce DNS", "Public Route53 record"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Provider NLB in single AZ while consumer endpoint spans two — partial outage. Missing SG on consumer endpoint ENI. Confusing PrivateLink with Gateway S3 endpoints."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "PrivateLink forwards only to NLB listener ports — not arbitrary IP protocols across the provider VPC. Cross-Region endpoint services require consumers to create endpoints in each Region. How to prove it in production: describe-vpc-endpoint-connections; Flow Logs on consumer endpoint ENI show traffic without public IPs; provider target health checks on NLB."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["PrivateLink SaaS", "No peering per tenant; private path", "NLB + endpoint service operations"],
+            ["VPC peering to provider", "Full L3 if needed", "Over-sharing; hard at scale"],
+            ["Public NLB + mTLS", "Fast customer onboarding", "Internet exposure; DDoS surface"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying PrivateLink equals VPC peering. Strong answer: exposes a specific service via NLB endpoint service — consumers never route provider's entire CIDR."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "PrivateLink = provider endpoint service behind NLB + consumer Interface endpoint ENIs.",
+    "No VPC peering required; traffic stays on AWS network; principal allow lists control access.",
+    "Differs from Gateway S3 endpoints — PrivateLink is for your own or partner services.",
+    "60s: Provider NLB → endpoint service. Consumer Interface endpoint + SG. Optional acceptance. Not full network peering. SaaS multi-tenant pattern.",
+    "Follow-up: how is PrivateLink different from Interface endpoints to AWS Secrets Manager?"
+  ],
+  "commonPitfalls": [
+    "Equating PrivateLink with VPC peering — rejected because peering routes entire CIDRs; PrivateLink maps NLB ports only.",
+    "Strong answer: consumer/provider model, Interface endpoint ENI, allowed principals, optional acceptance.",
+    "Consumer endpoint SG missing tcp/443 from application SG — SDK timeouts.",
+    "Provider NLB targets unhealthy — connection accepted but HTTP 503."
+  ],
+  "relatedTopicIds": [
+    "aws-06-vpc-endpoints",
+    "aws-06-transit-gateway",
+    "aws-06-hybrid-scenario",
+    "aws-07-alb-nlb-gwlb"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Private fetch URL",
+      "note": "Node fetch to vpce-xxx endpoint DNS stays on private network — similar to calling http://internal-api.local inside a corporate LAN.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Per-tenant base URL types",
+      "note": "TypeScript configs can type-safe vpce DNS per environment — still requires SG and endpoint acceptance workflow in CI.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "AWS PrivateLink", "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/what-is-privatelink.html" },
+    { "title": "Create a service powered by PrivateLink", "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/create-service-powered-by-privatelink.html" }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "saas-tenant-routing"
+}

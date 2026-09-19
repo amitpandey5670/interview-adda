@@ -1,0 +1,237 @@
+{
+  "id": "aws-12-sqs-idempotency",
+  "slug": "sqs-idempotency",
+  "title": "Idempotent SQS consumers (at-least-once delivery)",
+  "moduleId": "aws-12-sqs-messaging",
+  "order": 5,
+  "hook": "SQS guarantees at-least-once delivery — your handler will see duplicates from retries, visibility timeouts, and producer resends. Idempotency is an application responsibility, not a queue feature.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An idempotent consumer produces the same side effect whether it processes a message once or five times. Common pattern: store an idempotency key (paymentId, messageId) in DynamoDB with conditional write before performing irreversible work. FIFO deduplication helps on the send side only — receive-side retries still require consumer idempotency."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "At-least-once",
+              "longForm": "at-least-once delivery",
+              "plainDefinition": "Every message delivered one or more times; never lost after ack semantics.",
+              "example": "Visibility timeout retry delivers same message twice."
+            },
+            {
+              "term": "Idempotency key",
+              "longForm": "idempotency identifier",
+              "plainDefinition": "Unique token identifying one logical operation.",
+              "example": "paymentId ord-8821-charge used in DynamoDB conditional put."
+            },
+            {
+              "term": "Conditional write",
+              "longForm": "DynamoDB conditional put",
+              "plainDefinition": "Write succeeds only if attribute does not exist — atomic claim.",
+              "example": "attribute_not_exists(pk) before charging card."
+            },
+            {
+              "term": "Exactly-once effect",
+              "longForm": "exactly-once processing semantics",
+              "plainDefinition": "Business outcome happens once even if message runs N times.",
+              "example": "Customer charged once despite duplicate delivery."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Double-charge lawsuits start with 'SQS is exactly-once, right?' Payment, inventory reservation, and email send all need idempotent handlers. Senior interviews ask for DynamoDB claim pattern, TTL on idempotency records, and what happens when claim succeeds but downstream fails."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: at-least-once from SQS; exactly-once effect from idempotency store. Claim before side effect; store result for replay."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Idempotent processing flow",
+          "items": [
+            {
+              "title": "Extract key",
+              "body": "Use business id (orderId) not SQS messageId alone — messageId changes on redrive."
+            },
+            {
+              "title": "Conditional claim",
+              "body": "PutItem with attribute_not_exists — winner proceeds, loser returns cached result."
+            },
+            {
+              "title": "Perform work",
+              "body": "Charge card, send email — only after successful claim."
+            },
+            {
+              "title": "Record outcome",
+              "body": "Update item with status COMPLETED and result for duplicate queries."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Idempotency claim pattern",
+            "source": "flowchart TD\n  M[SQS message] --> H[Handler]\n  H --> C{Conditional put\\nidempotency key}\n  C -->|exists| R[Return stored result]\n  C -->|new| W[Perform side effect]\n  W --> U[Update status COMPLETED]\n  U --> D[Delete SQS message]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — DynamoDB idempotency claim",
+            "code": "import { DynamoDBClient, PutItemCommand, GetItemCommand } from '@aws-sdk/client-dynamodb';\n\nconst ddb = new DynamoDBClient({});\nconst TABLE = process.env.IDEMPOTENCY_TABLE!;\n\nasync function claimOrGet(key: string): Promise<'NEW' | 'DONE'> {\n  try {\n    await ddb.send(new PutItemCommand({\n      TableName: TABLE,\n      Item: { pk: { S: key }, status: { S: 'IN_PROGRESS' } },\n      ConditionExpression: 'attribute_not_exists(pk)',\n    }));\n    return 'NEW';\n  } catch (e: unknown) {\n    if ((e as { name?: string }).name === 'ConditionalCheckFailedException') {\n      const existing = await ddb.send(new GetItemCommand({ TableName: TABLE, Key: { pk: { S: key } } }));\n      if (existing.Item?.status?.S === 'COMPLETED') return 'DONE';\n      throw new Error('In progress by another worker');\n    }\n    throw e;\n  }\n}",
+            "explanation": "ConditionalCheckFailed means duplicate — return prior result if COMPLETED or backoff if IN_PROGRESS."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — handler with idempotent charge",
+            "code": "async function handlePayment(event: { orderId: string; amount: number }) {\n  const key = `charge:${event.orderId}`;\n  const claim = await claimOrGet(key);\n  if (claim === 'DONE') return; // already charged\n  await stripeClient.charges.create({ amount: event.amount, idempotencyKey: key });\n  await ddb.send(new UpdateItemCommand({\n    TableName: TABLE,\n    Key: { pk: { S: key } },\n    UpdateExpression: 'SET status = :s',\n    ExpressionAttributeValues: { ':s': { S: 'COMPLETED' } },\n  }));\n}",
+            "explanation": "Stripe idempotencyKey aligns with DynamoDB claim — defense in depth."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — idempotency table with TTL",
+            "code": "Resources:\n  IdempotencyTable:\n    Type: AWS::DynamoDB::Table\n    Properties:\n      TableName: idempotency-keys\n      BillingMode: PAY_PER_REQUEST\n      AttributeDefinitions:\n        - AttributeName: pk\n          AttributeType: S\n      KeySchema:\n        - AttributeName: pk\n          KeyType: HASH\n      TimeToLiveSpecification:\n        AttributeName: ttl\n        Enabled: true",
+            "explanation": "TTL expires old keys after 24–72 hours — balance storage vs replay window."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — detect duplicate processing in logs",
+            "code": "aws logs start-query \\\n  --log-group-name /aws/lambda/payment-processor \\\n  --start-time $(date -u -v-1H +%s) \\\n  --end-time $(date -u +%s) \\\n  --query-string 'fields orderId | filter @message like /duplicate skip/ | stats count() by orderId | filter count > 1'",
+            "explanation": "Instrument skip path in logs to measure duplicate rate — proves idempotency is firing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Idempotency patterns across runtimes",
+          "headers": ["Aspect", "DynamoDB claim", "Redis SETNX"],
+          "rows": [
+            ["Durability", "DynamoDB durable", "Redis — configure persistence"],
+            ["TTL", "Native TTL attribute", "EXPIRE key"],
+            ["Conditional", "attribute_not_exists", "SET key NX"],
+            ["AWS native", "No extra infra", "ElastiCache cluster to manage"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using SQS messageId as idempotency key — changes on redrive. Claim after charge instead of before. No TTL — table grows forever. IN_PROGRESS stuck forever when worker crashes mid-flight — add lease expiry."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: metric duplicate_skip_count / messages_processed. Load test with visibility timeout shorter than handler — zero double charges if idempotency works. For IN_PROGRESS lease: conditional update with expiresAt; second worker can reclaim after expiry."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "Pros", "Cons"],
+          "rows": [
+            ["DynamoDB claim", "Durable, conditional atomic", "Latency + cost per message"],
+            ["Natural idempotency", "UPDATE WHERE status=pending", "Requires schema design"],
+            ["FIFO dedup only", "Send-side 5-min window", "No receive retry protection"],
+            ["Outbox pattern", "Transactional with DB write", "More moving parts"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'FIFO gives exactly-once end to end.' Strong answer: FIFO deduplicates sends; consumers still need idempotency for visibility retries and partial batch failures."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "SQS is at-least-once — idempotency is mandatory for side effects.",
+    "Conditional DynamoDB put before irreversible work; store COMPLETED result for duplicates.",
+    "Use business key (orderId) not messageId; TTL old keys; handle IN_PROGRESS lease.",
+    "60s: Claim in DynamoDB before charge. FIFO dedup is send-only. At-least-once means duplicates.",
+    "Follow-up: what if claim succeeds but charge fails?"
+  ],
+  "commonPitfalls": [
+    "Trusting FIFO alone for payment idempotency — rejection answer.",
+    "Strong answer: consumer conditional write regardless of queue type.",
+    "messageId as key — wrong on DLQ redrive.",
+    "No handling of stuck IN_PROGRESS after worker crash."
+  ],
+  "relatedTopicIds": [
+    "aws-12-sqs-standard-vs-fifo",
+    "aws-12-sqs-lambda-consumer",
+    "aws-13-step-functions-saga"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Idempotent API middleware",
+      "note": "Express Idempotency-Key header middleware mirrors SQS consumer claim — same pattern as C# ASP.NET idempotency filter with distributed cache.",
+      "futureTopicSlug": "csharp-13-async-await"
+    },
+    {
+      "language": "javascript",
+      "concept": "Stripe idempotency keys",
+      "note": "Payment APIs accept idempotency keys on HTTP — align SQS message business id with provider key for defense in depth.",
+      "futureTopicSlug": "javascript/backend/payment-apis"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon SQS message deduplication",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/using-messagededuplicationid-property.html"
+    },
+    {
+      "title": "AWS Lambda Powertools idempotency",
+      "url": "https://docs.powertools.aws.dev/lambda/typescript/latest/features/idempotency/"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-03-accounts-identity-tenancy",
+  "title": "Accounts, identity, and tenancy — interview",
+  "items": [
+    {
+      "question": "Why use separate AWS accounts for dev and production instead of tags alone?",
+      "answer": "An AWS account is a hard isolation boundary for IAM namespaces, service quotas, billing, and blast radius. Tags are metadata — they do not prevent an overly permissive IAM policy in the same account from affecting production. Separate accounts let you attach different SCPs, limit cross-environment mistakes, and aggregate billing via Organizations while keeping security failures contained.",
+      "followUps": [
+        "How does AWS Control Tower help?",
+        "What is a log archive account?"
+      ],
+      "sixtySeconds": "Account = hard boundary. Tags = cost and ops, not security. Prod/non-prod in separate accounts under Organizations with tailored SCPs."
+    },
+    {
+      "question": "A developer has IAM Allow for s3:DeleteBucket but gets AccessDenied. What do you check?",
+      "answer": "Check SCPs attached to the account or OU first — an SCP explicit Deny overrides IAM Allow. Then permission boundaries on the role, session policies, and bucket policy Deny. Use organizations describe-effective-policy and iam simulate-principal-policy. This is the classic SCP versus IAM interview trap — IAM is not the only layer.",
+      "followUps": [
+        "Can an SCP grant permissions?",
+        "How do permission boundaries differ from SCPs?"
+      ],
+      "sixtySeconds": "SCP deny beats IAM allow. Then boundary, resource policy, session policy. Simulate-principal-policy and describe-effective-policy to debug."
+    },
+    {
+      "question": "How should a Lambda function access S3 in production?",
+      "answer": "Attach an execution role with a trust policy allowing lambda.amazonaws.com to assume it. Permission policy grants only required actions on specific bucket ARNs — s3:GetObject on arn:aws:s3:::bucket/prefix/*. Add aws:SecureTransport deny for non-TLS. No access keys in environment variables. SDK uses the role credential chain automatically. Simulate the policy in CI before deploy.",
+      "followUps": [
+        "When would you use a resource-based bucket policy instead?",
+        "How do cross-account S3 reads work?"
+      ],
+      "sixtySeconds": "Execution role, least privilege on ARN, TLS condition, no keys. SDK auto-credentials. Simulate in CI."
+    },
+    {
+      "question": "Design tenant isolation for a B2B SaaS on AWS serving 500 SMB customers.",
+      "answer": "Start pooled: shared ECS service and DynamoDB with tenantId partition key. Resolve tenant server-side from JWT or subdomain — never trust client-supplied tenant_id alone. Scope every query, cache key, and S3 prefix. API Gateway rate limits per API key mitigate noisy neighbor. ABAC IAM policies with principal tags for storage isolation. Integration tests attempt cross-tenant reads. Offer silo (dedicated account) for enterprise tier with compliance requirements.",
+      "followUps": [
+        "How do you migrate one tenant from pool to silo?",
+        "What is the confused deputy problem?"
+      ],
+      "sixtySeconds": "Pool with tenantId everywhere, server-side resolution, ABAC, rate limits, IDOR tests. Silo for enterprise. Defense in depth — not just separate DB."
+    },
+    {
+      "question": "Explain cross-account role assumption for a CI pipeline deploying to production.",
+      "answer": "CI runner in tooling account assumes a deploy role in prod account via sts:AssumeRole. Prod role trust policy allows only the CI role ARN with sts:ExternalId condition to prevent confused deputy. Deploy role has least privilege for CloudFormation or CDK — not AdministratorAccess. Session credentials are temporary. CloudTrail logs AssumeRole in both accounts.",
+      "followUps": [
+        "Why is ExternalId required?",
+        "How does OIDC federation replace long-lived CI keys?"
+      ],
+      "sixtySeconds": "Tooling account CI role assumes prod deploy role. Trust with ExternalId. Least privilege. Temporary creds. CloudTrail audit."
+    },
+    {
+      "question": "Finance cannot see spend by team despite tagging all resources. Why?",
+      "answer": "Tags must be activated as cost allocation tags in the Billing console before Cost Explorer groups by them. Retroactive activation does not re-attribute historical spend. Also verify tag key spelling matches exactly — Environment versus environment is case-sensitive. For org-wide visibility, use consolidated billing and cost allocation tags at the payer account level.",
+      "followUps": [
+        "How do tag policies enforce required keys?",
+        "What is AWS Cost Categories?"
+      ],
+      "sixtySeconds": "Activate cost allocation tags in billing console. Case-sensitive keys. Payer account for org-wide. Tags at create, not after."
+    },
+    {
+      "question": "What is the difference between an IAM permission boundary and an SCP?",
+      "answer": "Both set maximum permissions but at different scopes. SCP attaches to Organizations account or OU and filters all principals in member accounts — except management account nuances. Permission boundary attaches to a single IAM user or role and caps what that identity can receive from identity policies. Delegated admins can create users within the boundary without exceeding org limits. Neither grants access — both filter.",
+      "followUps": [
+        "When would you use both on the same role?",
+        "Does boundary affect resource-based policies?"
+      ],
+      "sixtySeconds": "SCP = org/account ceiling. Boundary = per-identity ceiling. Neither grants. IAM allow must fit inside both."
+    },
+    {
+      "question": "Your security team wants to block all API calls outside us-east-1 and eu-west-1. How?",
+      "answer": "Attach an SCP to the target OU with Effect Deny on Action * and Condition StringNotEquals on aws:RequestedRegion for the two approved Regions. Apply to workload OUs, not the management account without careful exception planning for global services like IAM, CloudFront, and Route 53 hosted zone operations. Test with simulate and a canary account before broad rollout.",
+      "followUps": [
+        "Which services are global and need SCP exceptions?",
+        "How do you allow break-glass access?"
+      ],
+      "sixtySeconds": "SCP Deny with aws:RequestedRegion condition on OU. Plan exceptions for global services. Canary account first."
+    }
+  ]
+}

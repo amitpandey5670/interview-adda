@@ -1,0 +1,87 @@
+{
+  "moduleId": "aws-17-cloud-foundation",
+  "title": "Cloud foundation interview drills",
+  "items": [
+    {
+      "question": "Design a landing zone for 200 engineers and 40 workload accounts.",
+      "answer": "OUs: Security (log-archive, audit), Infrastructure (shared networking, TGW hub), Workloads (dev/stage/prod sub-OUs), Sandbox. Control Tower or custom StackSets for baselines. Account Factory for vending. SCPs: deny unapproved regions, protect CloudTrail, deny public S3. IPAM allocates /20 per account. Identity Center with permission sets per OU. Org CloudTrail to log-archive.",
+      "followUps": [
+        "Control Tower vs custom LZ?",
+        "How handle break-glass access?"
+      ],
+      "sixtySeconds": "OUs, SCP guardrails, Account Factory, hub-spoke TGW, IPAM, Identity Center SSO, org CloudTrail central. No prod in management account."
+    },
+    {
+      "question": "Developer opened S3 bucket public in sandbox account. Org-wide prevention?",
+      "answer": "SCP on Sandbox OU denying s3:PutBucketPublicAccessBlock removal and public ACLs. Config rule detecting public buckets with auto-remediation Lambda. S3 Block Public Access at account level via StackSet baseline. Detective + preventive layers. Sandbox SCP can be stricter than prod OU.",
+      "followUps": [
+        "SCP vs S3 BPA account setting?",
+        "False positive on intentional static site?"
+      ],
+      "sixtySeconds": "SCP deny public bucket APIs. Config detect + remediate. BPA account baseline via StackSet. Layer preventive and detective."
+    },
+    {
+      "question": "New team needs dev account with networking in 1 hour. Walk account vending.",
+      "answer": "User requests via Service Catalog Account Factory product. Provisions account in Workloads-Dev OU. StackSets auto-deploy: CloudTrail config, Config rules, VPC with IPAM-allocated CIDR, TGW attachment to hub, baseline IAM roles. Identity Center assigns Developer permission set to team IdP group. Control Tower shows enrolled controls green.",
+      "followUps": [
+        "StackSet vs Stack instances?",
+        "IPAM pool exhaustion?"
+      ],
+      "sixtySeconds": "Account Factory → OU placement → StackSets baseline VPC/logging → TGW attach → Identity Center group assignment. Automated not manual console."
+    },
+    {
+      "question": "Hub-spoke: should all internet egress go through central NAT in hub?",
+      "answer": "Tradeoff. Centralized: single egress IP for allow-listing, inspection via Network Firewall, simpler governance. Risk: hub SPOF, cross-AZ data charges, latency. Distributed NAT per spoke: better AZ resilience (Reliability pillar) but many IPs and harder egress filtering. Enterprise often centralizes for inspection; document Reliability HRI if single NAT.",
+      "followUps": [
+        "Inspection VPC with GWLB?",
+        "TGW route table segmentation?"
+      ],
+      "sixtySeconds": "Central NAT = governance and inspection, SPOF risk. Distributed = resilience, more cost/complexity. Document tradeoff in WAFR."
+    },
+    {
+      "question": "How do 500 engineers access AWS without 500 IAM users?",
+      "answer": "Corporate IdP (Okta/Azure AD) federates to IAM Identity Center via SAML. IdP groups map to permission sets. Developer group gets custom developer policy in dev accounts only. ReadOnly for prod. Access portal shows allowed accounts. CLI via aws sso login. CloudTrail logs AssumeRoleWithSAML. CI/CD uses OIDC to IAM roles — not human SSO.",
+      "followUps": [
+        "Permission set vs IAM role?",
+        "Session duration best practice?"
+      ],
+      "sixtySeconds": "IdP → Identity Center → permission sets → account roles. Group-based. No IAM users. OIDC for pipelines."
+    },
+    {
+      "question": "Security team needs to know who terminated prod EC2 at 2am across 30 accounts.",
+      "answer": "Query org CloudTrail in log-archive S3 via Athena: filter eventName TerminateInstances, eventTime range, sort by userIdentity.arn. Identity Center shows which human assumed which role. SCP ensured trail was not disabled. If logs missing, that account was not enrolled — landing zone gap.",
+      "followUps": [
+        "CloudTrail vs CloudWatch Logs?",
+        "Object Lock compliance mode?"
+      ],
+      "sixtySeconds": "Org CloudTrail central S3, Athena query by eventName/time, userIdentity.arn identifies actor. SCP prevents trail tampering."
+    },
+    {
+      "question": "SCP blocks team from deploying to eu-central-1 but product needs GDPR residency there.",
+      "answer": "SCP is OU-scoped. Create EU-Workloads OU with SCP allowing only eu-central-1 (deny other regions). Move or vend account into that OU. Do not weaken global SCP — segment by residency requirement. IPAM pool for EU CIDRs. Document in landing zone standards.",
+      "followUps": [
+        "SCP simulator before attach?",
+        "Multi-region SCP patterns?"
+      ],
+      "sixtySeconds": "Residency-specific OU with tailored SCP. Do not remove global guardrail — add OU exception scoped to EU workloads."
+    },
+    {
+      "question": "What is difference between landing zone and Well-Architected Framework?",
+      "answer": "Landing zone is organizational foundation — accounts, guardrails, networking, identity, logging. Well-Architected evaluates workload design within those accounts. Landing zone enables Security/Operational Excellence pillars at scale; WAFR reviews individual services inside vendored accounts.",
+      "followUps": [
+        "Control Tower controls list?",
+        "Customizations for regulated industry?"
+      ],
+      "sixtySeconds": "Landing zone = multi-account foundation and guardrails. Well-Architected = workload design review. Complementary — LZ enables pillar compliance at scale."
+    },
+    {
+      "question": "Detective vs preventive guardrail — give one example each.",
+      "answer": "Preventive: SCP denies cloudtrail:StopLogging — action blocked before it happens. Detective: AWS Config rule flags unencrypted EBS volume — detected after creation, remediate via SSM or Lambda. Landing zones need both: SCP stops worst cases, Config catches drift and misconfig.",
+      "followUps": [
+        "Config auto-remediation risks?",
+        "Security Hub aggregation?"
+      ],
+      "sixtySeconds": "Preventive SCP blocks API. Detective Config detects non-compliance. Both required — SCP cannot catch everything."
+    }
+  ]
+}

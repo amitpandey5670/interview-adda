@@ -1,0 +1,198 @@
+{
+  "id": "aws-06-transit-gateway",
+  "slug": "transit-gateway",
+  "title": "Transit Gateway (hub-and-spoke)",
+  "moduleId": "aws-06-vpc-connectivity",
+  "order": 3,
+  "hook": "AWS Transit Gateway (TGW) is a Regional hub that connects Virtual Private Clouds (VPCs), Site-to-Site VPN, and Direct Connect gateways in a hub-and-spoke model. Unlike VPC peering, routing through TGW can be transitive when you design route tables deliberately.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Transit Gateway is a managed Layer 3 router in your Region. Attachments include VPCs, VPN connections, Direct Connect gateways, and peering to other TGWs. Each attachment associates with a TGW route table that controls which CIDR blocks are reachable — enabling shared-services spokes without full mesh among app VPCs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "TGW attachment", "longForm": "Transit Gateway attachment", "plainDefinition": "Connection between TGW and a VPC, VPN, or Direct Connect gateway.", "example": "tgw-attach-prod linking vpc-prod." },
+            { "term": "TGW route table", "longForm": "Transit Gateway route table", "plainDefinition": "Hub routing domain deciding forwarding between attachments.", "example": "prod-domain RT vs staging-domain RT." },
+            { "term": "Propagation", "longForm": "Route propagation", "plainDefinition": "Automatically adds attachment CIDRs into a TGW route table.", "example": "Propagate vpc-prod 10.10.0.0/16 into prod RT." },
+            { "term": "Association", "longForm": "Route table association", "plainDefinition": "Binds an attachment to exactly one TGW route table for forwarding decisions.", "example": "Prod VPC attachment associated with prod RT only." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Enterprises outgrow N-squared VPC peering. Hybrid designs centralize on-prem paths on one TGW instead of a Virtual Private Gateway per VPC. Interviewers test route domain segmentation, blackhole routes, and when inter-Region TGW peering is worth the complexity."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: TGW is transitive only within the route tables you design — association plus propagation or static routes, not automatic full mesh."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Hub-and-spoke build",
+          "items": [
+            { "title": "Create TGW", "body": "Regional hub; disable default association/propagation for strict designs." },
+            { "title": "Attach VPC spokes", "body": "Dedicated subnets per AZ for TGW ENIs; add VPC routes sending remote CIDRs to TGW." },
+            { "title": "Configure TGW route tables", "body": "Associate attachments; propagate or add static routes for allowed paths." },
+            { "title": "Attach hybrid", "body": "Site-to-Site VPN or Direct Connect gateway shares on-prem prefixes to selected RTs." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "TGW route domains",
+            "source": "flowchart TB\n  TGW[Transit Gateway]\n  subgraph ProdRT[prod route table]\n    P1[prod VPC]\n    SH[shared services VPC]\n  end\n  subgraph StgRT[staging route table]\n    S1[staging VPC]\n    SH\n  end\n  VPN[VPN / DX] --> TGW\n  TGW --> ProdRT\n  TGW --> StgRT"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create TGW and VPC attachment",
+            "code": "aws ec2 create-transit-gateway \\\n  --description prod-hub \\\n  --options DefaultRouteTableAssociation=disable,DefaultRouteTablePropagation=disable\n\naws ec2 create-transit-gateway-vpc-attachment \\\n  --transit-gateway-id tgw-0abc123 \\\n  --vpc-id vpc-prod \\\n  --subnet-ids subnet-tgw-a subnet-tgw-b",
+            "explanation": "Disabling defaults forces explicit RT design. TGW ENIs consume IPs in attachment subnets — plan /28 per AZ."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — TGW route table association",
+            "code": "HubTgw:\n  Type: AWS::EC2::TransitGateway\n  Properties:\n    Description: prod-hub\n\nProdRouteTable:\n  Type: AWS::EC2::TransitGatewayRouteTable\n  Properties:\n    TransitGatewayId: !Ref HubTgw\n\nProdAssociation:\n  Type: AWS::EC2::TransitGatewayRouteTableAssociation\n  Properties:\n    TransitGatewayAttachmentId: !Ref ProdVpcAttachment\n    TransitGatewayRouteTableId: !Ref ProdRouteTable",
+            "explanation": "Association picks the routing domain. Add AWS::EC2::TransitGatewayRouteTablePropagation or static routes separately."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — static route to shared services",
+            "code": "aws ec2 create-transit-gateway-route \\\n  --transit-gateway-route-table-id tgw-rtb-prod \\\n  --destination-cidr-block 10.50.0.0/16 \\\n  --transit-gateway-attachment-id tgw-attach-shared",
+            "explanation": "Static routes when propagation is off — prod spokes reach shared CIDR only, not each other."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — debug route lookup",
+            "code": "aws ec2 search-transit-gateway-routes \\\n  --transit-gateway-route-table-id tgw-rtb-prod \\\n  --filters Name=route-search.subnet-of-match,Values=10.20.8.10/32",
+            "explanation": "Finds which attachment owns the route for a destination — first step for hybrid blackholes."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Network vs application routing",
+          "headers": ["Aspect", "Transit Gateway", "Node.js / TypeScript services"],
+          "rows": [
+            ["Transitive IP routing", "Yes within TGW RT design", "HTTP/gRPC routes are URLs, not VPC CIDRs"],
+            ["Tenant isolation", "Separate TGW route tables", "JWT tenant claims — different layer"],
+            ["Failure signals", "Flow Logs, TGW metrics", "502 from ALB when target SG blocks TGW-sourced traffic"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Missing VPC route table entry pointing remote CIDR to TGW. One TGW RT with all attachments propagated — dev reaches prod. Undersized TGW attachment subnets."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "TGW charges hourly per attachment plus data processing. Blackhole routes appear when static routes reference deleted attachments. Inter-Region TGW peering adds cross-Region data charges. How to prove it in production: search-transit-gateway-routes during incidents; VPC Flow Logs show packets to TGW ENI; CloudWatch metrics on PacketDropCountBlackhole when enabled."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["Single TGW, segmented RTs", "One hybrid entry point", "Mis-propagated RT exposes prod"],
+            ["TGW per environment", "Hard isolation", "Cross-env needs TGW peering"],
+            ["Full peering mesh", "No TGW hourly fee", "Not transitive; ops nightmare at scale"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying TGW automatically connects every attached VPC. Strong answer: association binds an attachment to one RT; propagation/static routes define who can reach which CIDRs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Transit Gateway enables transitive routing through route tables — unlike pairwise VPC peering.",
+    "Association plus propagation (or static routes) defines reachability — not attachment alone.",
+    "Place TGW attachment subnets in every AZ; VPC route tables must send remote CIDR to TGW.",
+    "60s: Regional L3 hub. Attach VPC, VPN, DX. Segment with TGW route tables. Replace peering mesh. Debug with search-transit-gateway-routes and Flow Logs.",
+    "Follow-up: how do you attach on-prem prefixes to only prod, not staging, on one TGW?"
+  ],
+  "commonPitfalls": [
+    "Assuming all TGW attachments talk to each other — that gets you rejected; route tables must explicitly allow paths.",
+    "Strong answer: name association, propagation, and static routes as the three levers.",
+    "Forgetting VPC-side routes to TGW for inter-spoke traffic.",
+    "Single route table propagated with every attachment — blast radius spans environments."
+  ],
+  "relatedTopicIds": [
+    "aws-06-vpc-peering",
+    "aws-06-vpn-direct-connect",
+    "aws-06-hybrid-scenario",
+    "aws-07-alb-nlb-gwlb"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Internal ALB DNS across VPCs",
+      "note": "Node services call ALB hostnames resolved by Route53 private zones. TGW forwards IP packets only — SG rules on targets must allow TGW-sourced traffic.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Multi-VPC BFF routing",
+      "note": "A TypeScript backend-for-frontend calling APIs in three VPCs still needs TGW routes and SG rules per hop — types do not replace network design.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "What is Transit Gateway", "url": "https://docs.aws.amazon.com/vpc/latest/tgw/what-is-transit-gateway.html" },
+    { "title": "Transit Gateway route tables", "url": "https://docs.aws.amazon.com/vpc/latest/tgw/tgw-route-tables.html" }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "saas-tenant-routing"
+}

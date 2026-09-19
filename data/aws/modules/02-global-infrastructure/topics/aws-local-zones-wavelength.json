@@ -1,0 +1,202 @@
+{
+  "id": "aws-02-aws-local-zones-wavelength",
+  "slug": "aws-local-zones-wavelength",
+  "title": "Local Zones and Wavelength (ultra-low latency extensions)",
+  "moduleId": "aws-02-global-infrastructure",
+  "order": 4,
+  "hook": "Local Zones extend an AWS Region into a metro area for single-digit millisecond latency. AWS Wavelength embeds compute at 5G carrier edge sites. Both use the same APIs as the parent Region but target ultra-low latency workloads — not general-purpose hosting.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Local Zone is an extension of a parent Region placed close to a large population or industry center — for example Los Angeles or Hamburg. Your VPC can include a Local Zone subnet; EC2, EBS, and other selected services run there with latency to local users similar to on-premises in that city. AWS Wavelength Zones deploy compute and storage at telecommunications carrier data centers connected to 5G networks — ideal for mobile edge applications that cannot tolerate round trips to a distant Region."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Local Zone",
+              "longForm": "AWS Local Zone",
+              "plainDefinition": "Metro extension of a parent Region for low-latency workloads.",
+              "example": "Video processing in Los Angeles Local Zone for LA users."
+            },
+            {
+              "term": "Wavelength",
+              "longForm": "AWS Wavelength Zone",
+              "plainDefinition": "Infrastructure at 5G carrier edge linked to a parent Region.",
+              "example": "Multiplayer game state at carrier edge near mobile clients."
+            },
+            {
+              "term": "Parent Region",
+              "longForm": "Parent AWS Region",
+              "plainDefinition": "Region that owns control plane and billing for Local Zone or Wavelength resources.",
+              "example": "us-west-2 parent for us-west-2-lax-1a Local Zone."
+            },
+            {
+              "term": "Carrier gateway",
+              "longForm": "Wavelength carrier gateway",
+              "plainDefinition": "Routes traffic between Wavelength subnet and carrier network.",
+              "example": "5G UPF traffic to Wavelength EC2 without hairpin to Region."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Most web APIs are fine in a standard Region with multi-AZ. Local Zones and Wavelength matter when milliseconds decide revenue — live trading, real-time media, augmented reality, or hybrid migration lifting a latency-sensitive tier without moving everything on-premises. Overusing them adds cost and limited instance catalog."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Default Region + multi-AZ first. Local Zone or Wavelength only when latency SLO requires metro or 5G edge — same APIs, extension of parent Region."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "When to extend to Local Zone or Wavelength",
+          "items": [
+            {
+              "title": "Measure latency requirement",
+              "body": "If p99 RTT from Region to users exceeds SLO, evaluate Local Zone in that metro."
+            },
+            {
+              "title": "Extend VPC",
+              "body": "Enable Local Zone in account; create subnet in Local Zone AZ name (e.g. us-west-2-lax-1a)."
+            },
+            {
+              "title": "Place latency-sensitive tier",
+              "body": "Run rendering, encoding, or game servers locally; keep control plane and data in parent Region if allowed."
+            },
+            {
+              "title": "Wavelength for 5G",
+              "body": "Deploy to Wavelength subnet; use carrier gateway for mobile traffic; sync state to Region asynchronously."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Local Zone and Wavelength placement",
+            "source": "flowchart TB\n  subgraph Parent[\"Parent Region us-west-2\"]\n    CP[Control plane APIs]\n    DB[(Regional data)]\n  end\n  subgraph LZ[\"Local Zone Los Angeles\"]\n    EC2lz[Latency-sensitive EC2]\n  end\n  subgraph WL[\"Wavelength at carrier\"]\n    EC2w[5G edge compute]\n  end\n  UserMetro[Metro users] --> EC2lz\n  Mobile[5G devices] --> EC2w\n  EC2lz -.->|management| CP\n  EC2w -.->|async sync| DB"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List Local Zones available",
+            "code": "aws ec2 describe-availability-zones \\\n  --filters Name=zone-type,Values=local-zone \\\n  --query \"AvailabilityZones[].{Name:ZoneName,Group:GroupName,State:State}\" \\\n  --output table",
+            "explanation": "Local Zones appear as special AZ names tied to a parent Region group. Enable opt-in before launch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Subnet in a Local Zone",
+            "code": "LocalZoneSubnet:\n  Type: AWS::EC2::Subnet\n  Properties:\n    VpcId: !Ref AppVpc\n    AvailabilityZone: us-west-2-lax-1a\n    CidrBlock: 10.0.100.0/24\n    MapPublicIpOnLaunch: false\nLocalZoneInstance:\n  Type: AWS::EC2::Instance\n  Properties:\n    ImageId: ami-0abcdef1234567890\n    InstanceType: g4dn.xlarge\n    SubnetId: !Ref LocalZoneSubnet",
+            "explanation": "GPU instance in Local Zone for media processing near LA users. Parent Region still bills and manages API calls."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Enable Local Zone opt-in",
+            "code": "aws ec2 modify-availability-zone-group \\\n  --group-name us-west-2-lax-1 \\\n  --opt-in-status opted-in",
+            "explanation": "Account must opt in before creating subnets in that Local Zone — similar to opt-in Regions."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Local Zone vs rack in your office",
+          "headers": ["Aspect", "Local Zone / Wavelength", "On-premises / C# backend"],
+          "rows": [
+            ["Latency", "Single-digit ms to metro or 5G clients", "Rack in same city — lowest RTT you control"],
+            ["Ops model", "Same EC2 API as Region; limited SKUs", "You rack, patch, and power hardware"],
+            ["Hybrid", "Stretch VPC; async sync to Region", "ExpressRoute/Direct Connect to cloud Region"],
+            ["ASP.NET Core", "Deploy same container to Local Zone subnet", "Edge server in branch office running Kestrel"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Moving entire production stack to Local Zone for cost — it is usually more expensive with fewer services. Using Wavelength without understanding carrier dependency. Forgetting opt-in for Local Zone group. Treating Local Zone as a separate Region for compliance without legal review."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Local Zones are metro extensions of a parent Region; Wavelength targets 5G carrier edge.",
+    "Use for ultra-low latency tiers — not as default replacement for standard multi-AZ Region design.",
+    "Limited instance types and services — verify catalog before architecture sign-off.",
+    "60s: Region first. Local Zone for metro ms. Wavelength for 5G edge. Same APIs, opt-in required, higher cost.",
+    "Follow-up: how would you sync state between Wavelength and Regional database?"
+  ],
+  "commonPitfalls": [
+    "Saying Local Zone is a full Region gets you rejected — it is an extension with limited scope.",
+    "Strong answer: name latency SLO, parent Region, which tier moves local, what stays Regional.",
+    "Running primary database in Local Zone without backup path to parent Region.",
+    "Ignoring opt-in step and wondering why subnet creation fails."
+  ],
+  "relatedTopicIds": [
+    "aws-02-aws-regions-isolation",
+    "aws-02-aws-availability-zones",
+    "aws-02-aws-choosing-region-az"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "WebSocket game servers at edge",
+      "note": "Node WebSocket servers in Wavelength reduce mobile RTT — comparable to running a small Node edge box in a telco POP, whereas a C# SignalR hub in a central Region adds cross-country latency.",
+      "futureTopicSlug": "aws/wavelength/mobile-edge"
+    },
+    {
+      "language": "typescript",
+      "concept": "Hybrid latency budgeting",
+      "note": "TypeScript microservices often measure p99 per hop. Local Zone fits when one hop to Region exceeds budget — same analysis as keeping a C# gRPC service in a branch datacenter vs headquarters.",
+      "futureTopicSlug": "aws/local-zones/hybrid-design"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Local Zones",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-local-zones.html"
+    },
+    {
+      "title": "AWS Wavelength",
+      "url": "https://docs.aws.amazon.com/wavelength/latest/developerguide/what-is-wavelength.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "high-concurrency"
+}

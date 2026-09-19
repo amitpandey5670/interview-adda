@@ -1,0 +1,198 @@
+{
+  "id": "aws-07-security-groups",
+  "slug": "security-groups",
+  "title": "Security groups (stateful ENI firewall)",
+  "moduleId": "aws-07-perimeter-and-gateways",
+  "order": 1,
+  "hook": "A security group is a stateful virtual firewall attached to an Elastic Network Interface (ENI) — instance, load balancer, or VPC endpoint. It allows traffic you permit; everything else is denied, and return traffic for allowed flows is automatically permitted.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Security groups operate at the ENI level inside a Virtual Private Cloud (VPC). Rules are allow-only (no deny rules). Stateful means if you allow inbound tcp/443 from a client, return outbound packets for that flow are permitted even without an explicit outbound rule. Default: all outbound allowed, inbound denied unless added."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "Security group", "longForm": "Amazon VPC security group", "plainDefinition": "Stateful allow-list firewall bound to ENIs.", "example": "sg-app allowing tcp/8080 from sg-alb." },
+            { "term": "Stateful", "longForm": "Stateful firewall", "plainDefinition": "Return traffic for established allowed flows is automatically permitted.", "example": "Inbound 443 allowed → outbound SYN-ACK permitted without explicit rule." },
+            { "term": "Source/destination SG", "longForm": "Security group referencing", "plainDefinition": "Rule referencing another SG ID instead of CIDR — dynamic membership.", "example": "Allow tcp/5432 from sg-bastion only." },
+            { "term": "ENI", "longForm": "Elastic Network Interface", "plainDefinition": "Virtual network card that receives security group assignments.", "example": "ALB, EC2, Lambda-in-VPC, Interface VPC endpoint ENIs." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Security groups are the primary micro-segmentation tool in AWS — tighter than Network Access Control Lists (NACLs) because they reference other SGs. Load balancer to target, bastion to database, and endpoint ENI patterns all rely on SG design. Interviewers contrast stateful SG with stateless NACL and ask about overly permissive 0.0.0.0/0 rules."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: SG is stateful ENI firewall, allow-only, supports SG-to-SG references. Default deny inbound."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Evaluating traffic",
+          "items": [
+            { "title": "Packet arrives at ENI", "body": "Security group rules on that ENI are evaluated." },
+            { "title": "Inbound allow check", "body": "Match protocol, port, and source (CIDR or SG). First match allows; no deny rules exist." },
+            { "title": "Stateful return", "body": "If inbound was allowed, related outbound response is automatically permitted." },
+            { "title": "Separate ENI evaluation", "body": "ALB ENI and target ENI each have SGs — both must permit the flow." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "ALB to target SG chain",
+            "source": "flowchart LR\n  Client[Client] -->|443 allowed| ALB_SG[ALB security group]\n  ALB_SG --> ALB_ENI[ALB ENI]\n  ALB_ENI -->|8080 from sg-alb| APP_SG[App security group]\n  APP_SG --> APP[EC2 target ENI]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create SG with ALB-to-app rule",
+            "code": "aws ec2 create-security-group --group-name app-sg --description \"App tier\" --vpc-id vpc-0abc\n\naws ec2 authorize-security-group-ingress \\\n  --group-id sg-app \\\n  --ip-permissions IpProtocol=tcp,FromPort=8080,ToPort=8080,UserIdGroupPairs=[{GroupId=sg-alb}]",
+            "explanation": "Referencing sg-alb means any ENI in the ALB SG can reach port 8080 — no CIDR churn when targets scale."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — tiered security groups",
+            "code": "AlbSg:\n  Type: AWS::EC2::SecurityGroup\n  Properties:\n    GroupDescription: ALB ingress\n    VpcId: !Ref Vpc\n    SecurityGroupIngress:\n      - IpProtocol: tcp\n        FromPort: 443\n        ToPort: 443\n        CidrIp: 0.0.0.0/0\n\nAppSg:\n  Type: AWS::EC2::SecurityGroup\n  Properties:\n    GroupDescription: App from ALB only\n    VpcId: !Ref Vpc\n    SecurityGroupIngress:\n      - IpProtocol: tcp\n        FromPort: 8080\n        ToPort: 8080\n        SourceSecurityGroupId: !Ref AlbSg",
+            "explanation": "Three-tier pattern: edge SG open to internet on 443; app SG only from ALB SG."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — audit overly permissive rules",
+            "code": "aws ec2 describe-security-groups \\\n  --filters Name=vpc-id,Values=vpc-0abc \\\n  --query 'SecurityGroups[*].IpPermissions[?IpRanges[?CidrIp==`0.0.0.0/0`]]'",
+            "explanation": "Find world-open ingress before compliance scans — common interview remediation task."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — Interface endpoint SG",
+            "code": "aws ec2 authorize-security-group-ingress \\\n  --group-id sg-vpce \\\n  --ip-permissions IpProtocol=tcp,FromPort=443,ToPort=443,UserIdGroupPairs=[{GroupId=sg-lambda}]",
+            "explanation": "Lambda SG must reach endpoint ENI SG on 443 — both sides matter for Interface VPC endpoints."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Network vs app auth",
+          "headers": ["Aspect", "Security groups", "Express / NestJS middleware"],
+          "rows": [
+            ["Layer", "Layer 4 ENI firewall", "Layer 7 HTTP auth"],
+            ["Deny rules", "Not supported — allow only", "Can return 403 explicitly"],
+            ["State", "Stateful connection tracking", "Each HTTP request independent unless session"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Opening app SG to 0.0.0.0/0 when only ALB should reach it. Forgetting target SG must allow ALB SG on health check port. Removing all outbound rules thinking default deny outbound — default is allow all outbound."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Security groups are distributed — there is no central rule ordering like NACL numbers. Cross-VPC SG references require peering or shared VPC and enabled cross-reference. How to prove it in production: VPC Reachability Analyzer paths; Flow Logs REJECT on ENI implicates SG/NACL; SSM port test from bastion with known SG IDs."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["SG-to-SG references", "Dynamic scaling with ALB/targets", "Harder to visualize than CIDR"],
+            ["CIDR-based rules", "Simple third-party access", "Stale when IPs change"],
+            ["Restrict all outbound", "Exfiltration guard", "Breaks patches, APIs, NTP without endpoints"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying security groups have deny rules or are stateless like NACLs. Strong answer: stateful, allow-only, ENI-bound; NACLs are stateless subnet boundary with deny support."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Security groups are stateful, allow-only firewalls attached to ENIs.",
+    "No deny rules — implicit deny. Return traffic for allowed inbound is automatically permitted.",
+    "Reference other SGs for ALB→target and Lambda→VPC endpoint patterns.",
+    "60s: Stateful ENI firewall. Allow only. SG-to-SG for tiers. Default outbound allow. Pair with NACL for subnet deny if needed.",
+    "Follow-up: why do you need rules on both ALB and target ENIs?"
+  ],
+  "commonPitfalls": [
+    "Calling security groups stateless or supporting deny rules — rejected; that describes NACLs.",
+    "Strong answer: stateful allow-only at ENI; established flows return automatically.",
+    "App SG open to world on application port instead of only from ALB SG.",
+    "Interface endpoint ENI SG missing ingress from client SG — Secrets Manager timeouts."
+  ],
+  "relatedTopicIds": [
+    "aws-07-network-acls",
+    "aws-07-alb-nlb-gwlb",
+    "aws-07-full-request-path",
+    "aws-06-vpc-endpoints"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express listen vs SG",
+      "note": "Node app listening on 8080 still needs SG allowing ALB SG — middleware auth does not replace network firewall.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "NestJS health checks",
+      "note": "ALB health checks hit target port — TypeScript app may be healthy locally but SG must allow ALB SG on that port.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "Security groups for your VPC", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html" },
+    { "title": "Security group rules", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html" }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

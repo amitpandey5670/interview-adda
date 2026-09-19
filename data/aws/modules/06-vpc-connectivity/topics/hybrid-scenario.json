@@ -1,0 +1,199 @@
+{
+  "id": "aws-06-hybrid-scenario",
+  "slug": "hybrid-scenario",
+  "title": "End-to-end hybrid scenario walkthrough",
+  "moduleId": "aws-06-vpc-connectivity",
+  "order": 6,
+  "hook": "This walkthrough connects an on-premises data center to multiple AWS Virtual Private Clouds (VPCs) through Direct Connect with VPN backup into a Transit Gateway, adds VPC endpoints for private AWS API access, and consumes a SaaS fraud API through PrivateLink — the story interviewers want instead of isolated definitions.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Imagine a retailer: ERP runs on-premises, microservices live in prod, staging, and shared-services VPCs. Direct Connect is primary hybrid path; VPN backs it up. Transit Gateway segments prod from staging while allowing both to reach shared services. Each VPC gets an S3 Gateway endpoint and STS Interface endpoint. Prod consumes a fraud-detection SaaS through PrivateLink — no internet egress for scoring calls."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "Hybrid cloud", "longForm": "Hybrid cloud network", "plainDefinition": "On-premises and AWS resources connected by private or VPN links.", "example": "ERP on-prem + ECS in AWS." },
+            { "term": "Route domain", "longForm": "TGW route domain", "plainDefinition": "Segmentation boundary on Transit Gateway controlling inter-spoke reachability.", "example": "Staging RT has no route to prod CIDR." },
+            { "term": "Split tunnel", "longForm": "Split tunnel routing", "plainDefinition": "Only AWS prefixes use DX/VPN; general internet exits locally from data center.", "example": "10.0.0.0/8 via TGW; 0.0.0.0/0 local ISP." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior interviews ask for end-to-end designs with failure modes, not flashcards. This scenario shows when to pick each Module 06 tool and how they compose. It mirrors real migration programs: hybrid connectivity first, hub segmentation, then endpoint hardening, then SaaS PrivateLink."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Design checklist",
+          "body": "Hybrid HA path, TGW segmentation, AWS API privacy via endpoints, SaaS via PrivateLink, observability, documented failover RTO."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Reference architecture flow",
+          "items": [
+            { "title": "Hybrid ingress", "body": "DX Private VIF → Direct Connect Gateway → TGW. VPN backup with lower BGP preference." },
+            { "title": "Segment spokes", "body": "Prod and staging associated with separate TGW RTs; static route to shared-services only where needed." },
+            { "title": "Private AWS APIs", "body": "S3 Gateway + STS Interface endpoints in every VPC; Lambda workers skip NAT for artifacts and credentials." },
+            { "title": "SaaS fraud API", "body": "PrivateLink Interface endpoint in prod VPC only; staging uses mock until cutover." },
+            { "title": "Failover drill", "body": "Withdraw DX routes in maintenance window; verify VPN telemetry UP and batch jobs retry successfully." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "End-to-end hybrid reference",
+            "source": "flowchart TB\n  OP[On-prem ERP] --> DX[Direct Connect primary]\n  OP --> VPN[VPN backup]\n  DX --> TGW[Transit Gateway]\n  VPN --> TGW\n  TGW --> PROD[Prod VPC]\n  TGW --> STG[Staging VPC]\n  TGW --> SHR[Shared services VPC]\n  PROD --> S3EP[S3 Gateway endpoint]\n  PROD --> PL[PrivateLink SaaS]\n  SHR --> AD[Directory services]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — DX gateway to TGW with allowed prefixes",
+            "code": "DxGatewayAssociation:\n  Type: AWS::DirectConnect::GatewayAssociation\n  Properties:\n    DirectConnectGatewayId: !Ref DxGateway\n    GatewayId: !Ref HubTgw\n    AllowedPrefixes:\n      - 10.10.0.0/16\n      - 10.20.0.0/16\n      - 10.50.0.0/16",
+            "explanation": "Advertise only required VPC CIDRs to on-prem — avoid summarizing entire 10.0.0.0/8 if segmentation matters on-prem too."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — verify TGW hybrid routes",
+            "code": "aws ec2 search-transit-gateway-routes \\\n  --transit-gateway-route-table-id tgw-rtb-prod \\\n  --filters Name=type,Values=static,propagated \\\n  --query 'Routes[*].[DestinationCidrBlock,Type,State]'",
+            "explanation": "Confirm on-prem prefix via DX/VPN attachment and shared-services static route appear in prod RT."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — roll out S3 Gateway endpoints",
+            "code": "for RTB in $(aws ec2 describe-route-tables --filters Name=vpc-id,Values=vpc-prod --query 'RouteTables[].RouteTableId' --output text); do\n  aws ec2 create-vpc-endpoint --vpc-id vpc-prod --service-name com.amazonaws.us-east-1.s3 --route-table-ids $RTB\ndone",
+            "explanation": "Automate consistent Gateway endpoint coverage during migration waves."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — failover drill monitoring",
+            "code": "while true; do\n  aws ec2 describe-vpn-connections --query 'VpnConnections[].VgwTelemetry[*].[OutsideIpAddress,Status]' --output text\n  sleep 5\ndone",
+            "explanation": "During DX maintenance, watch both VPN tunnels before withdrawing DX BGP announcements."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Migration runtime behavior",
+          "headers": ["Aspect", "Hybrid AWS design", "Node.js / TypeScript workloads"],
+          "rows": [
+            ["Batch S3 upload", "DX → TGW → VPC with S3 endpoint", "AWS SDK v3 needs retry logic on failover"],
+            ["Fraud API", "PrivateLink from prod", "Staging may still call public mock API"],
+            ["Observability", "Flow Logs + BGP captures", "OpenTelemetry does not show missing TGW routes"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Migrating apps before TGW routes exist. Single TGW RT propagating all attachments — staging reaches prod. Testing only DX happy path, never VPN failover."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Document separate RTO for DX versus VPN convergence — batch jobs need idempotent retries. Physical DX redundancy requires two connections, often to different DX locations. How to prove it in production: quarterly failover with BGP table capture; compare DataSync throughput DX vs VPN; alarm on TunnelState and DX ConnectionState; run game day where staging must not reach prod CIDR per Flow Logs."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["DX + VPN + TGW + endpoints", "Enterprise-grade hybrid", "Operational complexity"],
+            ["VPN-only hybrid", "Fast MVP", "Not for steady large replication"],
+            ["Flat peering mesh", "Avoids TGW hourly", "Breaks at scale; not transitive"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Hybrid diagram with VPN only and no segmentation or endpoints. Strong answer: name hub, backup path, route domains, private AWS APIs, PrivateLink for SaaS, and tested failover."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Reference: on-prem → DX primary + VPN backup → TGW → segmented VPC spokes.",
+    "Route domains isolate prod/staging; shared services via static TGW routes only.",
+    "VPC endpoints per spoke for S3/STS; PrivateLink for third-party SaaS in prod.",
+    "60s: DX+VPN to TGW. Segment RTs. Endpoints for AWS APIs. PrivateLink for SaaS. BGP failover drill quarterly. Flow Logs prove isolation.",
+    "Follow-up: what breaks if on-prem advertises overly broad 10.0.0.0/8?"
+  ],
+  "commonPitfalls": [
+    "Hybrid design without backup VPN — senior interviewers reject single-path hybrid.",
+    "Strong answer: DX primary, VPN secondary, BGP, TGW segmentation, endpoints, tested failover.",
+    "Shared-services RT propagated to all attachments — staging reaches prod CIDR.",
+    "On-prem firewall permits 10.0.0.0/8 — bypasses intended TGW segmentation."
+  ],
+  "relatedTopicIds": [
+    "aws-06-transit-gateway",
+    "aws-06-vpn-direct-connect",
+    "aws-06-vpc-endpoints",
+    "aws-06-privatelink",
+    "aws-07-full-request-path"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Hybrid batch workers",
+      "note": "On-prem Node processes use DX for S3 after endpoint cutover; implement exponential backoff when VPN failover causes transient SDK errors.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Blue/green cutover",
+      "note": "TypeScript deployment pipelines switch internal ALB DNS while TGW routes must already exist — infrastructure-first ordering like database migrations before code.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "Hybrid connectivity whitepaper", "url": "https://docs.aws.amazon.com/whitepapers/latest/hybrid-connectivity/hybrid-connectivity.html" },
+    { "title": "Transit Gateway best practices", "url": "https://docs.aws.amazon.com/vpc/latest/tgw/tgw-best-design-practices.html" }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "datasync-migration"
+}

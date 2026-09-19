@@ -1,0 +1,250 @@
+{
+  "id": "aws-14-lambda-sqs-debug-runbook",
+  "slug": "lambda-sqs-debug-runbook",
+  "title": "Lambda + SQS production debug runbook",
+  "moduleId": "aws-14-cloudwatch-observability",
+  "order": 5,
+  "hook": "When the pager fires on queue lag, you need an ordered checklist — not random log grepping. This runbook ties SQS metrics, Lambda signals, DLQ, Logs Insights, and X-Ray into a repeatable incident workflow.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A debug runbook is a sequenced investigation: confirm consumer health, check error and throttle metrics, inspect DLQ, query logs for patterns, trace slow requests, validate visibility timeout configuration. Each step has a decision branch — continue or stop with root cause."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Runbook",
+              "longForm": "operational runbook",
+              "plainDefinition": "Documented step-by-step incident procedure.",
+              "example": "SQS lag runbook linked from CloudWatch alarm."
+            },
+            {
+              "term": "Queue lag",
+              "longForm": "message processing lag",
+              "plainDefinition": "Time oldest message waits unprocessed.",
+              "example": "ApproximateAgeOfOldestMessage = 600 seconds."
+            },
+            {
+              "term": "Consumer drain rate",
+              "longForm": "queue drain rate",
+              "plainDefinition": "Messages deleted per minute versus arrival rate.",
+              "example": "NumberOfMessagesDeleted flat while depth rises."
+            },
+            {
+              "term": "Blast radius",
+              "longForm": "incident blast radius",
+              "plainDefinition": "Scope of affected messages or customers.",
+              "example": "Single poison message vs entire batch failing."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior on-call engineers are judged by time-to-diagnosis not time-to-random-fix. Scaling Lambda without checking Errors wastes money when code is broken. Visibility misconfiguration looks like consumer failure. A runbook prevents skipping DLQ inspection."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: age → concurrency → errors → DLQ → logs → trace → visibility. Fix root cause before scale. Document in alarm description."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Lambda + SQS incident runbook",
+          "items": [
+            {
+              "title": "Step 1 — Queue lag",
+              "body": "ApproximateAgeOfOldestMessage and ApproximateNumberOfMessagesVisible trending up?"
+            },
+            {
+              "title": "Step 2 — Consumer running",
+              "body": "Lambda ConcurrentExecutions > 0? Event source mapping Enabled?"
+            },
+            {
+              "title": "Step 3 — Errors and throttles",
+              "body": "Errors, Throttles, Duration p99 on function."
+            },
+            {
+              "title": "Step 4 — DLQ depth",
+              "body": "Poison messages? Inspect one payload."
+            },
+            {
+              "title": "Step 5 — Logs Insights",
+              "body": "filter errors, timeout, Task timed out in last hour."
+            },
+            {
+              "title": "Step 6 — X-Ray trace",
+              "body": "Slowest subsegment — RDS, VPC ENI, external API."
+            },
+            {
+              "title": "Step 7 — Visibility config",
+              "body": "Compare visibility timeout to Lambda timeout × 6."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Runbook decision tree",
+            "source": "flowchart TD\n  A[Alarm: queue lag] --> B{ConcurrentExecutions > 0?}\n  B -->|no| C[Check mapping disabled / concurrency 0]\n  B -->|yes| D{Errors high?}\n  D -->|yes| E[Logs Insights + fix code]\n  D -->|no| F{Throttles?}\n  F -->|yes| G[Raise concurrency / account limit]\n  F -->|no| H[DLQ + X-Ray slow segment]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Step 1-3 — dashboard metrics one-liner",
+            "code": "QUEUE=orders\nFN=payment-processor\nfor M in ApproximateAgeOfOldestMessage ApproximateNumberOfMessagesVisible; do\n  aws cloudwatch get-metric-statistics --namespace AWS/SQS \\\n    --metric-name $M --dimensions Name=QueueName,Value=$QUEUE \\\n    --start-time $(date -u -v-30M +%Y-%m-%dT%H:%M:%SZ) --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \\\n    --period 60 --statistics Maximum --output table\ndone\naws cloudwatch get-metric-statistics --namespace AWS/Lambda \\\n  --metric-name ConcurrentExecutions --dimensions Name=FunctionName,Value=$FN \\\n  --start-time $(date -u -v-30M +%Y-%m-%dT%H:%M:%SZ) --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \\\n  --period 60 --statistics Maximum --output table",
+            "explanation": "Copy-paste incident starter — run in first 2 minutes of page."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Step 4 — DLQ sample message",
+            "code": "aws sqs receive-message \\\n  --queue-url https://sqs.us-east-1.amazonaws.com/123/orders-dlq \\\n  --max-number-of-messages 1 \\\n  --visibility-timeout 0 \\\n  --attribute-names All",
+            "explanation": "visibility-timeout 0 for peek without hiding. Check ApproximateReceiveCount attribute."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Step 5 — Logs Insights error query",
+            "code": "aws logs start-query \\\n  --log-group-name /aws/lambda/payment-processor \\\n  --start-time $(date -u -v-1H +%s) --end-time $(date -u +%s) \\\n  --query-string 'fields @timestamp, @message, errorCode, orderId\n| filter level = \"error\" or @message like /Task timed out/\n| sort @timestamp desc | limit 50'",
+            "explanation": "Structured level field or regex fallback for unstructured legacy logs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Step 7 — compare visibility vs Lambda timeout",
+            "code": "aws sqs get-queue-attributes \\\n  --queue-url https://sqs.us-east-1.amazonaws.com/123/orders \\\n  --attribute-names VisibilityTimeout\n\naws lambda get-function-configuration \\\n  --function-name payment-processor \\\n  --query '{Timeout: Timeout, VpcConfig: VpcConfig}'",
+            "explanation": "Visibility should be ≥ 6 × Lambda Timeout. VPC config hints ENI cold start investigation."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runbook versus ad-hoc debugging",
+          "headers": ["Aspect", "Structured runbook", "Ad-hoc"],
+          "rows": [
+            ["Time to diagnose", "Minutes with practice", "Hours of random checks"],
+            ["Handoff", "Junior follows steps", "Tribal knowledge only"],
+            ["False fixes", "Scale only after step 3", "Scale broken code"],
+            ["Post-incident", "Update runbook gap", "Same mistake repeats"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Scale concurrency before checking Errors. Ignore DLQ. Skip visibility timeout check. No correlation ID in logs — cannot trace one bad message."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: game-day exercise inject fault — team follows runbook to diagnosis under 15 minutes. CloudWatch dashboard pre-built with all runbook metrics. Automate step 1-3 in incident Slack bot. Post-incident: if step skipped, update runbook."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Symptom", "Likely cause", "Wrong fix"],
+          "rows": [
+            ["Age up, concurrency 0", "Mapping disabled", "Scale RDS"],
+            ["Age up, errors high", "Bad deploy", "Raise concurrency"],
+            ["Age up, throttles", "Account limit", "Redeploy code"],
+            ["Duplicates in DB", "Visibility too short", "Add more Lambdas"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'I would scale Lambda.' Strong answer: ordered triage — metrics prove consumer running, errors ruled out, then scale or fix visibility."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Runbook order: queue age → concurrency → errors/throttles → DLQ → logs → X-Ray → visibility.",
+    "Never scale before ruling out code errors and poison messages.",
+    "Pre-build CloudWatch dashboard with all runbook metrics.",
+    "60s: Age depth concurrency errors DLQ logs trace visibility. Fix root cause. Dashboard in alarm.",
+    "Follow-up: automate runbook steps with incident bot?"
+  ],
+  "commonPitfalls": [
+    "Blind concurrency increase on erroring Lambda — rejection answer.",
+    "Strong answer: Logs Insights first when Errors metric elevated.",
+    "Skipping DLQ inspection — poison message keeps retrying.",
+    "No pre-built dashboard — wastes incident minutes."
+  ],
+  "relatedTopicIds": [
+    "aws-12-sqs-visibility-dlq",
+    "aws-12-sqs-lambda-consumer",
+    "aws-14-cloudwatch-metrics",
+    "aws-14-xray-tracing"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Observability-driven development",
+      "note": "Adding messageId to every log line at receive time is ODD — makes runbook step 5 queryable; same discipline as correlation ID in ASP.NET middleware.",
+      "futureTopicSlug": "typescript/observability/odd"
+    },
+    {
+      "language": "javascript",
+      "concept": "Postmortem templates",
+      "note": "Runbook gaps become postmortem action items — same as Google's incident review timeline vs debug checklist.",
+      "futureTopicSlug": "javascript/ops/incident-response"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SQS monitoring CloudWatch",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-monitoring-using-cloudwatch.html"
+    },
+    {
+      "title": "Lambda monitoring",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-monitoring.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

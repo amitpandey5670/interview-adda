@@ -1,0 +1,268 @@
+{
+  "id": "aws-06-vpc-endpoints",
+  "slug": "vpc-endpoints",
+  "title": "VPC endpoints (Gateway versus Interface)",
+  "moduleId": "aws-06-vpc-connectivity",
+  "order": 1,
+  "hook": "A Virtual Private Cloud (VPC) endpoint lets private subnets reach AWS services without NAT or the public internet. Gateway endpoints are route-table shortcuts for Amazon S3 and DynamoDB; Interface endpoints create Elastic Network Interfaces (ENIs) for other services via AWS PrivateLink.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "VPC endpoints are private front doors to AWS services. Gateway endpoints add an AWS prefix list to your route table for S3 or DynamoDB. Interface endpoints place ENIs in your subnets; DNS can resolve standard service hostnames to those private IPs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Gateway endpoint",
+              "longForm": "Gateway VPC endpoint",
+              "plainDefinition": "Route-table target for S3 or DynamoDB traffic on the AWS backbone.",
+              "example": "com.amazonaws.us-east-1.s3 in rtb-private."
+            },
+            {
+              "term": "Interface endpoint",
+              "longForm": "Interface VPC endpoint",
+              "plainDefinition": "Private ENI in your subnet terminating PrivateLink to an AWS service.",
+              "example": "Secrets Manager endpoint in subnet-private-a."
+            },
+            {
+              "term": "Endpoint policy",
+              "longForm": "VPC endpoint policy",
+              "plainDefinition": "Resource policy limiting which APIs or ARNs are reachable via the endpoint.",
+              "example": "Allow s3:GetObject only on prod-* buckets."
+            },
+            {
+              "term": "Private DNS",
+              "longForm": "Private DNS for interface endpoints",
+              "plainDefinition": "Regional service hostname resolves to endpoint ENI private IPs inside the VPC.",
+              "example": "secretsmanager.us-east-1.amazonaws.com → 10.0.4.55"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "NAT gateways bill hourly and per gigabyte. Large S3 pulls from private subnets should use a Gateway endpoint. Interface endpoints keep Secrets Manager, STS, and ECR off the public internet — required for many compliance frameworks."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Name the two types, which services each supports, and the three control planes: route tables, security groups, endpoint policies."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Gateway vs Interface",
+          "items": [
+            {
+              "title": "Choose type",
+              "body": "S3/DynamoDB → Gateway. All other AWS services → Interface."
+            },
+            {
+              "title": "Gateway setup",
+              "body": "Associate endpoint with route tables. No subnet or SG on the endpoint."
+            },
+            {
+              "title": "Interface setup",
+              "body": "Pick one subnet per AZ, attach SG allowing 443 from clients, enable private DNS if desired."
+            },
+            {
+              "title": "Harden",
+              "body": "Attach least-privilege endpoint policy in addition to IAM."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Endpoint types",
+            "source": "flowchart LR\n  EC2[Private EC2] --> RT[Route table]\n  RT --> S3[(S3 Gateway endpoint)]\n  EC2 -->|443| ENI[Interface ENI]\n  ENI --> SM[Secrets Manager]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — S3 Gateway endpoint",
+            "code": "aws ec2 create-vpc-endpoint \\\n  --vpc-id vpc-0abc123 \\\n  --service-name com.amazonaws.us-east-1.s3 \\\n  --route-table-ids rtb-private-a rtb-private-b",
+            "explanation": "Injects S3 prefix list routes. No security group parameter."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Interface endpoint",
+            "code": "SecretsEndpoint:\n  Type: AWS::EC2::VPCEndpoint\n  Properties:\n    VpcEndpointType: Interface\n    ServiceName: !Sub com.amazonaws.${AWS::Region}.secretsmanager\n    PrivateDnsEnabled: true\n    SubnetIds: [!Ref PrivateA, !Ref PrivateB]\n    SecurityGroupIds: [!Ref EndpointSg]",
+            "explanation": "Interface endpoints need subnets and a security group. PrivateDnsEnabled preserves SDK hostnames."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Endpoint policy",
+            "code": "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::prod-*/*\"}]}",
+            "explanation": "Restricts data plane even when IAM is broad."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — describe endpoints",
+            "code": "aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=vpc-0abc123 --query VpcEndpoints[].{Service:ServiceName,State:State,Dns:DnsEntries}",
+            "explanation": "Verify PrivateDnsEnabled and DnsEntries when SDK calls time out."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SDK paths",
+          "headers": [
+            "Aspect",
+            "VPC endpoints",
+            "Node.js default"
+          ],
+          "rows": [
+            [
+              "S3 from private subnet",
+              "Gateway route, no NAT",
+              "May egress via NAT unless endpoint exists"
+            ],
+            [
+              "Secrets Manager",
+              "Interface ENI + private DNS",
+              "Public regional HTTPS endpoint"
+            ],
+            [
+              "Policy",
+              "Endpoint policy + IAM",
+              "IAM only"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls",
+          "body": "Interface steps for S3. Missing SG on Interface ENI. One route table not associated — partial AZ failure."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Gateway endpoints are prefix routes without ENIs. Interface endpoints bill per-AZ ENI hour plus data processing. How to prove it in production: NAT gateway BytesOutToDestination drops after S3 Gateway adoption; Flow Logs to S3 prefix bypass NAT IPs; dig from bastion confirms private DNS for Interface endpoints."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Choice",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Gateway S3",
+              "Free; no NAT hairpin",
+              "Only S3/DynamoDB"
+            ],
+            [
+              "Interface + private DNS",
+              "No SDK code change",
+              "ENI hourly per AZ"
+            ],
+            [
+              "NAT only",
+              "Works for all APIs",
+              "Egress cost and public path"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying endpoints replace security groups. Strong: Gateway = routes; Interface = ENI + SG + endpoint policy. S3/DynamoDB are Gateway-only."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Gateway endpoints = S3 and DynamoDB via route tables; Interface endpoints = ENI PrivateLink for other services.",
+    "Interface endpoints need security groups and optional private DNS; Gateway endpoints do not use security groups.",
+    "Add Gateway S3 + Interface STS/Secrets endpoints in Lambda-in-VPC before blaming NAT for latency.",
+    "60s: Gateway for S3/DynamoDB (free, route table). Interface for everything else (ENI, SG, hourly). Endpoint policies restrict scope. Private DNS keeps SDK hostnames.",
+    "Follow-up: how do endpoint policies differ from IAM and security groups?"
+  ],
+  "commonPitfalls": [
+    "Saying VPC endpoints replace security groups gets you rejected — Gateway has no ENI SG; Interface still needs tcp/443 rules.",
+    "Strong answer: Gateway = route target; Interface = ENI + SG + endpoint policy + optional private DNS.",
+    "Using Interface endpoint type for S3 — S3 uses Gateway endpoints.",
+    "Forgetting to associate all private route tables with the Gateway endpoint."
+  ],
+  "relatedTopicIds": [
+    "aws-06-privatelink",
+    "aws-06-transit-gateway",
+    "aws-06-hybrid-scenario",
+    "aws-07-security-groups"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "AWS SDK v3 default endpoints",
+      "note": "Node SDK uses regional hostnames; VPC private DNS redirects resolution inside the VPC without code changes.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Lambda VPC networking",
+      "note": "TypeScript Lambdas in VPC need endpoints or NAT for AWS API calls — similar to corporate proxy NO_PROXY lists.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Gateway VPC endpoints",
+      "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html"
+    },
+    {
+      "title": "Interface VPC endpoints",
+      "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/create-interface-endpoint.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "lambda-vpc"
+}

@@ -1,0 +1,236 @@
+{
+  "id": "aws-14-cloudwatch-metrics",
+  "slug": "cloudwatch-metrics",
+  "title": "CloudWatch metrics (namespaces, dimensions, and custom metrics)",
+  "moduleId": "aws-14-cloudwatch-observability",
+  "order": 1,
+  "hook": "Amazon CloudWatch metrics are time-series data points identified by namespace, metric name, and dimensions. AWS services publish automatically; your applications emit custom metrics — but high-cardinality dimensions can explode cost.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Metrics live in namespaces like AWS/Lambda or Custom/Orders. Dimensions are key-value filters — FunctionName, QueueName. Statistics include Sum, Average, p99 via extended statistics. PutMetricData publishes custom points; Embedded Metric Format (EMF) extracts metrics from structured logs without separate API calls."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Namespace",
+              "longForm": "CloudWatch metric namespace",
+              "plainDefinition": "Container grouping related metrics.",
+              "example": "AWS/SQS, Custom/Payments"
+            },
+            {
+              "term": "Dimension",
+              "longForm": "metric dimension",
+              "plainDefinition": "Name-value pair identifying metric variant.",
+              "example": "QueueName=orders"
+            },
+            {
+              "term": "EMF",
+              "longForm": "Embedded Metric Format",
+              "plainDefinition": "JSON log structure CloudWatch parses into metrics.",
+              "example": "Lambda log line with _aws CloudWatchMetrics block"
+            },
+            {
+              "term": "Cardinality",
+              "longForm": "metric cardinality",
+              "plainDefinition": "Number of unique dimension combinations — cost driver.",
+              "example": "userId dimension with 1M users = 1M metric series"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "You cannot debug what you do not measure. SQS ApproximateAgeOfOldestMessage is the lag SLA metric. Custom metrics per userId bankrupt the account. Senior engineers design metric hierarchies: aggregate in metrics, drill in logs."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: namespace + name + dimensions. Low cardinality dimensions. EMF from Lambda logs. Alarm on age and error rate not raw counts alone."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Metric emission paths",
+          "items": [
+            {
+              "title": "AWS service auto-publish",
+              "body": "Lambda, SQS, API Gateway emit to AWS/* namespaces."
+            },
+            {
+              "title": "PutMetricData API",
+              "body": "Application publishes custom namespace metrics."
+            },
+            {
+              "title": "EMF in logs",
+              "body": "Structured log parsed into metrics on ingest."
+            },
+            {
+              "title": "Metric math in alarms",
+              "body": "Combine metrics: error rate = Errors/Invocations*100."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Metric data path",
+            "source": "flowchart LR\n  L[Lambda] -->|stdout EMF| LOGS[CloudWatch Logs]\n  LOGS -->|extract| M[CloudWatch Metrics]\n  APP[App] -->|PutMetricData| M\n  SQS[SQS] -->|auto| M\n  M --> A[Alarms Dashboard]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — EMF structured log metric",
+            "code": "function emitOrderMetric(count: number, env: string) {\n  console.log(JSON.stringify({\n    _aws: {\n      Timestamp: Date.now(),\n      CloudWatchMetrics: [{\n        Namespace: 'Custom/Orders',\n        Dimensions: [['Environment']],\n        Metrics: [{ Name: 'OrdersProcessed', Unit: 'Count' }],\n      }],\n    },\n    Environment: env,\n    OrdersProcessed: count,\n  }));\n}",
+            "explanation": "CloudWatch extracts OrdersProcessed without PutMetricData charges per call pattern."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — query SQS lag metric",
+            "code": "aws cloudwatch get-metric-statistics \\\n  --namespace AWS/SQS \\\n  --metric-name ApproximateAgeOfOldestMessage \\\n  --dimensions Name=QueueName,Value=orders \\\n  --start-time $(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ) \\\n  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \\\n  --period 60 --statistics Maximum",
+            "explanation": "Maximum statistic catches worst-case lag in each minute — better for SLA than Average."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — PutMetricData with low cardinality",
+            "code": "import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';\n\nconst cw = new CloudWatchClient({});\n\nawait cw.send(new PutMetricDataCommand({\n  Namespace: 'Custom/Payments',\n  MetricData: [{\n    MetricName: 'ChargeLatency',\n    Value: 245,\n    Unit: 'Milliseconds',\n    Dimensions: [{ Name: 'Environment', Value: 'prod' }],\n  }],\n}));",
+            "explanation": "Only Environment dimension — not per-orderId. Use logs for per-order drill-down."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — alarm with metric math error rate",
+            "code": "Resources:\n  ErrorRateAlarm:\n    Type: AWS::CloudWatch::Alarm\n    Properties:\n      AlarmName: payment-processor-error-rate\n      Metrics:\n        - Id: errors\n          MetricStat:\n            Metric:\n              Namespace: AWS/Lambda\n              MetricName: Errors\n              Dimensions:\n                - Name: FunctionName\n                  Value: payment-processor\n            Period: 60\n            Stat: Sum\n        - Id: invocations\n          MetricStat:\n            Metric:\n              Namespace: AWS/Lambda\n              MetricName: Invocations\n              Dimensions:\n                - Name: FunctionName\n                  Value: payment-processor\n            Period: 60\n            Stat: Sum\n        - Id: errorRate\n          Expression: (errors / invocations) * 100\n      Threshold: 5\n      ComparisonOperator: GreaterThanThreshold\n      EvaluationPeriods: 2",
+            "explanation": "Metric math alarm on percentage — scales with traffic volume unlike raw error count."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CloudWatch vs application metrics libraries",
+          "headers": ["Aspect", "CloudWatch", "Prometheus + Grafana"],
+          "rows": [
+            ["Integration", "Native AWS", "Self-hosted or AMP"],
+            ["Cardinality cost", "Per metric series billed", "Label cardinality memory"],
+            ["EMF", "Log-derived metrics", "No direct equivalent"],
+            ["Alarm", "CloudWatch Alarms", "Alertmanager"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "userId as dimension. Alarm on raw Errors without normalizing by Invocations. Average on latency when p99 matters. Missing Maximum on AgeOfOldestMessage."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Cost Explorer custom metrics line; dimension count audit script. SQS dashboard: AgeOfOldestMessage + NumberOfMessagesVisible + NumberOfMessagesDeleted rate. Lambda INSIGHTS for enhanced metrics. High-resolution metrics (1-second) cost more — enable only during incidents."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Approach", "When", "Risk"],
+          "rows": [
+            ["Auto AWS metrics", "Always on", "No business context"],
+            ["EMF from Lambda", "Custom KPIs cheaply", "Log volume coupling"],
+            ["PutMetricData", "Non-Lambda emitters", "API call cost"],
+            ["Logs only drill", "High cardinality detail", "No real-time alarm"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'emit a metric per user for dashboards.' Strong answer: aggregate metrics low cardinality; per-user in Logs Insights or data warehouse."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Metrics = namespace + name + dimensions; AWS services auto-publish to AWS/* namespaces.",
+    "Avoid high-cardinality dimensions — aggregate per tenant/environment.",
+    "EMF in Lambda logs extracts custom metrics without per-call PutMetricData.",
+    "60s: AgeOfOldestMessage for SQS lag. Error rate metric math. Low cardinality. EMF from logs.",
+    "Follow-up: when enable high-resolution 1-second metrics?"
+  ],
+  "commonPitfalls": [
+    "Per-userId PutMetricData — cost explosion rejection answer.",
+    "Strong answer: tenant-level aggregate metrics, user detail in logs.",
+    "Alarm raw error count on variable traffic.",
+    "Using Average for queue age SLA instead of Maximum."
+  ],
+  "relatedTopicIds": [
+    "aws-14-cloudwatch-alarms",
+    "aws-14-cloudwatch-logs",
+    "aws-14-lambda-sqs-debug-runbook"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "OpenTelemetry metrics",
+      "note": "OTel MeterProvider export to CloudWatch via ADOT collector — same cardinality discipline applies to labels.",
+      "futureTopicSlug": "typescript/observability/opentelemetry"
+    },
+    {
+      "language": "javascript",
+      "concept": "StatsD counters",
+      "note": "statsd.increment('orders') maps to CloudWatch Sum statistic — dimensions replace StatsD tags.",
+      "futureTopicSlug": "javascript/backend/metrics"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "CloudWatch metrics concepts",
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html"
+    },
+    {
+      "title": "Embedded Metric Format",
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format.html"
+    }
+  ],
+  "animationHint": "timeline"
+}

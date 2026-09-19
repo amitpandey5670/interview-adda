@@ -1,0 +1,191 @@
+{
+  "id": "aws-03-tags-and-environments",
+  "slug": "tags-and-environments",
+  "title": "Tags and environments (dev, staging, production)",
+  "moduleId": "aws-03-accounts-identity-tenancy",
+  "order": 5,
+  "hook": "Tags are key-value metadata on AWS resources. They power cost allocation, automation, and access conditions — but they are not a security boundary. Use separate accounts for prod isolation; use tags for attribution and policy scoping within an account.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every taggable AWS resource can carry tags like Environment=production, Team=platform, Application=orders-api. AWS Tag Editor and Resource Groups search across services. Cost allocation tags must be activated in the billing console before Cost Explorer groups by them. Tag policies in Organizations enforce required keys. Environment separation (dev, staging, prod) is best done with separate accounts; tags distinguish resources within an account and drive IaC parameterization."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Cost allocation tag",
+              "longForm": "AWS cost allocation tag",
+              "plainDefinition": "A tag activated for billing reports so spend can be grouped by that key.",
+              "example": "Environment tag appears in Cost Explorer after activation."
+            },
+            {
+              "term": "Tag policy",
+              "longForm": "AWS Organizations tag policy",
+              "plainDefinition": "Org rule requiring specific tag keys/values on resources.",
+              "example": "Require Environment with allowed values dev, staging, prod."
+            },
+            {
+              "term": "Resource Groups",
+              "longForm": "AWS Resource Groups",
+              "plainDefinition": "Query engine to find resources matching tag filters across services.",
+              "example": "All EC2 with Application=orders-api."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Untagged resources are invisible to finance and dangerous in incident response ('which team owns this NAT Gateway?'). SCPs and IAM conditions can use aws:RequestTag and aws:ResourceTag for guardrails — e.g., deny ec2:RunInstances unless Environment tag is present. Tags complement, not replace, account-level isolation."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Tags for cost and automation; accounts for security boundaries. Require tags at deploy time via IaC and tag policies."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Tag governance workflow",
+          "items": [
+            {
+              "title": "Define standard keys",
+              "body": "Environment, Team, Application, Owner — document in internal wiki."
+            },
+            {
+              "title": "Enforce at creation",
+              "body": "CloudFormation, CDK, and SCP tag-on-create conditions."
+            },
+            {
+              "title": "Activate billing tags",
+              "body": "Billing console → Cost allocation tags → activate Environment."
+            },
+            {
+              "title": "Audit drift",
+              "body": "AWS Config rules flag untagged or non-compliant resources."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Tags vs account boundaries",
+            "source": "flowchart LR\n  subgraph Accounts[\"Account boundaries\"]\n    DEV_ACC[Dev account]\n    PRD_ACC[Prod account]\n  end\n  subgraph Tags[\"Tags within account\"]\n    R1[EC2 Environment=dev]\n    R2[RDS Application=api]\n  end\n  DEV_ACC --> R1\n  PRD_ACC --> R2"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: tag resources and find untagged EC2",
+            "code": "aws ec2 create-tags \\\n  --resources i-0abc123 \\\n  --tags Key=Environment,Value=prod Key=Application,Value=orders-api\n\naws resourcegroupstaggingapi get-resources \\\n  --resource-type-filters ec2:instance \\\n  --tag-filters Key=Environment,Values=prod",
+            "explanation": "create-tags at launch time. Resource Groups API inventories by tag across the account."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: mandatory tags on all resources",
+            "code": "Parameters:\n  Environment:\n    Type: String\n    AllowedValues: [dev, staging, prod]\nResources:\n  AppInstance:\n    Type: AWS::EC2::Instance\n    Properties:\n      InstanceType: t3.micro\n      ImageId: ami-0c55b159cbfafe1f0\n      Tags:\n        - Key: Environment\n          Value: !Ref Environment\n        - Key: Application\n          Value: orders-api",
+            "explanation": "Parameterize Environment; every stack resource inherits consistent tags from IaC."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: SCP require Environment tag on create",
+            "code": "Statement:\n  - Effect: Deny\n    Action:\n      - ec2:RunInstances\n      - rds:CreateDBInstance\n    Resource: '*'\n    Condition:\n      Null:\n        aws:RequestTag/Environment: 'true'",
+            "explanation": "Org SCP denies resource creation without Environment tag — governance at API level."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare tagging strategies",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Environment separation approaches",
+          "headers": ["Approach", "Cost visibility", "Security isolation"],
+          "rows": [
+            ["Tags only in one account", "Good if tags enforced", "Weak — IAM mistakes affect all"],
+            ["Account per environment", "Good with consolidated billing", "Strong — separate IAM and quotas"],
+            ["Account + tags", "Best attribution", "Best practice for enterprise"],
+            ["Separate VPCs + tags", "Moderate", "Network only — not IAM"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Tagging manually after creation — resources miss billing window. Using Environment=prod tag as sole security control. Not activating cost allocation tags so finance cannot see team spend."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Tags are metadata for cost, automation, and IAM conditions — not security isolation.",
+    "Separate accounts for prod; tags for attribution and policy scoping within accounts.",
+    "Activate cost allocation tags; enforce required keys via tag policies and SCP conditions.",
+    "60s: Tags = cost and ops. Accounts = security boundary. Standard keys: Environment, Team, Application. Enforce at create via IaC and SCP aws:RequestTag conditions.",
+    "Follow-up: how do tag policies differ from SCP tag conditions?"
+  ],
+  "commonPitfalls": [
+    "Treating Environment=prod tag as equivalent to a prod account — gets you rejected in security-focused interviews.",
+    "Strong answer: accounts isolate blast radius; tags allocate cost and drive automation within account.",
+    "Forgetting to activate cost allocation tags — tags exist but Cost Explorer ignores them.",
+    "Retroactive tagging after month-end close — spend already unattributed."
+  ],
+  "relatedTopicIds": [
+    "aws-03-aws-account-boundary",
+    "aws-01-billing-and-resources",
+    "aws-03-organizations-and-scps",
+    "aws-03-multi-tenant-isolation-overview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "CDK Aspects for mandatory tags",
+      "note": "Apply Tags.of(scope).add('Environment', props.env) in CDK Aspects so every construct gets tags at synth — same discipline as eslint rules for code quality.",
+      "futureTopicSlug": "aws/iac/cdk-tagging-aspects"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Tagging AWS resources",
+      "url": "https://docs.aws.amazon.com/general/latest/gr/aws_tagging.html"
+    },
+    {
+      "title": "Tag policies",
+      "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_tag-policies.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

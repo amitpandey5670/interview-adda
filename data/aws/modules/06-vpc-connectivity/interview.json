@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-06-vpc-connectivity",
+  "title": "VPC connectivity interview drills",
+  "items": [
+    {
+      "question": "Your Lambda functions in a private VPC timeout calling S3 but IAM is correct. What do you check first?",
+      "answer": "Private subnets have no internet by default. Without an S3 Gateway VPC endpoint (or NAT), S3 traffic has no path. Add a Gateway endpoint on private route tables — free and removes NAT hairpin. If using Interface endpoints by mistake for S3, switch to Gateway type. Verify with Flow Logs: traffic should hit S3 prefix list, not NAT ENI.",
+      "followUps": [
+        "When would you add an Interface endpoint for STS alongside S3 Gateway?",
+        "How does endpoint policy differ from the Lambda execution role?"
+      ],
+      "sixtySeconds": "Lambda in VPC needs S3 Gateway endpoint or NAT. Gateway endpoint on route tables is free. Check route table association and endpoint policy."
+    },
+    {
+      "question": "VPC A peers with B and B peers with C. Can A reach C?",
+      "answer": "No. VPC peering is non-transitive. A has routes only to B's CIDR via pcx-AB; it never learns C's CIDR through B. Fix: peer A↔C directly, or attach all three to Transit Gateway with route tables that allow the paths you intend.",
+      "followUps": [
+        "How many peering connections for N VPCs in full mesh?",
+        "When is peering still the right tool?"
+      ],
+      "sixtySeconds": "Peering is pairwise, not transitive. A↔B and B↔C does not give A↔C. Use TGW for hub-and-spoke."
+    },
+    {
+      "question": "How do you stop dev VPC workloads from reaching prod VPC on the same Transit Gateway?",
+      "answer": "Use separate TGW route tables (route domains). Associate dev attachment with dev RT, prod with prod RT. Do not propagate both into the same RT unless you want full mesh. Add static routes only to shared services spoke. VPC route tables still send remote CIDR to TGW — hub RT decides whether forwarding is allowed.",
+      "followUps": [
+        "What is a blackhole route on TGW?",
+        "How does propagation differ from association?"
+      ],
+      "sixtySeconds": "TGW RT segmentation — separate associations per env. No shared propagation between prod and dev unless intended."
+    },
+    {
+      "question": "Direct Connect goes down during a nightly batch. What should happen?",
+      "answer": "Design DX as primary with VPN backup on the same TGW. BGP withdraws DX prefixes; VPN routes take over with higher AS path or lower local preference on DX. Batch job should retry with backoff during convergence. Monitor VpnConnections VgwTelemetry and DX ConnectionState. Run quarterly failover drills — static routes without BGP fail silently.",
+      "followUps": [
+        "Accelerated Site-to-Site VPN — when does it help?",
+        "Single DX connection versus dual DX for physical redundancy?"
+      ],
+      "sixtySeconds": "DX primary, VPN backup, BGP failover. Alarm on tunnel state. Retry apps during convergence. Drill regularly."
+    },
+    {
+      "question": "PrivateLink versus VPC peering for a multi-tenant SaaS API?",
+      "answer": "PrivateLink exposes only the NLB listener ports behind an endpoint service — consumers get Interface endpoints in their VPC. No full CIDR routing, no peer of entire networks. Peering shares Layer 3 reachability between two VPC CIDRs — over-sharing for SaaS. PrivateLink scales per-tenant endpoints with principal allow lists.",
+      "followUps": [
+        "What happens if provider NLB is single-AZ?",
+        "AcceptanceRequired on endpoint service — why?"
+      ],
+      "sixtySeconds": "PrivateLink = service exposure via NLB. Peering = full VPC CIDR mesh. SaaS favors PrivateLink per tenant."
+    },
+    {
+      "question": "Walk through hybrid connectivity for ERP on-prem syncing to three AWS VPCs.",
+      "answer": "DX Private VIF to Direct Connect Gateway attached to TGW; VPN backup with lower preference. Prod, staging, shared VPCs attach to TGW with segmented route tables — staging reaches shared, not prod. S3 Gateway endpoint in each VPC for artifact sync. Fraud SaaS via PrivateLink in prod only. On-prem advertises only required prefixes via BGP. Verify with search-transit-gateway-routes and Flow Logs.",
+      "followUps": [
+        "Split tunnel versus full tunnel from on-prem?",
+        "Where do you place TGW attachment subnets?"
+      ],
+      "sixtySeconds": "DX+VPN→TGW, RT domains, endpoints per VPC, PrivateLink for SaaS, BGP least privilege, test failover."
+    },
+    {
+      "question": "Interface VPC endpoint to Secrets Manager fails with timeout. Security groups look open on the task. Next steps?",
+      "answer": "Check endpoint ENI security group allows tcp/443 from task SG — clients and endpoint ENI both need rules. Confirm PrivateDnsEnabled or use correct DnsEntries hostname. Verify subnets span multiple AZs. Endpoint policy may deny API. Flow Logs on task ENI: SYN without ACK implicates SG; SYN-ACK then RST implicates policy or KMS.",
+      "followUps": [
+        "Gateway endpoint for Secrets Manager — valid?",
+        "DNS resolution order inside VPC?"
+      ],
+      "sixtySeconds": "Interface endpoint needs SG on ENI + client, private DNS, endpoint policy. Not Gateway type for Secrets Manager."
+    },
+    {
+      "question": "When would you still choose VPC peering over Transit Gateway?",
+      "answer": "Two VPCs, low operational overhead, no transitive needs, and you want zero TGW hourly charges. Peering is simpler for a single permanent link (e.g., app VPC to one shared services VPC). Once you exceed a handful of VPCs or need hybrid attachments centralized, TGW wins despite cost.",
+      "followUps": [
+        "Cross-account peering acceptance workflow?",
+        "Peering with overlapping CIDR from acquisition?"
+      ],
+      "sixtySeconds": "Peering for two VPCs, no transit. TGW when N VPCs, hybrid hub, or segmented domains at scale."
+    }
+  ]
+}

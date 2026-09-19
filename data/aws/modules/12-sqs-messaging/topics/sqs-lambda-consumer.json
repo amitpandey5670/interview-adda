@@ -1,0 +1,238 @@
+{
+  "id": "aws-12-sqs-lambda-consumer",
+  "slug": "sqs-lambda-consumer",
+  "title": "Lambda as an SQS consumer (batching, partial failure, and scaling)",
+  "moduleId": "aws-12-sqs-messaging",
+  "order": 3,
+  "hook": "An Lambda event source mapping polls your SQS queue and invokes the function with a batch of messages. Batching improves throughput but complicates error handling — partial batch failure reporting retries only the failed items.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lambda polls SQS on your behalf, passing an event with Records array. Configuration includes batchSize (1–10), maximumBatchingWindow, functionResponseType ReportBatchItemFailures, and scaling behavior tied to account concurrency. Lambda deletes successfully processed messages; failures return to queue per partial batch rules."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Event source mapping",
+              "longForm": "Lambda event source mapping",
+              "plainDefinition": "AWS-managed link between SQS queue and Lambda function.",
+              "example": "UUID mapping with batchSize 10 on orders queue."
+            },
+            {
+              "term": "batchSize",
+              "longForm": "batch size",
+              "plainDefinition": "Max messages per Lambda invocation (up to 10 for SQS).",
+              "example": "batchSize 1 for payment — isolate failures."
+            },
+            {
+              "term": "ReportBatchItemFailures",
+              "longForm": "partial batch response",
+              "plainDefinition": "Lambda response listing only failed message IDs for retry.",
+              "example": "Return batchItemFailures with one messageId."
+            },
+            {
+              "term": "Reserved concurrency",
+              "longForm": "Lambda reserved concurrency",
+              "plainDefinition": "Guaranteed or capped parallel executions for a function.",
+              "example": "Reserved 50 — queue drains at most 50 concurrent."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Default batch failure retries the entire batch — nine good messages reprocessed because one failed. Reserved concurrency set too low starves the queue; too high without downstream capacity overloads RDS. VPC Lambda adds cold start latency that can interact badly with tight visibility timeouts."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: enable ReportBatchItemFailures, tune batchSize to failure blast radius, match visibility to timeout × 6, watch ConcurrentExecutions vs queue age."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Lambda SQS poll cycle",
+          "items": [
+            {
+              "title": "Poller scales with depth",
+              "body": "Lambda adds pollers as ApproximateNumberOfMessagesVisible grows."
+            },
+            {
+              "title": "Batch invoke",
+              "body": "Up to batchSize messages in one event; window waits to fill batch."
+            },
+            {
+              "title": "Process and respond",
+              "body": "Success or partial failure response determines which messages delete."
+            },
+            {
+              "title": "Failed messages return",
+              "body": "After visibility timeout, unprocessed messages visible again."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Partial batch failure flow",
+            "source": "flowchart LR\n  Q[(SQS 10 msgs)] --> L[Lambda batch invoke]\n  L -->|7 OK delete| Q\n  L -->|3 fail in response| Q\n  Q -->|retry 3 only| L2[Lambda retry]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — event source mapping with partial failure",
+            "code": "Resources:\n  OrderProcessorMapping:\n    Type: AWS::Lambda::EventSourceMapping\n    Properties:\n      EventSourceArn: !GetAtt OrdersQueue.Arn\n      FunctionName: !Ref OrderProcessor\n      BatchSize: 10\n      MaximumBatchingWindowInSeconds: 5\n      FunctionResponseTypes:\n        - ReportBatchItemFailures",
+            "explanation": "FunctionResponseTypes enables partial batch. Batching window trades latency for fuller batches."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — partial batch failure handler",
+            "code": "import type { SQSBatchResponse, SQSHandler } from 'aws-lambda';\n\nexport const handler: SQSHandler = async (event): Promise<SQSBatchResponse> => {\n  const failures: { itemIdentifier: string }[] = [];\n  for (const record of event.Records) {\n    try {\n      await processOrder(JSON.parse(record.body));\n    } catch {\n      failures.push({ itemIdentifier: record.messageId });\n    }\n  }\n  return { batchItemFailures: failures };\n};",
+            "explanation": "Only failed messageIds retry. Successful records deleted by Lambda runtime automatically."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — set reserved concurrency cap",
+            "code": "aws lambda put-function-concurrency \\\n  --function-name order-processor \\\n  --reserved-concurrent-executions 25",
+            "explanation": "Caps max parallel invocations — protects downstream DB from unbounded scale-up."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — check mapping and queue lag metrics",
+            "code": "aws lambda list-event-source-mappings \\\n  --function-name order-processor\n\naws cloudwatch get-metric-statistics \\\n  --namespace AWS/SQS \\\n  --metric-name ApproximateAgeOfOldestMessage \\\n  --dimensions Name=QueueName,Value=orders \\\n  --start-time $(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ) \\\n  --end-time $(date -u +%Y-%m-%dT%H:%M:%SZ) \\\n  --period 300 --statistics Maximum",
+            "explanation": "Correlate mapping state with oldest message age to prove consumer lag during incident."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Lambda SQS trigger versus manual poll loop",
+          "headers": ["Aspect", "Lambda mapping", "EC2 while-loop poll"],
+          "rows": [
+            ["Scaling", "Automatic with queue depth", "You size fleet"],
+            ["Batching", "Built-in batchSize", "Manual ReceiveMessage MaxNumberOfMessages"],
+            ["Partial failure", "ReportBatchItemFailures", "Manual per-message try/catch"],
+            ["Cost", "Per invocation", "Always-on instance cost"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Throwing uncaught exception with full batch — all messages retry. batchSize 10 on poison-prone payloads. No reserved concurrency on DB-bound handler. VPC Lambda without provisioned concurrency on latency-sensitive queue."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: dashboard ConcurrentExecutions + ApproximateAgeOfOldestMessage + Errors. Throttles metric with rising queue depth means account or reserved concurrency limit. VPC cold start shows in InitDuration — correlate with message age spikes after scale-from-zero."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Knob", "Higher value", "Lower value"],
+          "rows": [
+            ["batchSize", "Throughput, fewer invocations", "Isolation, smaller retry blast"],
+            ["maxBatchingWindow", "Fuller batches", "Added end-to-end latency"],
+            ["reserved concurrency", "Protect downstream", "Queue drain cap"],
+            ["batchSize 1", "Payment isolation", "Higher Lambda cost"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'Lambda auto-scales so queue depth does not matter.' Strong answer: concurrency limits, downstream bottlenecks, and partial batch failure handling all cap effective drain rate."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Event source mapping polls SQS; batchSize and batching window tune throughput versus latency.",
+    "ReportBatchItemFailures retries only failed messages — required for batchSize > 1.",
+    "Reserved concurrency protects downstream or caps drain rate — not always 'max scale'.",
+    "60s: Partial batch failures. batchSize tradeoff. Visibility 6× timeout. Concurrency vs queue age dashboard.",
+    "Follow-up: how does VPC affect Lambda SQS consumer cold starts?"
+  ],
+  "commonPitfalls": [
+    "Uncaught exception retries entire batch of 10 — rejection answer without ReportBatchItemFailures.",
+    "Strong answer: return batchItemFailures array with failed messageIds only.",
+    "Unlimited concurrency melting RDS connection pool.",
+    "Ignoring InitDuration spikes on VPC-attached consumers."
+  ],
+  "relatedTopicIds": [
+    "aws-12-sqs-visibility-dlq",
+    "aws-12-sqs-idempotency",
+    "aws-13-step-functions-lambda-sqs",
+    "aws-14-lambda-sqs-debug-runbook"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Serverless batch handlers",
+      "note": "SQSHandler batch loop mirrors C# Lambda runtime with IEnumerable<SQSEvent.SQSMessage> — or a self-hosted BackgroundService processing a pulled batch with parallel ForEachAsync.",
+      "futureTopicSlug": "csharp-13-async-await"
+    },
+    {
+      "language": "javascript",
+      "concept": "AWS Lambda Powertools batch processing",
+      "note": "Powertools partial response utility wraps the same batchItemFailures pattern — reduces boilerplate versus raw SQSHandler.",
+      "futureTopicSlug": "typescript/aws/lambda-powertools"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Using Lambda with SQS",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html"
+    },
+    {
+      "title": "Reporting batch item failures",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/services-sqs-errorhandling.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "lambda-vpc"
+}

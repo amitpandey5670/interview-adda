@@ -1,0 +1,191 @@
+{
+  "id": "aws-04-tls-certificates",
+  "slug": "tls-certificates",
+  "title": "TLS certificates (encrypting traffic in transit)",
+  "moduleId": "aws-04-networking-primer",
+  "order": 3,
+  "hook": "Transport Layer Security (TLS) encrypts data between clients and servers. AWS Certificate Manager (ACM) provisions and renews certificates you attach to Application Load Balancer (ALB), CloudFront, or API Gateway.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "TLS uses X.509 certificates to authenticate the server and establish an encrypted channel. A certificate binds a public key to a domain name (Common Name or Subject Alternative Names). Certificate Authorities (CAs) sign certificates; browsers trust public CAs in their root store. AWS Certificate Manager (ACM) issues free public certificates for use on integrated AWS services with automatic renewal. For internal services, Private Certificate Authority (PCA) in ACM issues private certs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TLS",
+              "longForm": "Transport Layer Security",
+              "plainDefinition": "Protocol encrypting HTTP into HTTPS and protecting data in transit.",
+              "example": "TLS 1.3 handshake negotiates cipher suite before sending cookies."
+            },
+            {
+              "term": "ACM",
+              "longForm": "AWS Certificate Manager",
+              "plainDefinition": "Managed service for provisioning and renewing SSL/TLS certificates on AWS.",
+              "example": "Attach ACM cert to ALB listener on port 443."
+            },
+            {
+              "term": "SNI",
+              "longForm": "Server Name Indication",
+              "plainDefinition": "TLS extension telling server which hostname client expects — enables multiple certs on one IP.",
+              "example": "api.example.com and www.example.com on same ALB via SNI."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Unencrypted HTTP exposes tokens and session cookies. Modern browsers flag non-HTTPS sites. ACM removes manual renewal toil but requires DNS validation proving domain ownership. Interviews test ALB listener configuration, certificate Region constraints (CloudFront certs must be in us-east-1), and enforcing TLS with IAM aws:SecureTransport conditions."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "ACM for AWS-integrated certs with auto-renewal. DNS validation via Route 53. CloudFront requires cert in us-east-1."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "HTTPS request with ACM cert",
+          "items": [
+            {
+              "title": "Client initiates TLS",
+              "body": "Browser connects to ALB:443 and sends SNI hostname."
+            },
+            {
+              "title": "ALB presents certificate",
+              "body": "ACM-issued cert for api.example.com returned in handshake."
+            },
+            {
+              "title": "Client validates chain",
+              "body": "Browser checks signature against trusted CA roots."
+            },
+            {
+              "title": "Encrypted HTTP",
+              "body": "Application data flows over encrypted channel — ALB may re-encrypt to backend."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "TLS termination at ALB",
+            "source": "flowchart LR\n  CLIENT[Browser] -->|TLS 1.3 HTTPS| ALB[ALB :443 ACM cert]\n  ALB -->|HTTP or HTTPS| TARGET[EC2 / ECS targets]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: request ACM cert with DNS validation",
+            "code": "aws acm request-certificate \\\n  --domain-name api.example.com \\\n  --subject-alternative-names '*.example.com' \\\n  --validation-method DNS \\\n  --query CertificateArn --output text\n\naws acm describe-certificate \\\n  --certificate-arn arn:aws:acm:us-east-1:123:certificate/abc-123 \\\n  --query 'Certificate.DomainValidationOptions'",
+            "explanation": "DNS validation adds CNAME records to Route 53. ACM auto-renews before expiry once validated."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: ALB HTTPS listener with ACM",
+            "code": "Resources:\n  HttpsListener:\n    Type: AWS::ElasticLoadBalancingV2::Listener\n    Properties:\n      LoadBalancerArn: !Ref AppLoadBalancer\n      Port: 443\n      Protocol: HTTPS\n      Certificates:\n        - CertificateArn: !Ref ApiCertificate\n      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06\n      DefaultActions:\n        - Type: forward\n          TargetGroupArn: !Ref AppTargetGroup",
+            "explanation": "TLS terminates at ALB using ACM cert. SslPolicy enforces TLS 1.2+ — disable legacy protocols."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: enforce TLS on S3 via bucket policy",
+            "code": "aws s3api put-bucket-policy --bucket app-data-prod --policy '{\n  \"Version\": \"2012-10-17\",\n  \"Statement\": [{\n    \"Effect\": \"Deny\",\n    \"Principal\": \"*\",\n    \"Action\": \"s3:*\",\n    \"Resource\": [\"arn:aws:s3:::app-data-prod\", \"arn:aws:s3:::app-data-prod/*\"],\n    \"Condition\": {\"Bool\": {\"aws:SecureTransport\": \"false\"}}\n  }]\n}'",
+            "explanation": "Deny all S3 operations over plain HTTP — defense in depth beyond ACM on the load balancer."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare termination options",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Where to terminate TLS",
+          "headers": ["Location", "Pros", "Cons"],
+          "rows": [
+            ["CloudFront", "Edge TLS, DDoS protection", "Cert must be us-east-1"],
+            ["ALB", "Central cert management, path routing", "Extra hop if end-to-end encryption needed"],
+            ["On instance", "Full control, mTLS possible", "You manage renewal and cipher config"],
+            ["API Gateway", "Managed TLS for APIs", "Payload size and timeout limits"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Requesting ACM cert in wrong Region for CloudFront. HTTP listener on 443 without redirect from 80. Expired cert because DNS validation CNAME was deleted. Using self-signed cert on public ALB without understanding browser trust errors."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "TLS encrypts traffic in transit; ACM provides free auto-renewing certs for AWS integrations.",
+    "Terminate TLS at CloudFront or ALB; enforce aws:SecureTransport on S3 and API policies.",
+    "CloudFront certificates must be requested in us-east-1 regardless of origin Region.",
+    "60s: ACM + DNS validation + attach to ALB listener. TLS 1.2+ policy. CloudFront cert in us-east-1. Deny insecure transport on S3.",
+    "Follow-up: what is mTLS and when would you use it?"
+  ],
+  "commonPitfalls": [
+    "ACM cert in eu-west-1 for CloudFront — must be us-east-1.",
+    "Strong answer: know Regional cert constraints per service integration.",
+    "Terminating TLS at ALB but sending HTTP to backend without understanding encryption gap.",
+    "Deleting Route 53 validation CNAME — breaks auto-renewal."
+  ],
+  "relatedTopicIds": [
+    "aws-04-dns-route53-fundamentals",
+    "aws-04-public-vs-private-networking",
+    "aws-03-iam-fundamentals",
+    "aws-04-osi-layers-aws-services"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Node HTTPS server behind ALB",
+      "note": "When ALB terminates TLS, your Express app often receives HTTP on port 80 internally — use trust proxy and check X-Forwarded-Proto header for redirect logic, not req.protocol alone.",
+      "futureTopicSlug": "aws/networking/alb-express-tls"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Certificate Manager",
+      "url": "https://docs.aws.amazon.com/acm/latest/userguide/acm-overview.html"
+    },
+    {
+      "title": "ALB HTTPS listeners",
+      "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/create-https-listener.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "cloudfront-origin"
+}

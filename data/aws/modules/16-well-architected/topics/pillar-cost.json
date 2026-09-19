@@ -1,0 +1,267 @@
+{
+  "id": "aws-16-pillar-cost",
+  "slug": "pillar-cost",
+  "title": "Cost Optimization pillar (avoid unnecessary spend)",
+  "moduleId": "aws-16-well-architected",
+  "order": 6,
+  "hook": "Cost Optimization means delivering business value at the lowest price point — not cheapest at the expense of reliability. Continuously monitor, attribute, and eliminate waste while rightsizing for actual demand.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Principles: implement cloud financial management, adopt consumption models, measure overall efficiency, stop spending on undifferentiated heavy lifting, and analyze and attribute expenditure. Tools: Cost Explorer, Budgets, CUR (Cost and Usage Report), Savings Plans, Reserved Instances, S3 Intelligent-Tiering, Graviton instances."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CUR",
+              "longForm": "Cost and Usage Report",
+              "plainDefinition": "Detailed billing line items for analysis",
+              "example": "Athena query on S3 CUR parquet"
+            },
+            {
+              "term": "Savings Plan",
+              "longForm": "Compute Savings Plan",
+              "plainDefinition": "Commitment discount for compute usage",
+              "example": "1-year compute SP for steady ECS"
+            },
+            {
+              "term": "Showback",
+              "longForm": "Cost showback",
+              "plainDefinition": "Allocate spend to teams via tags",
+              "example": "cost-center tag on every resource"
+            },
+            {
+              "term": "Unit economics",
+              "longForm": "Cost per unit",
+              "plainDefinition": "Cost divided by business metric",
+              "example": "$ per 1000 API requests"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "FinOps is a senior interview theme: \"how do you know which team spent what?\" and \"how do you reduce NAT Gateway data processing charges?\" Cost pillar conflicts with Reliability — articulate the tradeoff."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: tag everything, budgets/alarms, right-size, Savings Plans/RI, eliminate waste, unit economics."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Tag and allocate",
+              "body": "Mandatory tags: environment, cost-center, workload. SCP enforce tag-on-create."
+            },
+            {
+              "title": "Monitor and budget",
+              "body": "AWS Budgets with alerts at 80/100% forecast."
+            },
+            {
+              "title": "Right-size and purchase",
+              "body": "Compute Optimizer + Savings Plans for steady baseline."
+            },
+            {
+              "title": "Eliminate waste",
+              "body": "Idle EIPs, unattached EBS, old snapshots, over-provisioned NAT."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "FinOps loop",
+            "source": "flowchart LR\n  TAG[Tag resources] --> MON[Cost Explorer]\n  MON --> BUD[Budgets alarm]\n  BUD --> ACT[Right-size / SP]\n  ACT --> TAG"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Cost Explorer by tag",
+            "code": "aws ce get-cost-and-usage \\\n  --time-period Start=2026-01-01,End=2026-02-01 \\\n  --granularity MONTHLY \\\n  --metrics UnblendedCost \\\n  --group-by Type=TAG,Key=cost-center",
+            "explanation": "Showback per team — foundation of cost governance."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Budget alert",
+            "code": "MonthlyBudget:\n  Type: AWS::Budgets::Budget\n  Properties:\n    Budget:\n      BudgetName: prod-monthly\n      BudgetLimit:\n        Amount: 50000\n        Unit: USD\n      TimeUnit: MONTHLY\n    NotificationsWithSubscribers:\n      - Notification:\n          Threshold: 80\n          ComparisonOperator: GREATER_THAN\n        Subscribers:\n          - SubscriptionType: EMAIL\n            Address: finops@example.com",
+            "explanation": "Proactive alert before invoice surprise."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Find idle EIPs",
+            "code": "aws ec2 describe-addresses --query \"Addresses[?AssociationId==null].[PublicIp,AllocationId]\"",
+            "explanation": "Common waste — charged while unattached."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "sql",
+            "label": "Athena CUR — top NAT cost",
+            "code": "SELECT line_item_resource_id, SUM(line_item_unblended_cost) AS cost\nFROM cur_db.cur_table\nWHERE product_product_name = 'Amazon VPC'\n  AND line_item_usage_type LIKE '%NatGateway%'\nGROUP BY 1 ORDER BY 2 DESC LIMIT 10;",
+            "explanation": "NAT data processing often surprises — query CUR for proof."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Billing",
+              "Cost Explorer + tags",
+              "Stripe usage metering"
+            ],
+            [
+              "Commitment",
+              "Savings Plans",
+              "Annual cloud contract"
+            ],
+            [
+              "Waste",
+              "Trusted Advisor idle resources",
+              "Dependabot unused deps"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "No tagging — cannot allocate spend. Buying 3-year RIs for experimental workloads. Ignoring data transfer and NAT Gateway costs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: unit cost dashboard ($/request); month-over-month waste reduction; Savings Plan coverage %; budget forecast accuracy."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Graviton migration",
+              "~20% compute savings",
+              "Arm compatibility testing"
+            ],
+            [
+              "Spot for batch",
+              "Large discount",
+              "Interruption handling"
+            ],
+            [
+              "Single NAT GW",
+              "Lower NAT hourly cost",
+              "AZ reliability risk — conflicts Reliability"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"serverless is always cheaper\" — rejected. Strong answer: match pricing model to traffic pattern; measure unit economics."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Cost Optimization = visibility, allocation, right-size, commitment discounts, eliminate waste.",
+    "Tagging is prerequisite — untagged spend is ungovernable.",
+    "NAT Gateway and data transfer are silent cost drivers.",
+    "60s: Tag, Budgets, Cost Explorer, CUR/Athena, right-size, Savings Plans for steady load, eliminate idle resources. Unit economics over raw bill.",
+    "Follow-up: Cost vs Reliability — when is single NAT OK?"
+  ],
+  "commonPitfalls": [
+    "No tags on prod resources — cannot answer \"who spent this?\"",
+    "Strong answer: mandatory tags, SCP enforcement, showback dashboards.",
+    "3-year RI for spiky experimental service.",
+    "Ignoring cross-AZ data transfer charges."
+  ],
+  "relatedTopicIds": [
+    "aws-16-pillar-performance",
+    "aws-16-pillar-sustainability",
+    "aws-16-well-architected-overview"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Lambda memory tuning",
+      "note": "More Lambda memory = more CPU and cost — tune with Power Tuning tool, not max memory.",
+      "futureTopicSlug": "javascript/cloud/serverless"
+    },
+    {
+      "language": "typescript",
+      "concept": "Bundle size",
+      "note": "Smaller esbuild bundles reduce Lambda GB-seconds — cost and performance link.",
+      "futureTopicSlug": "typescript/cloud/serverless"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html"
+    },
+    {
+      "title": "Cost Optimization pillar",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/cost-optimization.html"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "high-concurrency"
+}

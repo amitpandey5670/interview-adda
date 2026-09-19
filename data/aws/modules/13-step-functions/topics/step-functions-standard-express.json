@@ -1,0 +1,236 @@
+{
+  "id": "aws-13-step-functions-standard-express",
+  "slug": "step-functions-standard-express",
+  "title": "Standard versus Express workflows (durability and cost)",
+  "moduleId": "aws-13-step-functions",
+  "order": 2,
+  "hook": "Step Functions Standard workflows persist every state transition for up to a year — ideal for auditable business processes. Express workflows trade full history for speed and lower cost on high-volume runs under five minutes.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Standard workflows: durable execution history, exactly-once state transition semantics, up to one year duration, higher per-transition cost. Express workflows: at-least-once execution, max five minutes, high throughput, logs to CloudWatch Logs instead of full console history. Pick based on audit requirements and volume."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Standard workflow",
+              "longForm": "Step Functions Standard",
+              "plainDefinition": "Durable workflow with full execution history in console.",
+              "example": "Order saga with human approval wait."
+            },
+            {
+              "term": "Express workflow",
+              "longForm": "Step Functions Express",
+              "plainDefinition": "High-throughput workflow under 5 minutes with reduced history.",
+              "example": "IoT telemetry aggregation per device batch."
+            },
+            {
+              "term": "Execution history",
+              "longForm": "state transition history",
+              "plainDefinition": "Record of each state entered/exited for an execution.",
+              "example": "Audit trail showing ChargePayment failed at 14:32 UTC."
+            },
+            {
+              "term": "Sync integration",
+              "longForm": "synchronous service integration",
+              "plainDefinition": "Task waits for service response — .sync:2 suffix.",
+              "example": "arn:aws:states:::lambda:invoke — waits for Lambda result."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Payment orchestration on Express loses granular console audit — compliance may reject. Million-events-per-day on Standard bleeds cost. Express synchronous invoke from API Gateway suits sub-second orchestration; Standard suits multi-day workflows with waitForTaskToken."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Standard for sagas, compliance, long waits. Express for volume, short duration, lower cost. Cannot convert type in place — new state machine."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing workflow type",
+          "items": [
+            {
+              "title": "Duration check",
+              "body": "Over 5 minutes → Standard only."
+            },
+            {
+              "title": "Audit requirement",
+              "body": "Full history per execution → Standard."
+            },
+            {
+              "title": "Volume and cost",
+              "body": "Millions/day short flows → Express with CloudWatch Logs."
+            },
+            {
+              "title": "Human approval",
+              "body": "waitForTaskToken long waits → Standard."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Standard vs Express decision",
+            "source": "flowchart TD\n  Q{Need full audit\\nor > 5 min?}\n  Q -->|yes| STD[Standard workflow]\n  Q -->|no| VOL{> 100k exec/day?}\n  VOL -->|yes| EXP[Express workflow]\n  VOL -->|no| STD"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Standard state machine",
+            "code": "Resources:\n  OrderStateMachine:\n    Type: AWS::StepFunctions::StateMachine\n    Properties:\n      StateMachineName: order-saga\n      StateMachineType: STANDARD\n      RoleArn: !GetAtt SfnRole.Arn\n      LoggingConfiguration:\n        Level: ERROR\n        Destinations:\n          - CloudWatchLogsLogGroup:\n              LogGroupArn: !GetAtt SfnLogGroup.Arn\n      DefinitionString: !Sub |\n        { \"StartAt\": \"Validate\", \"States\": { \"Validate\": { \"Type\": \"Pass\", \"End\": true } } }",
+            "explanation": "StateMachineType STANDARD explicit. Logging still recommended for prod debug."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Express with full log level",
+            "code": "  TelemetryStateMachine:\n    Type: AWS::StepFunctions::StateMachine\n    Properties:\n      StateMachineName: telemetry-aggregate\n      StateMachineType: EXPRESS\n      LoggingConfiguration:\n        Level: ALL\n        IncludeExecutionData: true\n        Destinations:\n          - CloudWatchLogsLogGroup:\n              LogGroupArn: !GetAtt ExpressLogGroup.Arn",
+            "explanation": "Express relies on CloudWatch Logs for detail — IncludeExecutionData for input/output in logs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — compare execution metrics",
+            "code": "aws cloudwatch get-metric-statistics \\\n  --namespace AWS/States \\\n  --metric-name ExecutionsStarted \\\n  --dimensions Name=StateMachineArn,Value=arn:aws:states:us-east-1:123:stateMachine:orders \\\n  --start-time 2026-01-01T00:00:00Z --end-time 2026-01-02T00:00:00Z \\\n  --period 3600 --statistics Sum",
+            "explanation": "Volume metric drives Express vs Standard cost model decision."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — synchronous Express invoke from API",
+            "code": "aws stepfunctions start-sync-execution \\\n  --state-machine-arn arn:aws:states:us-east-1:123:stateMachine:auth-check \\\n  --input '{\"userId\":\"u-1\",\"amount\":500}'",
+            "explanation": "Sync Express returns result inline — suitable for API Gateway Lambda proxy replacement."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Standard vs Express analogy",
+          "headers": ["Aspect", "Standard", "Express"],
+          "rows": [
+            ["Analogy", "Workflow DB with full audit log", "Fire-and-forget job runner"],
+            ["Debug", "Console execution graph", "CloudWatch Logs query"],
+            ["Duration", "Up to 1 year", "Max 5 minutes"],
+            ["Cost driver", "Per state transition", "Per execution + duration"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Express for payment saga needing audit. Standard for 10M daily 200ms flows — cost explosion. No logging on Express — blind in prod. Assuming you can change type on existing state machine."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: cost explorer Step Functions line item; divide ExecutionsStarted by bill. Standard ExecutionsFailed visible in console; Express query Logs Insights on log group. Provisioned throughput mode on Express for guaranteed capacity."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Requirement", "Pick", "Why"],
+          "rows": [
+            ["SOC2 audit trail", "Standard", "Full execution history"],
+            ["1M auth checks/day", "Express sync", "Cost and latency"],
+            ["Human approval days", "Standard + task token", "Express 5-min limit"],
+            ["Long Map over S3", "Standard Distributed Map", "Duration and history"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'Express is just cheaper Standard.' Strong answer: different durability, history, duration limits, and at-least-once semantics on Express."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Standard: durable, full history, up to 1 year — sagas and compliance.",
+    "Express: high volume, <5 min, logs to CloudWatch — lower cost per run.",
+    "Cannot change workflow type in place — create new state machine and migrate.",
+    "60s: Standard audit and long waits. Express volume short jobs. Five min cap Express. Logs not console history.",
+    "Follow-up: Express at-least-once — how does that affect Task design?"
+  ],
+  "commonPitfalls": [
+    "Express for regulated payment audit — rejection answer.",
+    "Strong answer: Standard with logging and retention for compliance workflows.",
+    "Standard for million daily short executions — cost and scale mismatch.",
+    "No CloudWatch Logs on Express — cannot debug production failures."
+  ],
+  "relatedTopicIds": [
+    "aws-13-step-functions-states",
+    "aws-13-step-functions-saga",
+    "aws-14-cloudwatch-logs"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Durable workflows (Temporal)",
+      "note": "Standard Step Functions resembles Temporal workflow durability — Express is closer to a single Lambda chain without persisted event history.",
+      "futureTopicSlug": "typescript/architecture/durable-execution"
+    },
+    {
+      "language": "javascript",
+      "concept": "Bull job with retention",
+      "note": "Bull completed job log is like Standard history; Express is like fire-and-forget with only application logs.",
+      "futureTopicSlug": "javascript/backend/job-queues"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Standard vs Express workflows",
+      "url": "https://docs.aws.amazon.com/step-functions/latest/dg/concepts-standard-vs-express.html"
+    },
+    {
+      "title": "Express Workflow pricing",
+      "url": "https://aws.amazon.com/step-functions/pricing/"
+    }
+  ],
+  "animationHint": "compare"
+}

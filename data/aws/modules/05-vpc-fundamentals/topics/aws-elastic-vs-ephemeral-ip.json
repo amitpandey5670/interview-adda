@@ -1,0 +1,229 @@
+{
+  "id": "aws-05-aws-elastic-vs-ephemeral-ip",
+  "slug": "aws-elastic-vs-ephemeral-ip",
+  "title": "Elastic IP versus ephemeral public IP",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 6,
+  "hook": "An Elastic IP (EIP) is a static public IPv4 address you allocate to your account until you release it. An ephemeral public IP is auto-assigned when an instance launches in a public subnet and disappears when the instance stops — unless replaced by an Elastic IP association.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Elastic IPs persist across stop/start cycles and can move between instances or network interfaces. NAT Gateways require an Elastic IP. Ephemeral public IPs come from Amazon pool when MapPublicIpOnLaunch is true or you associate a public IP at launch — stopping the instance releases it (classic behavior). Elastic IPs incur charge when allocated but not associated. IPv6 addresses are generally public and behave differently — foundation focus is IPv4 EIP vs ephemeral."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Elastic IP",
+              "longForm": "Elastic IP address (EIP)",
+              "plainDefinition": "Static public IPv4 you control until released.",
+              "example": "203.0.113.50 whitelisted by partner API."
+            },
+            {
+              "term": "Ephemeral IP",
+              "longForm": "Ephemeral public IP",
+              "plainDefinition": "Temporary public IP assigned at launch; released on stop.",
+              "example": "New IP after each dev instance stop/start."
+            },
+            {
+              "term": "Association",
+              "longForm": "EIP association",
+              "plainDefinition": "Binding EIP to instance or ENI primary private IP.",
+              "example": "Move EIP from failed bastion to replacement instance."
+            },
+            {
+              "term": "Reverse DNS",
+              "longForm": "Reverse DNS (PTR)",
+              "plainDefinition": "Maps IP back to hostname — request for EIP via AWS support.",
+              "example": "Mail servers need PTR for deliverability."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Partners whitelist Elastic IPs for B2B integrations. NAT Gateway stability depends on EIP. Accidentally relying on ephemeral IP for DNS A record breaks on stop. Best practice: no public IP on app tier — ALB DNS name is stable; EIP only for NAT and rare static requirements."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: EIP persists and costs when idle; ephemeral changes on stop. NAT needs EIP. App tier uses ALB — no public IP on EC2."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Public IP lifecycle",
+          "items": [
+            {
+              "title": "Launch in public subnet",
+              "body": "MapPublicIpOnLaunch assigns ephemeral public IP if no EIP."
+            },
+            {
+              "title": "Allocate EIP",
+              "body": "aws ec2 allocate-address --domain vpc creates static IP in account pool."
+            },
+            {
+              "title": "Associate EIP",
+              "body": "Bind to instance or ENI — replaces ephemeral mapping."
+            },
+            {
+              "title": "Stop instance",
+              "body": "Ephemeral released; EIP stays in account, reassociates on start."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "EIP vs ephemeral lifecycle",
+            "source": "flowchart LR\n  Launch[Instance launch] --> EPH[Ephemeral public IP]\n  Launch --> EIPalloc[Allocate EIP]\n  EIPalloc --> ASSOC[Associate to ENI]\n  Stop[Stop instance] --> REL[Ephemeral released]\n  Stop --> KEEP[EIP retained in account]\n  NAT[NAT Gateway] --> REQEIP[Requires EIP always]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Allocate and associate Elastic IP",
+            "code": "ALLOC=$(aws ec2 allocate-address --domain vpc --query AllocationId --output text)\naws ec2 associate-address \\\n  --instance-id i-0abc123 \\\n  --allocation-id $ALLOC",
+            "explanation": "Domain vpc is required for VPC instances — ec2-classic domain is legacy. Association replaces ephemeral public IP."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "EIP for NAT Gateway",
+            "code": "NatElasticIp:\n  Type: AWS::EC2::EIP\n  Properties:\n    Domain: vpc\n    Tags:\n      - Key: Name\n        Value: nat-gateway-eip-az-a\nNatGateway:\n  Type: AWS::EC2::NatGateway\n  Properties:\n    AllocationId: !GetAtt NatElasticIp.AllocationId\n    SubnetId: !Ref PublicSubnetA",
+            "explanation": "NAT Gateway cannot use ephemeral IP — EIP is mandatory. Tag EIPs for cost and ownership audits."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Find unassociated Elastic IPs (cost leak)",
+            "code": "aws ec2 describe-addresses \\\n  --query \"Addresses[?AssociationId==null].{IP:PublicIp,Alloc:AllocationId}\" \\\n  --output table",
+            "explanation": "Unassociated EIPs bill hourly — release after decommissioning NAT or bastions."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "EIP vs on-prem static IP",
+          "headers": ["Aspect", "Elastic IP", "On-premises / C# backend"],
+          "rows": [
+            ["Static public IP", "Allocate/release via API", "ISP-assigned fixed block"],
+            ["Failover", "Reassociate EIP to standby ENI", "DNS update or VRRP on firewall"],
+            ["App publishing", "Prefer ALB DNS, not EIP on Kestrel", "Public IP on firewall DNAT to IIS"],
+            ["Cost", "Charge when unassociated", "Part of ISP contract"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Pointing customer DNS A record at EC2 ephemeral IP. Leaving unassociated EIPs after teardown. Exceeding default EIP quota per Region. Using EIP on every app server instead of ALB."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Config rule ec2-eip-attached; weekly describe-addresses for orphans; partner whitelist doc listing NAT EIPs only. Auto Scaling complicates EIP — use ALB for inbound, not EIP on ASG instances. Bring Your Own IP (BYOIP) for portable ranges — rare, enterprise. IPv6: no EIP equivalent; use stable ALB AAAA or Global Accelerator."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Cost / risk"],
+          "rows": [
+            ["ALB DNS only", "No EIP management on app tier", "ALB hourly cost"],
+            ["EIP on bastion", "Stable SSH target (legacy)", "Prefer SSM Session Manager — no public IP"],
+            ["EIP for NAT", "Required, one per NAT", "Document for partner egress allow lists"],
+            ["Ephemeral on dev EC2", "Free, fine for throwaway", "Breaks if stop/start mid-demo"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Public EIP on every Auto Scaling instance for 'stable IP.' Strong answer: ALB for inbound stability, EIP only for NAT and documented exceptions, release orphans."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Elastic IP is static until released; ephemeral public IP changes when instance stops (unless EIP associated).",
+    "NAT Gateway requires Elastic IP; application tier should use load balancer DNS, not instance public IP.",
+    "Unassociated Elastic IPs cost money — audit and release unused allocations.",
+    "60s: EIP persists, ephemeral does not. NAT needs EIP. App uses ALB. No EIP on ASG instances.",
+    "Follow-up: how does BYOIP differ from Elastic IP?"
+  ],
+  "commonPitfalls": [
+    "DNS A record to EC2 ephemeral IP gets you rejected — use ALB alias or EIP with failover plan.",
+    "Strong answer: EIP for NAT/partner whitelist; ALB for user traffic; release unused EIPs.",
+    "Forgetting Domain vpc on allocate-address — wrong pool type.",
+    "Stopping dev instance and wondering why SSH IP changed."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-nat-gateway",
+    "aws-05-aws-internet-gateway",
+    "aws-05-aws-vpc-cidr-subnets",
+    "aws-05-aws-multi-az-vpc-patterns"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Webhook allow lists",
+      "note": "SaaS webhooks whitelisting NAT EIP egress — Node app in private subnet appears as NAT IP to Stripe callbacks verification, same as C# app behind corporate NAT on-prem.",
+      "futureTopicSlug": "aws/nat/egress-ip"
+    },
+    {
+      "language": "typescript",
+      "concept": "Infrastructure drift on EIP",
+      "note": "CDK eip allocation in code vs manual console EIP — TypeScript stack should own EIPs like Terraform, not ad-hoc clicks unlike static ISP IP documented in runbook only.",
+      "futureTopicSlug": "aws/iac/elastic-ip"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Elastic IP addresses",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html"
+    },
+    {
+      "title": "NAT Gateway basics",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

@@ -1,0 +1,229 @@
+{
+  "id": "aws-05-aws-internet-gateway",
+  "slug": "aws-internet-gateway",
+  "title": "Internet Gateway and internet egress paths",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 2,
+  "hook": "An Internet Gateway (IGW) is a horizontally scaled VPC edge that allows bidirectional internet traffic for resources with public IPs in public subnets. Without an attached IGW and matching route, even a 'public' subnet cannot reach the internet.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An Internet Gateway attaches to exactly one VPC. It performs network address translation for instances with public IPv4 addresses and routes traffic between the VPC and the public internet. Inbound: internet clients reach instances with public IPs via IGW. Outbound: instances in public subnets with public IPs send return traffic through IGW. Private subnets never route 0.0.0.0/0 directly to IGW — they use NAT Gateway instead for outbound-only paths."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IGW",
+              "longForm": "Internet Gateway",
+              "plainDefinition": "VPC component enabling internet connectivity for public subnets.",
+              "example": "Route 0.0.0.0/0 → igw-abc attached to prod VPC."
+            },
+            {
+              "term": "Public IPv4",
+              "longForm": "Public IPv4 address",
+              "plainDefinition": "Globally routable address assigned to instance or Elastic IP.",
+              "example": "Auto-assigned public IP on bastion in public subnet."
+            },
+            {
+              "term": "Egress-only IGW",
+              "longForm": "Egress-only Internet Gateway",
+              "plainDefinition": "IPv6 outbound-only gateway for private subnets.",
+              "example": "Private subnet IPv6 0.0.0.0/0 → eigw for outbound without inbound."
+            },
+            {
+              "term": "Edge association",
+              "longForm": "Gateway VPC edge",
+              "plainDefinition": "IGW is Regional and redundant — not a single physical device you manage.",
+              "example": "No bandwidth bottleneck on IGW itself — limits are instance/network ACL level."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every public-facing web tier design starts with IGW + public subnet + ALB. Missing IGW attachment is the first check when 'instance has public IP but no connectivity.' Senior designs minimize instances with public IPs — only ALB, NAT, and bastions (preferably replaced by Systems Manager Session Manager)."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: IGW is VPC edge for public subnets. Inbound to public IP. App tier in private subnet — users hit ALB in public subnet, not EC2 public IP."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Internet ingress and egress via IGW",
+          "items": [
+            {
+              "title": "Attach IGW to VPC",
+              "body": "One IGW per VPC needing internet; detached IGW means no internet path."
+            },
+            {
+              "title": "Public subnet route",
+              "body": "Route table: 0.0.0.0/0 → Internet Gateway."
+            },
+            {
+              "title": "Assign public IP or EIP",
+              "body": "Instance or load balancer needs routable address for inbound internet."
+            },
+            {
+              "title": "Security controls",
+              "body": "Security groups and network ACLs filter allowed ports — IGW does not replace firewall."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "IGW ingress path",
+            "source": "flowchart LR\n  Internet((Internet)) --> IGW[Internet Gateway]\n  IGW --> ALB[ALB public subnet]\n  ALB --> EC2[EC2 private subnet]\n  EC2 -->|outbound patch| NAT[NAT Gateway]\n  NAT --> IGW"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Internet Gateway and public route",
+            "code": "InternetGateway:\n  Type: AWS::EC2::InternetGateway\nVpcGatewayAttachment:\n  Type: AWS::EC2::VPCGatewayAttachment\n  Properties:\n    VpcId: !Ref AppVpc\n    InternetGatewayId: !Ref InternetGateway\nPublicRouteTable:\n  Type: AWS::EC2::RouteTable\n  Properties:\n    VpcId: !Ref AppVpc\nDefaultPublicRoute:\n  Type: AWS::EC2::Route\n  DependsOn: VpcGatewayAttachment\n  Properties:\n    RouteTableId: !Ref PublicRouteTable\n    DestinationCidrBlock: 0.0.0.0/0\n    GatewayId: !Ref InternetGateway",
+            "explanation": "DependsOn attachment prevents route creation before IGW is attached — common CloudFormation race."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Verify IGW attachment",
+            "code": "aws ec2 describe-internet-gateways \\\n  --filters Name=attachment.vpc-id,Values=vpc-0abc123 \\\n  --query \"InternetGateways[].InternetGatewayId\"",
+            "explanation": "Empty result means VPC has no internet edge — public subnet routes to igw will black-hole."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Trace route table for subnet",
+            "code": "aws ec2 describe-route-tables \\\n  --filters Name=association.subnet-id,Values=subnet-0def456 \\\n  --query \"RouteTables[].Routes\"",
+            "explanation": "Confirm 0.0.0.0/0 targets igw-xxx for public subnet. Private subnet should show nat-xxx or no default route."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "IGW vs on-prem internet edge",
+          "headers": ["Aspect", "Internet Gateway", "On-premises / C# backend"],
+          "rows": [
+            ["Internet edge", "Managed IGW per VPC", "Border router + firewall you operate"],
+            ["Publishing API", "ALB in public subnet → private Kestrel", "Reverse proxy in DMZ → internal IIS"],
+            ["Outbound patches", "NAT Gateway, not IGW on app servers", "Corporate proxy server"],
+            ["Visibility", "Route table shows path", "Traceroute through your edge devices"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Route to IGW without attaching IGW to VPC. Putting application EC2 in public subnet with SSH open to 0.0.0.0/0. Routing private subnet directly to IGW for 'simple outbound' — use NAT. Forgetting DependsOn on CloudFormation IGW route."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: VPC Reachability Analyzer path internet gateway → ALB → target; flow logs on IGW-adjacent subnets showing rejected traffic; avoid public IPs on app tier — use ALB + AWS WAF at edge. IPv6: IGW allows inbound+outbound to instances with IPv6; egress-only IGW for outbound-only private IPv6. IGW itself is not the bottleneck — design for ALB capacity and NAT bandwidth instead."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Cost / risk"],
+          "rows": [
+            ["ALB only public entry", "No public app IPs", "ALB cost; must configure target groups correctly"],
+            ["Bastion with public IP", "Simple SSH debug", "Attack surface — prefer SSM Session Manager"],
+            ["Direct IGW on app EC2", "Skip load balancer", "Rejected in security review — no scale or WAF"],
+            ["IPv6 + egress-only IGW", "No NAT for IPv6 outbound", "Dual-stack complexity across app stack"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Drawing every tier in public subnet with 0.0.0.0/0 → IGW. Strong answer: IGW for ALB/NAT only; users → ALB → private app; outbound private via NAT."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Internet Gateway attaches to VPC and enables bidirectional internet for resources with public IPs in routed public subnets.",
+    "Public subnet requires IGW route 0.0.0.0/0; private subnets use NAT for outbound-only internet.",
+    "Prefer ALB in public subnet over public IPs on application servers.",
+    "60s: IGW = VPC internet edge. Public route + public IP for inbound. App private behind ALB. Outbound private via NAT.",
+    "Follow-up: IPv6 IGW versus egress-only IGW?"
+  ],
+  "commonPitfalls": [
+    "Saying IGW goes on each subnet gets you rejected — one IGW per VPC, route tables point to it.",
+    "Strong answer: attach IGW, public RT route, ALB public, app private.",
+    "CloudFormation route before IGW attachment — intermittent deploy failure.",
+    "Opening SSH 0.0.0.0/0 on app security group because instance is in public subnet."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-vpc-cidr-subnets",
+    "aws-05-aws-nat-gateway",
+    "aws-05-aws-route-tables",
+    "aws-02-aws-global-traffic-routing"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express behind ALB",
+      "note": "Node listens on 3000 in private subnet — ALB terminates HTTPS like IIS ARR forwarding to Kestrel on internal port without exposing Node to internet directly.",
+      "futureTopicSlug": "aws/elb/private-targets"
+    },
+    {
+      "language": "typescript",
+      "concept": "Health check endpoints",
+      "note": "ALB health check hits /health on private TypeScript API — same pattern as on-prem load balancer probing internal C# service without public IP on app nodes.",
+      "futureTopicSlug": "aws/elb/health-checks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Internet Gateways",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html"
+    },
+    {
+      "title": "VPC scenario with IGW",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Scenario2.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

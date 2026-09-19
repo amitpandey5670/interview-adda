@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-10-s3-storage",
+  "title": "s3-storage interview drills",
+  "items": [
+    {
+      "question": "Explain why S3 has no real folders and how you design a multi-tenant key layout.",
+      "answer": "S3 is a flat key-value store. Slashes in keys simulate folders for console and ListObjects prefix. Design tenantId/env/module/date/file.ext prefixes for lifecycle and IAM condition keys on s3:prefix. Strong answer: never rely on delimiter alone for security — use bucket policy conditions and separate buckets for hard isolation.",
+      "followUps": [
+        "How does S3 Inventory help?",
+        "When separate buckets per tenant?"
+      ],
+      "sixtySeconds": "Flat keys with prefix convention. Tenant in key path + IAM conditions. Separate buckets for hard isolation."
+    },
+    {
+      "question": "A team says S3 is eventually consistent. Correct them for 2026.",
+      "answer": "Since December 2020, S3 provides strong read-after-write consistency for PUTs and DELETEs of objects — new objects immediately readable. Overwrites and deletes are strongly consistent. Legacy interview answer about eventual consistency is outdated. Still at-least-once for event notifications and ListObjects can be paginated stale for massive buckets.",
+      "followUps": [
+        "What about cross-region replication lag?",
+        "Does strong consistency apply to LIST?"
+      ],
+      "sixtySeconds": "New object PUT strongly consistent since 2020. Events still at-least-once. CRR has replication lag."
+    },
+    {
+      "question": "Design lifecycle for logs: hot 30 days, warm 90 days, archive 7 years.",
+      "answer": "Prefix logs/ rule: transition to STANDARD_IA at 30 days, GLACIER_IR or GLACIER at 90 days, DEEP_ARCHIVE at 365 days if compliance allows. Expire noncurrent versions after 2555 days if versioning on. Monitor transition costs and minimum storage duration penalties (IA 30 days, Glacier 90). Weak answer: one Glacier transition day 1 — retrieval pain.",
+      "followUps": [
+        "Intelligent-Tiering vs explicit rules?",
+        "Minimum billable days on IA?"
+      ],
+      "sixtySeconds": "Staged transitions by prefix. Watch minimum storage durations. Versioning + noncurrent expiry for compliance."
+    },
+    {
+      "question": "Bucket policy vs IAM policy for S3 access — when which?",
+      "answer": "IAM identity policy grants user/role access to resources they call. Bucket policy is resource-based — required for cross-account access, CloudFront OAC Principal, deny unencrypted uploads, and public access blocks exceptions. Production uses both: IAM least privilege for app role, bucket policy for service principals and guardrails. S3 ACLs legacy — avoid except rare cross-account object ACL cases.",
+      "followUps": [
+        "Example OAC bucket policy Principal?",
+        "What does Block Public Access override?"
+      ],
+      "sixtySeconds": "IAM for identities. Bucket policy for cross-account, CloudFront OAC, deny rules. ACLs legacy."
+    },
+    {
+      "question": "User uploads CSV to S3; Lambda must process within seconds. Architecture?",
+      "answer": "Enable event notification s3:ObjectCreated:Put on prefix uploads/ to Lambda. Lambda idempotent on object key + etag. For large files use S3 trigger + SQS buffer if burst exceeds concurrency. IAM: Lambda role s3:GetObject on bucket, bucket policy optional. Failure: DLQ on async invoke. Compare with polling — events are push and cheaper.",
+      "followUps": [
+        "Can you filter by suffix .csv?",
+        "What about duplicate events?"
+      ],
+      "sixtySeconds": "ObjectCreated to Lambda on prefix. Idempotent handler. SQS buffer if needed. DLQ on failures."
+    },
+    {
+      "question": "Static React site on S3 — why still need CloudFront?",
+      "answer": "S3 website endpoint is HTTP only on website hosting, no WAF, no edge cache, no custom TLS on bare bucket endpoint easily. CloudFront adds HTTPS, OAC private bucket, cache, geo, WAF. SPA: custom error 403/404 to index.html. Weak: public bucket website — security and scale gap.",
+      "followUps": [
+        "OAC vs public bucket?",
+        "How invalidate on deploy?"
+      ],
+      "sixtySeconds": "CloudFront for HTTPS, OAC, cache, WAF. S3 website HTTP only. Versioned asset filenames."
+    },
+    {
+      "question": "Object deleted but compliance needs recovery. What S3 features apply?",
+      "answer": "Versioning retains prior versions — delete adds delete marker. MFA Delete protects delete marker removal. Object Lock (WORM) for legal hold/compliance mode. Cross-Region Replication for geographic redundancy not undo delete without versioning. Strong: versioning + lifecycle noncurrent transition, not backup substitute for ransomware — use Object Lock and restricted IAM.",
+      "followUps": [
+        "Compliance vs Governance mode?",
+        "Replication time control?"
+      ],
+      "sixtySeconds": "Versioning + delete markers. Object Lock for WORM. CRR for DR not undelete without versions."
+    },
+    {
+      "question": "Cost spike on S3 GET requests. Investigation path?",
+      "answer": "CloudWatch S3 request metrics, Storage Lens, access logs to Athena. Common causes: app polling ListObjects in loop, missing CloudFront cache, lifecycle re-listing, misconfigured sync job. Fix: CloudFront for static, S3 Select vs full download, prefix design reducing LIST scope, Intelligent-Tiering monitoring fee if enabled wrongly.",
+      "followUps": [
+        "ListObjects cost vs GetObject?",
+        "When S3 Select?"
+      ],
+      "sixtySeconds": "Metrics + access logs. Stop LIST polling. CloudFront cache static. Fix sync jobs and prefix scope."
+    }
+  ]
+}

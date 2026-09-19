@@ -1,0 +1,267 @@
+{
+  "id": "aws-18-noisy-neighbor-fairness",
+  "slug": "noisy-neighbor-fairness",
+  "title": "Noisy neighbor and fairness controls",
+  "moduleId": "aws-18-saas-and-interview",
+  "order": 5,
+  "hook": "In pooled SaaS, one tenant can monopolize shared CPU, database connections, or API rate limits — starving others. Fairness controls throttle, queue, and isolate noisy neighbors before they become everyone problem.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Noisy neighbor sources: batch import flooding shared DB connections, runaway cron job consuming Lambda concurrency, webhook retry storm, DynamoDB hot partition from one tenant skewed key. Controls: per-tenant rate limits (API Gateway usage plans, WAF rate rules), reserved concurrency per tier, connection pool limits per tenant, SQS per-tenant queues with backpressure, and autoscaling with max caps per tenant."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Noisy neighbor",
+              "longForm": "Noisy neighbor",
+              "plainDefinition": "Tenant disproportionately consuming shared resources",
+              "example": "CSV import exhausting connection pool"
+            },
+            {
+              "term": "Fairness",
+              "longForm": "Resource fairness",
+              "plainDefinition": "Equitable access to shared capacity",
+              "example": "Per-tenant rate limit bucket"
+            },
+            {
+              "term": "Reserved concurrency",
+              "longForm": "Lambda reserved concurrency",
+              "plainDefinition": "Guaranteed and capped Lambda capacity per function/tenant",
+              "example": "Premium tier 100 reserved"
+            },
+            {
+              "term": "Backpressure",
+              "longForm": "Backpressure",
+              "plainDefinition": "Slow producer when consumer overloaded",
+              "example": "SQS depth triggers throttle on upload API"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "SaaS SLO promises apply per customer, not average. Interviewers ask \"tenant uploads 10M row CSV and slows everyone — fix?\" Answer with fairness controls, not \"buy bigger database.\""
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: per-tenant rate limits, reserved concurrency, connection caps, queue isolation, monitor per-tenant metrics."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Instrument per-tenant metrics",
+              "body": "CloudWatch custom metrics: requests, DB connections, queue depth per tenant_id."
+            },
+            {
+              "title": "Apply rate limits",
+              "body": "API Gateway usage plan, WAF rate-based rule with tenant label, token bucket in app."
+            },
+            {
+              "title": "Isolate heavy workloads",
+              "body": "Batch jobs to per-tenant SQS → dedicated Lambda with reserved concurrency cap."
+            },
+            {
+              "title": "Alert and throttle",
+              "body": "Alarm on tenant exceeding 3x normal; auto-throttle or move to silo queue."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Fairness controls",
+            "source": "flowchart LR\n  T1[Tenant A burst] --> RL[Rate limiter]\n  T2[Tenant B normal] --> RL\n  RL --> POOL[Shared compute]\n  RL -->|exceeds| QUEUE[Per-tenant queue]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Token bucket per tenant",
+            "code": "class TenantRateLimiter {\n  private buckets = new Map<string, { tokens: number; last: number }>();\n  allow(tenantId: string, rate = 100): boolean {\n    const b = this.buckets.get(tenantId) ?? { tokens: rate, last: Date.now() };\n    const elapsed = (Date.now() - b.last) / 1000;\n    b.tokens = Math.min(rate, b.tokens + elapsed * rate);\n    b.last = Date.now();\n    if (b.tokens < 1) return false;\n    b.tokens -= 1;\n    this.buckets.set(tenantId, b);\n    return true;\n  }\n}",
+            "explanation": "App-layer fairness before request hits shared DB."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Lambda reserved concurrency cap",
+            "code": "ImportFunction:\n  Type: AWS::Lambda::Function\n  Properties:\n    ReservedConcurrentExecutions: 50\n    Environment:\n      Variables:\n        MAX_TENANT_CONNECTIONS: 10",
+            "explanation": "Cap total import Lambda concurrency — prevents pool exhaustion."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Per-tenant connection pool",
+            "code": "const pools = new Map<string, Pool>();\nfunction getPool(tenantId: string): Pool {\n  if (!pools.has(tenantId)) {\n    pools.set(tenantId, new Pool({ max: 5, connectionString: sharedDbUrl }));\n  }\n  return pools.get(tenantId)!;\n}",
+            "explanation": "Limit DB connections per tenant — noisy import cannot take all 100 connections."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CloudWatch per-tenant metric",
+            "code": "aws cloudwatch put-metric-data \\\n  --namespace SaaS/Tenants \\\n  --metric-name ApiRequests \\\n  --dimensions Name=TenantId,Value=acme \\\n  --value 1",
+            "explanation": "Per-tenant dashboards detect noisy neighbor before customers complain."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Fairness",
+              "Per-tenant rate limit + queue",
+              "Global rate limit hurts all"
+            ],
+            [
+              "Isolation",
+              "Reserved concurrency cap",
+              "Single thread pool for all jobs"
+            ],
+            [
+              "Detection",
+              "Per-tenant CloudWatch metrics",
+              "Single global CPU metric misses culprit"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Global rate limit only — punishes innocent tenants when one misbehaves. No concurrency cap on batch Lambda. Ignoring DynamoDB hot partition from one tenant key skew."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: per-tenant p99 dashboard; chaos test one tenant 10x load — others stay within SLO; auto-throttle triggered in drill."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Per-tenant queues",
+              "Strong isolation",
+              "More queues to manage"
+            ],
+            [
+              "Shared queue + priority",
+              "Simpler",
+              "Harder to enforce fairness"
+            ],
+            [
+              "Auto silo escalation",
+              "Permanent fix for repeat offender",
+              "Sales/Ops coordination"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Scale up RDS when one tenant noisy — rejected as unfair cost pass-through. Strong answer: throttle offender, per-tenant limits, queue isolation."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Noisy neighbor = one tenant starves shared pool resources.",
+    "Per-tenant rate limits, concurrency caps, connection pools, queues.",
+    "Monitor per-tenant metrics — global averages hide offenders.",
+    "60s: Instrument per tenant. Rate limit API. Cap Lambda/DB connections. Queue heavy jobs. Alert on 3x normal. Throttle before scale-up.",
+    "Follow-up: DynamoDB hot partition from one tenant?"
+  ],
+  "commonPitfalls": [
+    "Global throttle when one tenant noisy — punishes everyone.",
+    "Strong answer: per-tenant limits, identify offender via metrics, isolate workload.",
+    "Unlimited Lambda concurrency on import function.",
+    "No per-tenant dashboard — blind to offender."
+  ],
+  "relatedTopicIds": [
+    "aws-18-tenant-routing-blast-radius",
+    "aws-18-data-partitioning-strategies",
+    "aws-18-saas-reference-architecture"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Bottleneck library",
+      "note": "bottleneck npm limits concurrent jobs per tenant — same fairness pattern as Lambda reserved concurrency.",
+      "futureTopicSlug": "javascript/concurrency/rate-limit"
+    },
+    {
+      "language": "typescript",
+      "concept": "p-queue per tenant",
+      "note": "Map of p-queue instances keyed by tenantId isolates async job throughput.",
+      "futureTopicSlug": "typescript/concurrency/queues"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Lens — AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html"
+    },
+    {
+      "title": "Performance Efficiency — SaaS Lens",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/performance-efficiency.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

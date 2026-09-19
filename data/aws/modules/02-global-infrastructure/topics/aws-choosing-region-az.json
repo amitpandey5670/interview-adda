@@ -1,0 +1,207 @@
+{
+  "id": "aws-02-aws-choosing-region-az",
+  "slug": "aws-choosing-region-az",
+  "title": "How to choose a Region and Availability Zone for high availability",
+  "moduleId": "aws-02-global-infrastructure",
+  "order": 5,
+  "hook": "Region choice is a compliance and latency decision first, cost second. Inside the Region, spread production workloads across at least two Availability Zones — never treat AZ letter names as interchangeable guarantees across accounts.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Choosing a Region means filtering by data residency law, required AWS services, latency to primary users, disaster recovery pairing, and price. Choosing AZ layout means one subnet per AZ, redundant NAT and compute, and Multi-AZ data tiers. AZ IDs (stable across accounts) matter when you need consistent physical isolation between production and DR accounts."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Latency matrix",
+              "longForm": "Region latency evaluation",
+              "plainDefinition": "Measure round-trip time from user populations to candidate Regions.",
+              "example": "CloudWatch Network Monitor or third-party probes from Mumbai to ap-south-1 vs Singapore."
+            },
+            {
+              "term": "DR Region",
+              "longForm": "Disaster recovery Region",
+              "plainDefinition": "Secondary Region for failover with defined RPO/RTO.",
+              "example": "Warm standby in ap-southeast-1 when primary is ap-south-1."
+            },
+            {
+              "term": "Service parity",
+              "longForm": "Regional service availability",
+              "plainDefinition": "Not every feature launches in every Region at the same time.",
+              "example": "Verify Aurora PostgreSQL major version in target Region before commit."
+            },
+            {
+              "term": "RTO/RPO",
+              "longForm": "Recovery time / point objectives",
+              "plainDefinition": "How fast you recover and how much data you can lose in DR.",
+              "example": "RPO 15 minutes implies async replication at most 15 minutes behind."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers probe whether you pick us-east-1 because tutorials do or because requirements demand it. Wrong AZ design (single NAT, single-AZ database) fails real outages. Strong candidates walk through a decision tree: compliance → latency → services → cost → multi-AZ inside Region → optional multi-Region DR."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: I filter Regions by law and users, verify service list, then design two-plus AZs with per-AZ NAT. Multi-Region only when RTO/RPO requires it."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Region and AZ decision tree",
+          "items": [
+            {
+              "title": "Compliance filter",
+              "body": "Eliminate Regions that violate residency or certification needs."
+            },
+            {
+              "title": "Latency and users",
+              "body": "Pick Region closest to majority users while meeting compliance."
+            },
+            {
+              "title": "Service checklist",
+              "body": "Confirm every service and instance type in AWS Regional service list."
+            },
+            {
+              "title": "Multi-AZ inside Region",
+              "body": "At least two AZ subnets for compute, ALB, NAT per AZ, RDS Multi-AZ."
+            },
+            {
+              "title": "Optional DR Region",
+              "body": "Add second Region if business requires geographic disaster tolerance."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Region and AZ selection flow",
+            "source": "flowchart TD\n  Start[New workload] --> C{Compliance allows Region?}\n  C -->|no| X[Stop or legal exception]\n  C -->|yes| L[Measure user latency]\n  L --> S[Verify services + SKUs]\n  S --> P[Compare price]\n  P --> M[Design multi-AZ in chosen Region]\n  M --> D{Need multi-Region DR?}\n  D -->|yes| DR[Add DR Region + routing]\n  D -->|no| Done[Deploy]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Compare AZ IDs across accounts",
+            "code": "aws ec2 describe-availability-zones \\\n  --query \"AvailabilityZones[?RegionName=='ap-south-1'].[ZoneName,ZoneId]\" \\\n  --output table",
+            "explanation": "ZoneId (aps1-az1) is stable; ZoneName (ap-south-1a) mapping differs per account — use ZoneId for DR pairing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Check service availability in Region",
+            "code": "aws ec2 describe-instance-type-offerings \\\n  --location-type region \\\n  --filters Name=instance-type,Values=g5.xlarge \\\n  --region ap-south-1 \\\n  --query \"InstanceTypeOfferings[].Location\"",
+            "explanation": "GPU SKUs may be missing in smaller Regions — validate before promising ML workload Region."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Parameterize Region in CloudFormation",
+            "code": "Parameters:\n  DeploymentRegion:\n    Type: String\n    Default: ap-south-1\n    AllowedValues:\n      - ap-south-1\n      - ap-southeast-1\nConditions:\n  IsPrimary: !Equals [!Ref DeploymentRegion, ap-south-1]\nResources:\n  AppVpc:\n    Type: AWS::EC2::VPC\n    Properties:\n      CidrBlock: 10.0.0.0/16\n      Tags:\n        - Key: RegionRole\n          Value: !If [IsPrimary, primary, dr]",
+            "explanation": "Same template deploys to primary or DR Region with explicit AllowedValues — prevents typo Region names."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud Region/AZ vs on-prem site selection",
+          "headers": ["Aspect", "AWS Region + AZ", "On-premises / C# backend"],
+          "rows": [
+            ["Site selection", "Compliance + latency + service catalog", "Build or lease datacenter near users"],
+            ["HA within site", "Multi-AZ subnets and RDS Multi-AZ", "Dual rack + SQL Always On AG"],
+            ["DR geography", "Second Region + Route 53 failover", "Secondary datacenter you contract"],
+            ["C# deploy", "Same artifact to each Region/AZ via CI/CD", "Octopus/deploy to DR site with config transforms"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Defaulting to us-east-1. Assuming three AZs everywhere without checking Region AZ count. Using one NAT for all AZs. Skipping DR Region legal review when primary holds regulated data. Matching AZ names across accounts instead of AZ IDs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Filter Region by compliance and latency before cost; verify service availability in that Region.",
+    "Inside Region: multi-AZ with subnet per AZ, NAT per AZ, Multi-AZ data tier.",
+    "Use AZ IDs for consistent physical mapping across accounts; names like 1a shuffle per account.",
+    "60s: Compliance → latency → services → price → multi-AZ. DR Region only if RTO/RPO needs geography.",
+    "Follow-up: active-active multi-Region versus warm standby — tradeoffs?"
+  ],
+  "commonPitfalls": [
+    "Answering 'cheapest Region' without compliance gets you rejected at enterprise interviews.",
+    "Strong answer: decision tree with residency, users, services, then HA layout.",
+    "Believing ap-south-1a in account A is same building as ap-south-1a in account B.",
+    "Multi-Region without understanding cross-Region data transfer and replication cost."
+  ],
+  "relatedTopicIds": [
+    "aws-02-aws-regions-isolation",
+    "aws-02-aws-availability-zones",
+    "aws-02-aws-global-traffic-routing",
+    "aws-05-aws-multi-az-vpc-patterns"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Environment-specific Region in Node",
+      "note": "process.env.AWS_REGION in Lambda must match where VPC and RDS live — same as C# appsettings.Production.json connection strings pointing at wrong datacenter.",
+      "futureTopicSlug": "aws/configuration/region-env"
+    },
+    {
+      "language": "typescript",
+      "concept": "Feature flags per Region rollout",
+      "note": "Ship TypeScript API to ap-south-1 first, then eu-west-1 after compliance sign-off — mirrors staged C# microservice rollout to EU datacenter only after GDPR review.",
+      "futureTopicSlug": "aws/deployment/staged-regions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Regional Services",
+      "url": "https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/"
+    },
+    {
+      "title": "Architecting for high availability",
+      "url": "https://docs.aws.amazon.com/whitepapers/latest/real-time-communication-on-aws/high-availability-and-scalability-on-aws.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "saas-tenant-routing"
+}

@@ -1,0 +1,198 @@
+{
+  "id": "aws-07-alb-nlb-gwlb",
+  "slug": "alb-nlb-gwlb",
+  "title": "ALB versus NLB versus GWLB",
+  "moduleId": "aws-07-perimeter-and-gateways",
+  "order": 3,
+  "hook": "Elastic Load Balancing offers three load balancer types for different layers: Application Load Balancer (ALB) for HTTP at Layer 7, Network Load Balancer (NLB) for TCP/UDP at Layer 4 with static IPs, and Gateway Load Balancer (GWLB) for transparent inline inspection at Layer 3.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ALB terminates HTTP/HTTPS, supports path/host/header routing, WebSocket, and AWS WAF integration — default for web APIs and microservices. NLB preserves source IP, handles millions of requests per second, offers static Elastic IP per AZ — used for TCP, PrivateLink targets, and extreme performance. GWLB uses GENEVE encapsulation to steer traffic through third-party firewall appliances without changing routing tables on workloads."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "ALB", "longForm": "Application Load Balancer", "plainDefinition": "Layer 7 load balancer for HTTP/HTTPS with content-based routing.", "example": "Route /api/* to ECS service A." },
+            { "term": "NLB", "longForm": "Network Load Balancer", "plainDefinition": "Layer 4 load balancer with ultra-low latency and static IP support.", "example": "TCP 5432 to RDS proxy targets; PrivateLink provider NLB." },
+            { "term": "GWLB", "longForm": "Gateway Load Balancer", "plainDefinition": "Layer 3 transparent bump-in-the-wire for inspection appliances.", "example": "Traffic via GWLB endpoint to firewall fleet then to app subnet." },
+            { "term": "Target group", "longForm": "Load balancer target group", "plainDefinition": "Set of registered targets (IP, instance, Lambda) receiving balanced traffic.", "example": "IP targets in awsvpc ECS mode." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Wrong load balancer choice breaks features: NLB cannot route on URL path; ALB cannot raw TCP game servers efficiently. PrivateLink provider services require NLB. GWLB is the interview answer for centralized IDS/IPS. Cross-zone load balancing and connection draining differ by type."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Quick pick",
+          "body": "HTTP/API → ALB. Static IP / TCP / PrivateLink → NLB. Inline security appliances → GWLB."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing a load balancer",
+          "items": [
+            { "title": "Layer 7 HTTP needs", "body": "ALB: path routing, OIDC authenticate, WAF attachment, gRPC/HTTP2." },
+            { "title": "Layer 4 performance", "body": "NLB: preserve client IP, handle TCP/UDP, TLS pass-through." },
+            { "title": "Inspection pipeline", "body": "GWLB endpoint in route table → appliance target group → return to workload path." },
+            { "title": "Health checks", "body": "ALB HTTP health paths; NLB TCP/HTTP; GWLB appliance-specific." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Three load balancer layers",
+            "source": "flowchart TB\n  Client[Client] --> ALB[ALB L7 HTTP]\n  Client --> NLB[NLB L4 TCP/UDP]\n  Client --> GWLB[GWLB L3 inspection]\n  ALB --> App1[ECS HTTP targets]\n  NLB --> App2[TCP targets / PrivateLink]\n  GWLB --> FW[Firewall appliance]\n  FW --> App3[Protected subnets]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — ALB with path rule",
+            "code": "AlbListenerRule:\n  Type: AWS::ElasticLoadBalancingV2::ListenerRule\n  Properties:\n    ListenerArn: !Ref HttpsListener\n    Priority: 10\n    Conditions:\n      - Field: path-pattern\n        Values: [\"/api/*\"]\n    Actions:\n      - Type: forward\n        TargetGroupArn: !Ref ApiTargetGroup",
+            "explanation": "ALB content-based routing — impossible on NLB without TLS SNI tricks."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — NLB with static EIP",
+            "code": "NlbEipAzA:\n  Type: AWS::EC2::EIP\n\nNlb:\n  Type: AWS::ElasticLoadBalancingV2::LoadBalancer\n  Properties:\n    Type: network\n    Scheme: internet-facing\n    SubnetMappings:\n      - SubnetId: !Ref PublicSubnetA\n        AllocationId: !GetAtt NlbEipAzA.AllocationId",
+            "explanation": "NLB SubnetMappings with AllocationId provide static IPs for allow-list integrations."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create GWLB",
+            "code": "aws elbv2 create-load-balancer \\\n  --name sec-gwlb \\\n  --type gateway \\\n  --subnet-mappings SubnetId=subnet-private-a\n\naws elbv2 create-target-group \\\n  --name firewall-tg \\\n  --protocol GENEVE \\\n  --port 6081 \\\n  --vpc-id vpc-0abc \\\n  --target-type ip",
+            "explanation": "GWLB uses GENEVE protocol on port 6081 to appliance targets."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — ALB target health",
+            "code": "aws elbv2 describe-target-health \\\n  --target-group-arn arn:aws:elasticloadbalancing:us-east-1:123:targetgroup/api/abc",
+            "explanation": "Unhealthy targets with healthy app often implicates security group — ALB SG must reach target port."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Load balancing vs app code",
+          "headers": ["Aspect", "ALB/NLB/GWLB", "Node.js cluster module"],
+          "rows": [
+            ["Layer 7 routing", "ALB path/host rules", "Express mount paths on one process"],
+            ["Static IP", "NLB Elastic IP per AZ", "Node has no native static IP without NLB"],
+            ["Inline firewall", "GWLB transparent", "Not achievable in userland alone"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "ALB for raw TCP database — use NLB. NLB for URL-based microservice routing — use ALB. Forgetting NLB preserves IP but target SG sees client IP only with preserve_client_ip enabled on target group."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ALB supports connection idle timeout and HTTP desync mitigation modes. NLB cross-zone incurs charges but improves even distribution. GWLB integrates via VPC route tables pointing to GWLB endpoint — appliances see encapsulated flows. How to prove it in production: ALB access logs; NLB TCP reset metrics; GWLB appliance metrics on dropped GENEVE packets."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Type", "Win", "Cost / risk"],
+          "rows": [
+            ["ALB", "HTTP features + WAF", "Not for non-HTTP TCP"],
+            ["NLB", "Performance + static IP + PrivateLink", "No path routing"],
+            ["GWLB", "Centralized inspection", "Appliance scaling and HA complexity"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying ALB and NLB are interchangeable. Strong answer: L7 vs L4; NLB for PrivateLink provider and static IP; GWLB for inline security appliances."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "ALB = Layer 7 HTTP/HTTPS routing and WAF integration.",
+    "NLB = Layer 4 TCP/UDP, static IPs, PrivateLink provider requirement, extreme scale.",
+    "GWLB = Layer 3 transparent traffic inspection via GENEVE appliances.",
+    "60s: HTTP → ALB. TCP/static IP/PrivateLink → NLB. Firewall inline → GWLB. Match OSI layer to choice.",
+    "Follow-up: why must PrivateLink provider use NLB not ALB?"
+  ],
+  "commonPitfalls": [
+    "Using ALB for PrivateLink provider service — rejected; PrivateLink requires NLB (or GWLB for specific cases).",
+    "Strong answer: NLB for provider; ALB for HTTP consumer-facing APIs.",
+    "Target SG allows 0.0.0.0/0 instead of ALB SG reference.",
+    "GWLB route table mispoint — traffic bypasses inspection silently."
+  ],
+  "relatedTopicIds": [
+    "aws-07-security-groups",
+    "aws-07-api-gateway",
+    "aws-07-full-request-path",
+    "aws-06-privatelink"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express behind ALB",
+      "note": "ALB sets X-Forwarded-For; Node trust proxy config matters for rate limits — NLB TCP pass-through has no such headers unless TLS terminates elsewhere.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "WebSocket on ALB",
+      "note": "TypeScript Socket.io works on ALB with sticky sessions or shared Redis — NLB passes TCP but no HTTP stickiness without client IP affinity.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "Elastic Load Balancing types", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/userguide/what-is-load-balancing.html" },
+    { "title": "Gateway Load Balancer", "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/gateway/introduction.html" }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "high-concurrency"
+}

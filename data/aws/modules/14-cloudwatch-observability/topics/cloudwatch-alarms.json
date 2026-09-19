@@ -1,0 +1,236 @@
+{
+  "id": "aws-14-cloudwatch-alarms",
+  "slug": "cloudwatch-alarms",
+  "title": "CloudWatch alarms (thresholds, composite, and anomaly detection)",
+  "moduleId": "aws-14-cloudwatch-observability",
+  "order": 3,
+  "hook": "CloudWatch alarms watch metrics and notify when thresholds breach. Good alarms page humans on customer impact; bad alarms train teams to ignore pages. Composite and anomaly detection reduce noise.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Alarms have states: OK, ALARM, INSUFFICIENT_DATA. Static threshold compares metric to value over evaluation periods. Metric math combines multiple metrics. Composite alarms AND/OR child alarms. Anomaly detection bands adapt to seasonality. Actions target SNS, Auto Scaling, or EventBridge."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Evaluation period",
+              "longForm": "alarm evaluation period",
+              "plainDefinition": "Time granularity for metric aggregation in alarm.",
+              "example": "60 seconds × 3 periods = 3 minutes before ALARM"
+            },
+            {
+              "term": "Composite alarm",
+              "longForm": "CloudWatch composite alarm",
+              "plainDefinition": "Alarm combining other alarms with AND/OR logic.",
+              "example": "ALARM when queue age AND error rate both breach"
+            },
+            {
+              "term": "Anomaly detection",
+              "longForm": "CloudWatch anomaly detection",
+              "plainDefinition": "ML band around expected metric values.",
+              "example": "Invocations outside band after deploy regression"
+            },
+            {
+              "term": "INSUFFICIENT_DATA",
+              "longForm": "insufficient data state",
+              "plainDefinition": "Not enough metric points to evaluate — treated as OK by default.",
+              "example": "New Lambda with no invocations yet"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Pager fatigue kills on-call effectiveness. Alarm on SQS depth without age misses stuck single message. Alarm on raw errors without normalization pages every traffic dip. Composite alarms fire only when multiple symptoms align."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: alarm on symptoms (age, error rate). Composite reduces noise. INSUFFICIENT_DATA treat-missing-as for new services. OK action for recovery notification."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Alarm design workflow",
+          "items": [
+            {
+              "title": "Define SLO symptom",
+              "body": "Queue lag > 2 min, error rate > 5%, DLQ > 0."
+            },
+            {
+              "title": "Pick metric and statistic",
+              "body": "Maximum for age; metric math for rate."
+            },
+            {
+              "title": "Set periods and threshold",
+              "body": "2–3 consecutive breaches reduce flapping."
+            },
+            {
+              "title": "Wire action and runbook",
+              "body": "SNS to PagerDuty with runbook URL in description."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Composite alarm logic",
+            "source": "flowchart TD\n  A1[Age > 120s] --> C{Composite AND}\n  A2[Error rate > 5%] --> C\n  C -->|both ALARM| PAGE[PagerDuty]\n  C -->|either OK| OK[No page]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — SQS age alarm",
+            "code": "Resources:\n  QueueLagAlarm:\n    Type: AWS::CloudWatch::Alarm\n    Properties:\n      AlarmName: orders-queue-lag\n      AlarmDescription: 'Runbook: https://wiki.example.com/sqs-lag'\n      Namespace: AWS/SQS\n      MetricName: ApproximateAgeOfOldestMessage\n      Dimensions:\n        - Name: QueueName\n          Value: orders\n      Statistic: Maximum\n      Period: 60\n      EvaluationPeriods: 3\n      Threshold: 120\n      ComparisonOperator: GreaterThanThreshold\n      AlarmActions:\n        - !Ref AlertTopic\n      OKActions:\n        - !Ref AlertTopic",
+            "explanation": "3 consecutive minutes above 120s pages. OKActions notify recovery."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — composite alarm",
+            "code": "  CompositeCustomerImpact:\n    Type: AWS::CloudWatch::CompositeAlarm\n    Properties:\n      AlarmName: payment-customer-impact\n      AlarmRule: ALARM(QueueLagAlarm) AND ALARM(ErrorRateAlarm)\n      AlarmActions:\n        - !Ref PagerDutyTopic",
+            "explanation": "Pages only when both lag and errors — reduces false positives from either alone."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create anomaly detection alarm",
+            "code": "aws cloudwatch put-metric-alarm \\\n  --alarm-name lambda-invocations-anomaly \\\n  --comparison-operator LessThanLowerOrGreaterThanUpperThreshold \\\n  --evaluation-periods 2 \\\n  --metrics '[{\"Id\":\"m1\",\"ReturnData\":true,\"MetricStat\":{\"Metric\":{\"Namespace\":\"AWS/Lambda\",\"MetricName\":\"Invocations\",\"Dimensions\":[{\"Name\":\"FunctionName\",\"Value\":\"payment-processor\"}]},\"Period\":300,\"Stat\":\"Sum\"}}]' \\\n  --threshold-metric-id ad1 \\\n  --alarm-actions arn:aws:sns:us-east-1:123:alerts",
+            "explanation": "Anomaly band adapts to daily traffic pattern — useful post-deploy regression detection."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — test alarm state",
+            "code": "aws cloudwatch describe-alarms \\\n  --alarm-names orders-queue-lag \\\n  --query 'MetricAlarms[0].{State:StateValue,Reason:StateReason}'",
+            "explanation": "Verify alarm not stuck INSUFFICIENT_DATA before relying on it in prod."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CloudWatch alarms vs SLO tooling",
+          "headers": ["Aspect", "CloudWatch", "Datadog monitors"],
+          "rows": [
+            ["AWS native", "No extra agent", "Third-party integration"],
+            ["Composite", "Native composite alarms", "Composite monitors"],
+            ["Runbook link", "AlarmDescription field", "Monitor message"],
+            ["Cost", "Per alarm metric", "Per host/custom metric"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single period alarm — flapping. INSUFFICIENT_DATA on new service means silent. No OK action — team does not know recovery. Alarm on Invocations drop Monday morning without anomaly band."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: synthetic canary triggers alarm in staging monthly. Alarm history shows state transitions. Use treat-missing-data: breaching for critical DLQ alarm so zero messages still evaluates. EventBridge alarm state change triggers auto-remediation runbook Lambda."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Alarm type", "Best for", "Avoid"],
+          "rows": [
+            ["Static threshold", "Hard SLA (DLQ > 0)", "Seasonal traffic alone"],
+            ["Anomaly", "Traffic patterns", "Brand new service week 1"],
+            ["Composite", "Multi-symptom impact", "Over-complex OR chains"],
+            ["Metric math rate", "Error percentage", "Raw counts"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'alarm on every Lambda error.' Strong answer: error rate threshold, composite with lag, DLQ any-message pages, runbook in description."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Alarm states: OK, ALARM, INSUFFICIENT_DATA — configure treat-missing-data deliberately.",
+    "Composite alarms reduce noise — combine lag AND error rate for customer impact.",
+    "Metric math for error rate; Maximum for queue age; anomaly for seasonal traffic.",
+    "60s: Age SLA alarm. Error rate math. Composite AND. DLQ threshold zero. Runbook in description.",
+    "Follow-up: EventBridge on alarm state for auto-remediation?"
+  ],
+  "commonPitfalls": [
+    "Raw error count alarm — pages on low traffic noise.",
+    "Strong answer: (errors/invocations)*100 with 2 evaluation periods.",
+    "INSUFFICIENT_DATA treated as OK on critical DLQ alarm.",
+    "No OK action — team unaware of recovery."
+  ],
+  "relatedTopicIds": [
+    "aws-14-cloudwatch-metrics",
+    "aws-14-lambda-sqs-debug-runbook",
+    "aws-12-sqs-visibility-dlq"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Health check endpoints",
+      "note": "HTTP /health returns 200 — external uptime monitor resembles CloudWatch alarm on synthetic canary; alarms are continuous metric evaluation not point-in-time probe.",
+      "futureTopicSlug": "typescript/backend/health-checks"
+    },
+    {
+      "language": "javascript",
+      "concept": "Sentry alert rules",
+      "note": "Sentry issue spike alerts map to CloudWatch anomaly on Errors metric — same pager fatigue discipline applies.",
+      "futureTopicSlug": "javascript/observability/error-tracking"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Creating CloudWatch alarms",
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/AlarmThatSendsEmail.html"
+    },
+    {
+      "title": "Composite alarms",
+      "url": "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Create_Composite_Alarm.html"
+    }
+  ],
+  "animationHint": "compare"
+}

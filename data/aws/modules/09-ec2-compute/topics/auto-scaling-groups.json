@@ -1,0 +1,277 @@
+{
+  "id": "aws-09-auto-scaling-groups",
+  "slug": "auto-scaling-groups",
+  "title": "Auto Scaling Groups (ASG) and launch configurations",
+  "moduleId": "aws-09-ec2-compute",
+  "order": 3,
+  "hook": "An Auto Scaling Group (ASG) maintains a fleet of EC2 instances across Availability Zones — replacing unhealthy nodes and scaling on demand using launch templates and policies.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon EC2 Auto Scaling Groups wrap EC2 instances with desired, minimum, and maximum capacity across subnets in multiple Availability Zones (AZs). Launch templates define how new instances boot. Scaling policies adjust capacity on schedules, step scaling, or target tracking (CPU, request count per target). Health checks can be EC2 status or Elastic Load Balancer (ELB) target health."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "ASG",
+              "longForm": "Auto Scaling Group",
+              "plainDefinition": "Maintains EC2 fleet size with health checks and scaling policies.",
+              "example": "web-asg desired=6 min=3 max=12 across 3 AZs."
+            },
+            {
+              "term": "Target tracking",
+              "longForm": "Target tracking scaling policy",
+              "plainDefinition": "Maintains metric near a target like 70% CPU or ALB requests per target.",
+              "example": "ALBRequestCountPerTarget target 1000."
+            },
+            {
+              "term": "Instance refresh",
+              "longForm": "ASG instance refresh",
+              "plainDefinition": "Rolling replacement of instances with new launch template version.",
+              "example": "MinHealthyPercentage 90 during AMI deploy."
+            },
+            {
+              "term": "Warm pool",
+              "longForm": "ASG warm pool",
+              "plainDefinition": "Pre-initialized stopped instances for faster scale-out.",
+              "example": "Pool of 5 stopped instances for flash sale."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASGs are the elasticity layer for stateless web tiers. Wrong health check type causes churn; missing connection draining drops user sessions. Senior interviews test Multi-AZ subnet selection, mixed instances policy, and instance refresh for AMI rollouts."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: ASG = fleet manager across AZs. Launch template versions AMI. Target tracking for most APIs. Externalize session state."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "ASG lifecycle",
+          "items": [
+            {
+              "title": "Define launch template",
+              "body": "Versioned AMI, instance type, SG, user data, IMDSv2."
+            },
+            {
+              "title": "Create ASG",
+              "body": "Attach subnets in multiple AZs, set desired/min/max, health check type."
+            },
+            {
+              "title": "Attach load balancer",
+              "body": "Register target group; set grace period for boot before health fails."
+            },
+            {
+              "title": "Add scaling policy",
+              "body": "Target tracking on CPU or ALB request count; optional scheduled scaling."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "ASG with ALB",
+            "source": "flowchart TB\n  ALB[Application Load Balancer] --> TG[Target group]\n  ASG[Auto Scaling Group] --> EC2a[EC2 AZ-a]\n  ASG --> EC2b[EC2 AZ-b]\n  TG --> EC2a\n  TG --> EC2b\n  Policy[Target tracking policy] --> ASG\n  LT[Launch template v3] --> ASG"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "ASG with launch template and target tracking",
+            "code": "WebAsg:\n  Type: AWS::AutoScaling::AutoScalingGroup\n  Properties:\n    MinSize: 2\n    MaxSize: 10\n    DesiredCapacity: 4\n    VPCZoneIdentifier: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]\n    LaunchTemplate:\n      LaunchTemplateId: !Ref WebLaunchTemplate\n      Version: !GetAtt WebLaunchTemplate.LatestVersionNumber\n    TargetGroupARNs: [!Ref WebTargetGroup]\n    HealthCheckType: ELB\n    HealthCheckGracePeriod: 300\nWebScalingPolicy:\n  Type: AWS::AutoScaling::ScalingPolicy\n  Properties:\n    AutoScalingGroupName: !Ref WebAsg\n    PolicyType: TargetTrackingScaling\n    TargetTrackingConfiguration:\n      PredefinedMetricSpecification:\n        PredefinedMetricType: ALBRequestCountPerTarget\n      TargetValue: 1000",
+            "explanation": "ELB health check replaces instances failing target group checks. Grace period allows boot before evaluation."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Start instance refresh",
+            "code": "aws autoscaling start-instance-refresh \\\n  --auto-scaling-group-name web-asg \\\n  --preferences '{\"MinHealthyPercentage\":90,\"InstanceWarmup\":300}'",
+            "explanation": "Rolls new launch template version without manual instance termination."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Describe scaling activities",
+            "code": "aws autoscaling describe-scaling-activities \\\n  --auto-scaling-group-name web-asg \\\n  --max-records 10 \\\n  --query 'Activities[].{Status:StatusCode,Cause:Cause,Time:StartTime}'",
+            "explanation": "Shows why instances launched or terminated — first step when ASG churns."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Set desired capacity",
+            "code": "aws autoscaling set-desired-capacity \\\n  --auto-scaling-group-name web-asg \\\n  --desired-capacity 8 \\\n  --honor-cooldown",
+            "explanation": "Manual scale for drills; policies normally adjust automatically."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Scale trigger",
+              "CloudWatch metric or schedule",
+              "HPA in Kubernetes or manual pm2 cluster"
+            ],
+            [
+              "Health",
+              "ELB or EC2 status checks",
+              "K8s liveness probe restarts pod"
+            ],
+            [
+              "Replacement",
+              "New EC2 from launch template",
+              "New container on existing or new node"
+            ],
+            [
+              "State",
+              "Instances ephemeral — externalize sessions",
+              "In-memory session lost on pod restart unless sticky + store"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single-AZ ASG loses Availability Zone failure resilience. ELB health check with grace period zero terminates instances mid-boot. Sticky sessions without shared store break on scale-in."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Mixed instances policy combines On-Demand base with Spot for cost — capacity-optimized allocation reduces interruption. How to prove it in production: CloudWatch GroupDesiredCapacity vs InServiceInstances, UnHealthyHostCount on target group, and ScalingActivities for replacement causes."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Target tracking ALB",
+              "Request-based scale for web",
+              "Needs healthy target registration"
+            ],
+            [
+              "Spot in ASG",
+              "Up to 90% savings for stateless",
+              "Interruption handling required"
+            ],
+            [
+              "Warm pool",
+              "Fast scale-out",
+              "Cost for stopped EBS volumes"
+            ],
+            [
+              "Lifecycle hooks",
+              "Drain connections before terminate",
+              "Complex automation via SSM or Lambda"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying ASG health check EC2 is enough for ALB-backed apps — ELB health check required when traffic flows through load balancer. Strong answer: Multi-AZ subnets, grace period, external session store."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "ASG spans multiple AZ subnets for high availability.",
+    "Use launch templates and instance refresh for versioned AMI rollouts.",
+    "Match health check type to traffic path — ELB for ALB-backed apps.",
+    "60s: Multi-AZ ASG + launch template + ELB health + grace period. External sessions. Target tracking scale.",
+    "Follow-up: how does warm pool change scale-out latency?"
+  ],
+  "commonPitfalls": [
+    "Single AZ ASG — rejected in HA interviews.",
+    "Strong answer: min 2 AZ subnets, desired spread, AZ rebalance enabled.",
+    "Relying on sticky sessions without Redis/DynamoDB session store.",
+    "Using deprecated launch configurations for new builds."
+  ],
+  "relatedTopicIds": [
+    "aws-09-ec2-instances-amis",
+    "aws-09-ebs-vs-instance-store",
+    "aws-11-lambda-vs-ec2-fargate"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "PM2 cluster vs ASG",
+      "note": "PM2 cluster scales processes on one VM; ASG scales VMs behind ALB — different failure domain and cost model.",
+      "futureTopicSlug": "aws/ec2/scaling"
+    },
+    {
+      "language": "typescript",
+      "concept": "Graceful shutdown",
+      "note": "SIGTERM handler in Node drains connections — ASG lifecycle hook can delay terminate until drain completes, like server.close() before exit.",
+      "futureTopicSlug": "aws/ec2/lifecycle-hooks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Auto Scaling groups",
+      "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/auto-scaling-groups.html"
+    },
+    {
+      "title": "Target tracking scaling policies",
+      "url": "https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "high-concurrency"
+}

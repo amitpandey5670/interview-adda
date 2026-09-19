@@ -1,0 +1,267 @@
+{
+  "id": "aws-18-tenant-routing-blast-radius",
+  "slug": "tenant-routing-blast-radius",
+  "title": "Tenant routing and blast radius",
+  "moduleId": "aws-18-saas-and-interview",
+  "order": 3,
+  "hook": "Tenant routing directs each customer request to the correct isolated resources. Blast radius is how much damage one tenant failure or breach affects others — the core SaaS reliability and security interview topic.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Routing layers: DNS (tenant.app.com), API Gateway custom domain + mapping, ALB host-header rules, CloudFront alternate domain names, or application middleware resolving tenant from JWT/subdomain. Blast radius containment: separate databases, rate limits per tenant, circuit breakers, and silo tiers for critical customers. SaaS Lens Reliability and Security pillars emphasize per-tenant failure isolation."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Blast radius",
+              "longForm": "Failure blast radius",
+              "plainDefinition": "Scope of impact when one component fails",
+              "example": "DB outage affects one tenant vs all"
+            },
+            {
+              "term": "Tenant routing",
+              "longForm": "Tenant request routing",
+              "plainDefinition": "Directing request to correct tenant context",
+              "example": "acme.app.com → tenant 42"
+            },
+            {
+              "term": "Noisy neighbor",
+              "longForm": "Noisy neighbor problem",
+              "plainDefinition": "One tenant consumes disproportionate shared resources",
+              "example": "Tenant floods API throttling others"
+            },
+            {
+              "term": "Circuit breaker",
+              "longForm": "Per-tenant circuit breaker",
+              "plainDefinition": "Stop calls to failing tenant dependency",
+              "example": "Isolate bad tenant webhook endpoint"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A bug that leaks Tenant A data to Tenant B ends careers. A noisy tenant crashing shared compute affects all customers. Interviewers want routing mechanism plus blast radius controls named explicitly."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: route by subdomain/JWT/header; contain blast radius with per-tenant limits, silo tiers, and fault isolation."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Resolve tenant identity",
+              "body": "Subdomain, custom domain, JWT claim, or API key maps to tenant_id."
+            },
+            {
+              "title": "Route to correct stack",
+              "body": "ALB rule, Lambda authorizer, or router service for silo vs pool tier."
+            },
+            {
+              "title": "Enforce per-tenant limits",
+              "body": "API Gateway usage plan, WAF rate limit keyed on tenant, SQS per-tenant queues."
+            },
+            {
+              "title": "Contain failures",
+              "body": "Bulkhead pattern: separate connection pools, timeouts, circuit breakers per tenant."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Routing and blast radius",
+            "source": "flowchart TB\n  REQ[Request acme.app.com] --> RTR[Tenant router]\n  RTR --> POOL[Pooled tier]\n  RTR --> SILO[Silo tier]\n  POOL --> LIMIT[Per-tenant rate limit]\n  SILO --> ISO[Isolated resources]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "ALB host-header routing",
+            "code": "ListenerRule:\n  Properties:\n    Conditions:\n      - Field: host-header\n        Values: ['acme.app.example.com']\n    Actions:\n      - Type: forward\n        TargetGroupArn: !Ref AcmeSiloTargetGroup",
+            "explanation": "Enterprise silo tenant gets dedicated target group."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "JWT tenant claim resolution",
+            "code": "function resolveTenant(auth: JwtPayload): string {\n  const tenantId = auth['custom:tenant_id'];\n  if (!tenantId) throw new UnauthorizedError('Missing tenant claim');\n  return tenantId;\n}",
+            "explanation": "Cognito custom attribute or OIDC claim carries tenant identity."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "API Gateway usage plan per tier",
+            "code": "PremiumPlan:\n  Type: AWS::ApiGateway::UsagePlan\n  Properties:\n    UsagePlanName: premium-tier\n    Throttle:\n      RateLimit: 1000\n      BurstLimit: 2000\n    Quota:\n      Limit: 1000000\n      Period: MONTH",
+            "explanation": "Different rate limits per SaaS tier — fairness control."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Per-tenant circuit breaker",
+            "code": "const breakers = new Map<string, CircuitBreaker>();\n\nfunction getBreaker(tenantId: string) {\n  if (!breakers.has(tenantId)) {\n    breakers.set(tenantId, new CircuitBreaker(callWebhook, { timeout: 3000 }));\n  }\n  return breakers.get(tenantId)!;\n}",
+            "explanation": "One tenant bad webhook does not trip breaker for all tenants."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Routing",
+              "Subdomain → tenant_id",
+              "Host header in Express router"
+            ],
+            [
+              "Blast radius",
+              "Silo tier isolation",
+              "One bad npm dep crashes all tenants"
+            ],
+            [
+              "Rate limit",
+              "Per-tenant API GW plan",
+              "express-rate-limit per API key"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Tenant ID only in URL path — attacker changes path to access other tenant. Shared rate limit bucket for all tenants. No silo path for enterprise despite SLA."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: chaos test kills one tenant silo — others unaffected; pen test cross-tenant access fails; per-tenant p99 tracked separately."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Subdomain routing",
+              "Clear tenant identity",
+              "Wildcard cert management"
+            ],
+            [
+              "JWT claim",
+              "Stateless routing",
+              "Token forgery if not validated"
+            ],
+            [
+              "Silo on failure",
+              "Minimal blast radius",
+              "Higher cost for affected tier only"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Tenant ID from client body without auth validation — rejected as insecure. Strong answer: signed JWT claim or verified subdomain mapping."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Route tenants via subdomain, custom domain, or signed JWT claim.",
+    "Blast radius: silo tiers, per-tenant limits, circuit breakers, bulkheads.",
+    "Never trust client-supplied tenant_id without authentication.",
+    "60s: Resolve tenant from subdomain/JWT. Route pool vs silo. Per-tenant rate limits and circuit breakers. Chaos test proves isolation.",
+    "Follow-up: what if one tenant DDoSes your shared ALB?"
+  ],
+  "commonPitfalls": [
+    "tenant_id from query string without auth — cross-tenant access vulnerability.",
+    "Strong answer: signed claim, middleware enforcement, integration tests.",
+    "Shared rate limit — one tenant blocks all.",
+    "No silo escalation path when enterprise signs."
+  ],
+  "relatedTopicIds": [
+    "aws-18-tenancy-models-silo-pool-bridge",
+    "aws-18-noisy-neighbor-fairness",
+    "aws-18-saas-reference-architecture"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Subdomain routing",
+      "note": "Express vhost or host header check mirrors ALB host-header tenant routing.",
+      "futureTopicSlug": "javascript/saas/routing"
+    },
+    {
+      "language": "typescript",
+      "concept": "Branded tenant context",
+      "note": "AsyncLocalStorage for tenant context in Node — propagate without passing param everywhere.",
+      "futureTopicSlug": "typescript/saas/context"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Lens — AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html"
+    },
+    {
+      "title": "Reliability pillar — SaaS Lens",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/reliability.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "saas-tenant-routing"
+}

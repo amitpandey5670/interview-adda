@@ -1,0 +1,267 @@
+{
+  "id": "aws-17-landing-zone-concept",
+  "slug": "landing-zone-concept",
+  "title": "Landing zone concept (multi-account foundation)",
+  "moduleId": "aws-17-cloud-foundation",
+  "order": 1,
+  "hook": "A landing zone is a pre-configured multi-account AWS environment with security, networking, and governance baselines. New workloads deploy into accounts carved from this foundation instead of ad-hoc single accounts.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Landing zones provide organization structure (management, security, shared services, workload accounts), baseline networking (hub VPC, IPAM), identity federation, logging aggregation, and guardrails (Service Control Policies). AWS Control Tower automates landing zone setup; custom landing zones use Organizations + CloudFormation StackSets."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Landing zone",
+              "longForm": "AWS landing zone",
+              "plainDefinition": "Multi-account foundation with baselines",
+              "example": "Control Tower setup with 4 OUs"
+            },
+            {
+              "term": "OU",
+              "longForm": "Organizational Unit",
+              "plainDefinition": "Container for accounts in AWS Organizations",
+              "example": "Workloads OU vs Security OU"
+            },
+            {
+              "term": "Management account",
+              "longForm": "Organizations management account",
+              "plainDefinition": "Billing root — limited workload deployment",
+              "example": "Pays consolidated bill"
+            },
+            {
+              "term": "Shared services",
+              "longForm": "Shared services account",
+              "plainDefinition": "Central DNS, logging, networking hub",
+              "example": "Transit Gateway owner account"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Enterprise migrations fail without account strategy. Interviewers ask how you onboard a new team without compromising security. Landing zones are the answer — repeatable, governed account factory."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: multi-account OU structure, baseline guardrails, shared services, account vending — not one giant account."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Design OU hierarchy",
+              "body": "Security, Infrastructure, Workloads (dev/stage/prod), Sandbox, Suspended."
+            },
+            {
+              "title": "Apply baseline guardrails",
+              "body": "SCPs, Config rules, mandatory tags via Control Tower or custom."
+            },
+            {
+              "title": "Deploy shared networking",
+              "body": "Hub VPC, Transit Gateway, IPAM pool for spoke CIDR allocation."
+            },
+            {
+              "title": "Vend workload accounts",
+              "body": "Account Factory creates account with baseline stacks applied automatically."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Landing zone OUs",
+            "source": "flowchart TB\n  ROOT[Management] --> SEC[Security OU]\n  ROOT --> INFRA[Infrastructure OU]\n  ROOT --> WL[Workloads OU]\n  WL --> DEV[Dev accounts]\n  WL --> PROD[Prod accounts]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create OU",
+            "code": "aws organizations create-organizational-unit \\\n  --parent-id r-xxxx \\\n  --name Workloads-Production",
+            "explanation": "OU structure is foundation of landing zone governance."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Control Tower enable",
+            "code": "aws controltower enable-baseline \\\n  --baseline-identifier AWSControlTowerBaseline \\\n  --target-identifier arn:aws:organizations::123:ou/o-abc/ou-xyz",
+            "explanation": "Applies guardrails and logging baseline to OU."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "StackSet baseline logging",
+            "code": "LogArchiveStackSet:\n  Type: AWS::CloudFormation::StackSet\n  Properties:\n    StackSetName: org-cloudtrail\n    PermissionModel: SERVICE_MANAGED\n    AutoDeployment:\n      Enabled: true\n      RetainStacksOnAccountRemoval: false",
+            "explanation": "Auto-deploy CloudTrail config to new accounts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List enrolled accounts",
+            "code": "aws controltower list-enabled-controls \\\n  --target-identifier arn:aws:organizations::123:account/456",
+            "explanation": "Verify baseline controls on vendored account."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Structure",
+              "Multi-account OU landing zone",
+              "Monorepo with env folders"
+            ],
+            [
+              "Governance",
+              "SCPs + Control Tower",
+              "ESLint + CODEOWNERS"
+            ],
+            [
+              "Onboarding",
+              "Account Factory",
+              "New repo from template"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Running production workloads in management account. No OU separation for sandbox vs prod. Skipping centralized logging account."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: every new account enrolled in Control Tower within 24h; SCP coverage on all OUs; zero workloads in management account audit."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Control Tower",
+              "Fast standard LZ",
+              "Less customization"
+            ],
+            [
+              "Custom LZ (CFN)",
+              "Full control",
+              "You own maintenance"
+            ],
+            [
+              "Account per env",
+              "Strong blast radius",
+              "More accounts to manage"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Single account for everything \"because it is simpler\" — rejected at enterprise scale. Strong answer: OU structure, guardrails, shared services, account vending."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Landing zone = governed multi-account foundation with baselines.",
+    "Management account for billing/governance only — not workloads.",
+    "Control Tower or custom StackSets automate repeatable setup.",
+    "60s: OUs for Security/Infrastructure/Workloads. SCP guardrails. Hub networking. Account Factory vends governed accounts. Not one shared prod account.",
+    "Follow-up: how does landing zone relate to Well-Architected Security pillar?"
+  ],
+  "commonPitfalls": [
+    "Prod in management account — major governance fail.",
+    "Strong answer: OU hierarchy, SCPs, centralized logging, account vending.",
+    "No sandbox OU — developers experiment in prod account.",
+    "Skipping IPAM — CIDR collisions across spokes."
+  ],
+  "relatedTopicIds": [
+    "aws-17-account-vending-guardrails",
+    "aws-17-network-foundation-hub-spoke",
+    "aws-17-identity-foundation-sso"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Monorepo vs multi-repo",
+      "note": "Landing zone multi-account mirrors multi-repo team boundaries — isolation by default.",
+      "futureTopicSlug": "javascript/cloud/organizations"
+    },
+    {
+      "language": "typescript",
+      "concept": "Workspace packages",
+      "note": "npm workspaces separate packages like OUs separate accounts.",
+      "futureTopicSlug": "typescript/tooling/monorepo"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Cloud Foundation",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/welcome.html"
+    },
+    {
+      "title": "AWS Control Tower",
+      "url": "https://docs.aws.amazon.com/controltower/latest/userguide/what-is-control-tower.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "lambda-vpc"
+}

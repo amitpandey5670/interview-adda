@@ -1,0 +1,236 @@
+{
+  "id": "aws-13-step-functions-states",
+  "slug": "step-functions-states",
+  "title": "Step Functions state types (Task, Choice, Parallel, Map)",
+  "moduleId": "aws-13-step-functions",
+  "order": 1,
+  "hook": "AWS Step Functions workflows are graphs of states defined in Amazon States Language (ASL). Task states do the work; Choice branches; Parallel and Map coordinate concurrency. Knowing each state's job is how you read any production state machine.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "ASL defines states: Task invokes AWS services or activities; Choice routes on JSONPath conditions; Parallel runs branches concurrently; Map iterates over an array; Wait delays; Pass transforms input; Succeed and Fail terminate. Retry and Catch attach to Task states for resilience and compensation routing."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Task state",
+              "longForm": "ASL Task state",
+              "plainDefinition": "State that invokes a resource — Lambda, SNS, SQS, etc.",
+              "example": "Resource arn:aws:states:::lambda:invoke"
+            },
+            {
+              "term": "Choice state",
+              "longForm": "ASL Choice state",
+              "plainDefinition": "Conditional branch based on input JSONPath.",
+              "example": "Variable $.status StringEquals 200 → Next success path"
+            },
+            {
+              "term": "Map state",
+              "longForm": "ASL Map state",
+              "plainDefinition": "Runs a sub-workflow for each item in an array.",
+              "example": "ItemsPath $.lineItems MaxConcurrency 10"
+            },
+            {
+              "term": "JSONPath",
+              "longForm": "JSONPath expression",
+              "plainDefinition": "Query language to select fields from state input.",
+              "example": "$.Payload.orderId after Lambda Task"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Misconfigured JSONPath in Choice sends payments down the wrong branch. Map over 10,000 items without MaxConcurrency throttles Lambda account. Parallel without error handling in each branch leaves partial success uncleaned."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Task does work, Choice branches, Map iterates, Parallel forks. Retry for transient; Catch for business failure routing."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Reading a state machine",
+          "items": [
+            {
+              "title": "Find StartAt",
+              "body": "Entry state name in ASL definition."
+            },
+            {
+              "title": "Trace Task outputs",
+              "body": "ResultPath and OutputPath control what next state receives."
+            },
+            {
+              "title": "Check Choice conditions",
+              "body": "Verify JSONPath against actual Lambda output shape."
+            },
+            {
+              "title": "Review Retry/Catch",
+              "body": "Transient errors retry; business errors route to compensators."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Core state types",
+            "source": "stateDiagram-v2\n  [*] --> Validate: StartAt\n  Validate --> Choice\n  Choice --> Charge: approved\n  Choice --> Fail: rejected\n  Charge --> Map\n  Map --> Ship\n  Ship --> [*]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — Task, Choice, and Fail states",
+            "code": "{\n  \"StartAt\": \"ValidateOrder\",\n  \"States\": {\n    \"ValidateOrder\": {\n      \"Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::lambda:invoke\",\n      \"Parameters\": {\n        \"FunctionName\": \"validate-order\",\n        \"Payload.$\": \"$\"\n      },\n      \"ResultSelector\": { \"valid.$\": \"$.Payload.valid\" },\n      \"ResultPath\": \"$.validation\",\n      \"Next\": \"CheckValid\"\n    },\n    \"CheckValid\": {\n      \"Type\": \"Choice\",\n      \"Choices\": [{\n        \"Variable\": \"$.validation.valid\",\n        \"BooleanEquals\": true,\n        \"Next\": \"ChargePayment\"\n      }],\n      \"Default\": \"OrderRejected\"\n    },\n    \"OrderRejected\": { \"Type\": \"Fail\", \"Error\": \"ValidationFailed\" },\n    \"ChargePayment\": { \"Type\": \"Task\", \"Resource\": \"arn:aws:states:::lambda:invoke\", \"End\": true }\n  }\n}",
+            "explanation": "ResultSelector shapes Lambda output. Choice reads nested validation.valid. Default catches false and missing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — Map state with concurrency limit",
+            "code": "\"ProcessLineItems\": {\n  \"Type\": \"Map\",\n  \"ItemsPath\": \"$.lineItems\",\n  \"MaxConcurrency\": 10,\n  \"Iterator\": {\n    \"StartAt\": \"ReserveStock\",\n    \"States\": {\n      \"ReserveStock\": {\n        \"Type\": \"Task\",\n        \"Resource\": \"arn:aws:states:::lambda:invoke\",\n        \"Parameters\": {\n          \"FunctionName\": \"reserve-item\",\n          \"Payload.$\": \"$\"\n        },\n        \"End\": true\n      }\n    }\n  },\n  \"Next\": \"ConfirmOrder\"\n}",
+            "explanation": "MaxConcurrency 10 limits parallel Lambda — critical for account limits and downstream DB."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — Retry and Catch on Task",
+            "code": "\"ChargePayment\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::lambda:invoke\",\n  \"Retry\": [{\n    \"ErrorEquals\": [\"Lambda.ServiceException\", \"Lambda.TooManyRequestsException\"],\n    \"IntervalSeconds\": 2,\n    \"MaxAttempts\": 3,\n    \"BackoffRate\": 2\n  }],\n  \"Catch\": [{\n    \"ErrorEquals\": [\"States.TaskFailed\"],\n    \"ResultPath\": \"$.chargeError\",\n    \"Next\": \"RefundPayment\"\n  }],\n  \"Next\": \"ShipOrder\"\n}",
+            "explanation": "Retry throttling; Catch routes business failure to compensator RefundPayment."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — start execution and inspect history",
+            "code": "EXEC_ARN=$(aws stepfunctions start-execution \\\n  --state-machine-arn arn:aws:states:us-east-1:123:stateMachine:orders \\\n  --input '{\"orderId\":\"ord-1\",\"lineItems\":[{\"sku\":\"A\"}]}' \\\n  --query 'executionArn' --output text)\n\naws stepfunctions get-execution-history \\\n  --execution-arn \"$EXEC_ARN\" \\\n  --reverse-order --max-items 5",
+            "explanation": "Execution history shows state entered/exited events — primary debug tool for JSONPath issues."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Step Functions versus async orchestration code",
+          "headers": ["Aspect", "ASL state machine", "TypeScript async pipeline"],
+          "rows": [
+            ["Visibility", "Console execution graph", "Logs only"],
+            ["Durability", "State persisted between steps", "Process memory"],
+            ["Branching", "Choice state JSONPath", "if/else in code"],
+            ["Retry", "Declarative Retry block", "Manual try/catch loops"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "JSONPath $.field vs $.Payload.field after Lambda. Map without MaxConcurrency on large arrays. Catch States.ALL swallowing errors that should fail fast. ResultPath null accidentally discarding input."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: execution history for failed Choice — compare Variable path to Task output in previous event. Distributed Map for S3 CSV beyond inline Map 256 KB limit. X-Ray traces linked when active tracing enabled on state machine."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["State", "Use when", "Pitfall"],
+          "rows": [
+            ["Task", "Single unit of work", "Timeout vs Lambda duration"],
+            ["Choice", "Business branching", "JSONPath typos"],
+            ["Parallel", "Independent concurrent steps", "Partial failure cleanup"],
+            ["Map", "Fan-out over array", "History size on large N"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'Map and Parallel are the same.' Strong answer: Parallel runs fixed branches; Map iterates dynamic array with per-item iterator."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Task invokes work; Choice branches on JSONPath; Map iterates arrays; Parallel runs fixed concurrent branches.",
+    "ResultPath/ResultSelector shape what the next state sees — debug via execution history.",
+    "Retry for transient infra errors; Catch routes to compensation on business failure.",
+    "60s: Task work Choice branch Map iterate Parallel fork. JSONPath on Payload wrapper. MaxConcurrency on Map.",
+    "Follow-up: when use Distributed Map versus inline Map?"
+  ],
+  "commonPitfalls": [
+    "Wrong JSONPath after Lambda — $.status vs $.Payload.status.",
+    "Strong answer: inspect execution history output of previous Task state.",
+    "Map 50k items inline — hits payload and history limits.",
+    "Catch States.ALL hiding programming bugs that should Fail fast."
+  ],
+  "relatedTopicIds": [
+    "aws-13-step-functions-standard-express",
+    "aws-13-step-functions-saga",
+    "aws-13-step-functions-lambda-sqs"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Promise.all versus sequential await",
+      "note": "Parallel state resembles Promise.all on independent branches; Map state resembles Promise.all over array.map with concurrency pool.",
+      "futureTopicSlug": "typescript/async/concurrency-patterns"
+    },
+    {
+      "language": "javascript",
+      "concept": "State machine libraries (XState)",
+      "note": "XState defines states in code — ASL is infrastructure-as-state-machine with AWS-managed persistence between transitions.",
+      "futureTopicSlug": "javascript/frontend/state-machines"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "State machine structure",
+      "url": "https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-state-machine-structure.html"
+    },
+    {
+      "title": "Map state",
+      "url": "https://docs.aws.amazon.com/step-functions/latest/dg/amazon-states-language-map-state.html"
+    }
+  ],
+  "animationHint": "flow"
+}

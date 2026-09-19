@@ -1,0 +1,278 @@
+{
+  "id": "aws-09-ec2-instances-amis",
+  "slug": "ec2-instances-amis",
+  "title": "EC2 instances, AMIs, and launch templates",
+  "moduleId": "aws-09-ec2-compute",
+  "order": 1,
+  "hook": "An Amazon Machine Image (AMI) is the boot blueprint; the instance type is the hardware profile. Together they define what runs, how fast, and what it costs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon Elastic Compute Cloud (EC2) provides virtual machines in AWS regions. An Amazon Machine Image (AMI) captures the root volume template — operating system, patches, and baked application bits. Instance types (families like t3, m6i, c7g) encode vCPU, memory, network bandwidth, and optional accelerators. Launch templates version the full launch specification: AMI, type, key pair, network interfaces, storage, tags, and Instance Metadata Service (IMDS) settings."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "AMI",
+              "longForm": "Amazon Machine Image",
+              "plainDefinition": "Template for the root volume and launch permissions.",
+              "example": "Amazon Linux 2023 AMI with SSM agent preinstalled."
+            },
+            {
+              "term": "Instance type",
+              "longForm": "EC2 instance type",
+              "plainDefinition": "Named hardware profile: vCPU, RAM, network, storage options.",
+              "example": "m6i.large — 2 vCPU, 8 GiB, general purpose."
+            },
+            {
+              "term": "Launch template",
+              "longForm": "EC2 launch template",
+              "plainDefinition": "Versioned launch spec replacing legacy launch configurations.",
+              "example": "Version 3 switches AMI after Image Builder pipeline."
+            },
+            {
+              "term": "IMDSv2",
+              "longForm": "Instance Metadata Service version 2",
+              "plainDefinition": "Session-oriented metadata access requiring a PUT token first.",
+              "example": "HttpTokens: required blocks SSRF from stealing IAM role creds."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Wrong instance family wastes money (GPU for CRUD API) or causes throttling (burstable t3 CPU credits exhausted). AMIs drift without pipelines — golden AMI builds via EC2 Image Builder keep CVE patches consistent. Launch templates are how Auto Scaling Groups and blue/green deploys reference immutable infra versions."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: AMI = what boots, instance type = capacity profile, launch template = versioned launch contract with IMDSv2 required and instance profile for AWS API access."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "From AMI to running instance",
+          "items": [
+            {
+              "title": "Select AMI and type",
+              "body": "Pick region-local AMI; match workload to family (compute, memory, burstable)."
+            },
+            {
+              "title": "Configure networking",
+              "body": "Subnet, security groups, public IP assignment, primary ENI settings in template."
+            },
+            {
+              "title": "Attach storage mappings",
+              "body": "Root gp3 volume size, encryption, additional EBS or instance store from type."
+            },
+            {
+              "title": "Bootstrap",
+              "body": "User data script runs at first boot — idempotent cloud-init or PowerShell."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Launch template to instance",
+            "source": "flowchart LR\n  LT[Launch template v2] --> LTspec[AMI + type + SG + EBS]\n  LTspec --> Run[RunInstances / ASG]\n  Run --> Inst[EC2 instance]\n  Inst --> IMDS[IMDSv2 token]\n  Inst --> Profile[Instance profile IAM role]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Launch template with IMDSv2",
+            "code": "LaunchTemplate:\n  Type: AWS::EC2::LaunchTemplate\n  Properties:\n    LaunchTemplateData:\n      ImageId: ami-0abcdef1234567890\n      InstanceType: m6i.large\n      IamInstanceProfile:\n        Arn: !GetAtt InstanceProfile.Arn\n      MetadataOptions:\n        HttpTokens: required\n        HttpEndpoint: enabled\n      BlockDeviceMappings:\n        - DeviceName: /dev/xvda\n          Ebs:\n            VolumeSize: 30\n            VolumeType: gp3\n            Encrypted: true",
+            "explanation": "HttpTokens required enforces IMDSv2. Encrypted gp3 root is production baseline."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Launch instance from template",
+            "code": "aws ec2 run-instances \\\n  --launch-template LaunchTemplateName=web-app,Version=2 \\\n  --subnet-id subnet-0abc123 \\\n  --security-group-ids sg-0web456 \\\n  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=web-1}]'",
+            "explanation": "Template carries AMI and type; subnet and SG can override per launch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create AMI from golden instance",
+            "code": "aws ec2 create-image \\\n  --instance-id i-0golden \\\n  --name \"web-app-golden-2026-09-14\" \\\n  --no-reboot\naws ec2 describe-images --owners self --filters \"Name=name,Values=web-app-golden-*\"",
+            "explanation": "Image Builder automates this; manual AMI for labs. no-reboot risks filesystem consistency — prefer staged pipeline."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "IMDSv2 token fetch from instance",
+            "code": "TOKEN=$(curl -sX PUT \"http://169.254.169.254/latest/api/token\" \\\n  -H \"X-aws-ec2-metadata-token-ttl-seconds: 21600\")\ncurl -sH \"X-aws-ec2-metadata-token: $TOKEN\" \\\n  http://169.254.169.254/latest/meta-data/iam/security-credentials/web-role",
+            "explanation": "Proves IMDSv2 path. Apps and SDKs use instance profile automatically when configured."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Boot image",
+              "AMI is region-specific copied image",
+              "Docker image / VM template — not portable across clouds without rebuild"
+            ],
+            [
+              "Sizing",
+              "Discrete instance types — vertical scale = change type",
+              "Node process scales vertically until memory cap — no instance type picker"
+            ],
+            [
+              "Metadata",
+              "IMDS exposes role credentials and user data",
+              "No EC2 metadata — use env vars and secret managers in Node"
+            ],
+            [
+              "Bootstrap",
+              "cloud-init user data at boot",
+              "npm start in Dockerfile CMD — runs every container start"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using long-lived access keys on instances instead of instance profiles. Leaving IMDSv1 enabled on internet-facing apps. Baking secrets into AMIs instead of fetching at boot from Secrets Manager."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Burstable t3/t4g instances accumulate CPU credits — sustained 100% CPU causes throttle visible in CPUSurplusCreditBalance CloudWatch metric. Graviton (c7g/m7g) needs ARM-built binaries. How to prove it in production: CloudWatch agent for mem/disk, SSM Inventory for AMI age, AWS Compute Optimizer rightsizing recommendations, and golden AMI pipeline age alarm > 30 days."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Reserved / Savings Plans",
+              "40–70% cost cut for steady state",
+              "Commitment risk if architecture shifts to containers"
+            ],
+            [
+              "Spot instances",
+              "Deep discount for fault-tolerant batch",
+              "Two-minute interruption notice — need checkpointing"
+            ],
+            [
+              "Dedicated Hosts",
+              "License compliance (BYOL SQL Server)",
+              "Highest cost — only for license or placement rules"
+            ],
+            [
+              "Nitro instances",
+              "Higher network/disk performance, bare-metal-like",
+              "Some legacy drivers incompatible"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'pick t2.micro for production API' without mentioning CPU credits or network limits. Strong answer: map workload to family, enforce IMDSv2, golden AMI pipeline, instance profile, encrypted EBS."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "AMI defines the boot disk template; instance type defines compute, memory, and network capacity.",
+    "Launch templates are versioned — prefer them over deprecated launch configurations for ASG integration.",
+    "Require IMDSv2 and instance profiles; never embed access keys in user data or AMIs.",
+    "60s: AMI + instance type + launch template version = reproducible EC2. IMDSv2 required. Golden AMI pipeline. Instance profile not keys.",
+    "Follow-up: how do you roll out a new AMI across an ASG without downtime?"
+  ],
+  "commonPitfalls": [
+    "Saying AMIs are global — saying that gets you rejected because AMIs are regional; copy across regions for DR.",
+    "Strong answer: AMI copy, launch template new version, ASG instance refresh with min healthy 90%.",
+    "Embedding database connection strings in user data instead of Secrets Manager.",
+    "Using burstable instances for CPU-saturated APIs without credit monitoring."
+  ],
+  "relatedTopicIds": [
+    "aws-09-eni-vpc-attachment",
+    "aws-09-auto-scaling-groups",
+    "aws-09-ebs-vs-instance-store",
+    "aws-11-lambda-vs-ec2-fargate"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Process vs EC2 instance",
+      "note": "A Node.js server on EC2 is one OS process tree on a VM you patch and scale via ASG. Unlike serverless, you own the kernel, libc, and long-lived connections.",
+      "futureTopicSlug": "aws/ec2/compute-model"
+    },
+    {
+      "language": "typescript",
+      "concept": "Config at boot vs build time",
+      "note": "TypeScript apps often bake env at Docker build; on EC2, user data fetches SSM parameters at boot — similar to runtime config injection but at VM layer not container layer.",
+      "futureTopicSlug": "aws/ec2/bootstrap"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon EC2 instance types",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/instance-types.html"
+    },
+    {
+      "title": "Configure the instance metadata service",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "high-concurrency"
+}

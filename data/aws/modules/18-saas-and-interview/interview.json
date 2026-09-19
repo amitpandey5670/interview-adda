@@ -1,0 +1,96 @@
+{
+  "moduleId": "aws-18-saas-and-interview",
+  "title": "SaaS on AWS interview drills",
+  "items": [
+    {
+      "question": "Design multi-tenant SaaS on AWS for freemium and enterprise tiers.",
+      "answer": "Pool model default: shared VPC, ECS/Lambda data plane, row-level DB with RLS and tenant_id on every query. Route by subdomain acme.app.com. Per-tenant API rate limits. Enterprise bridge: vended dedicated RDS + VPC via control plane Step Functions, PrivateLink from pooled app. Control plane handles signup async provisioning. Cognito custom tenant claim in JWT.",
+      "followUps": [
+        "When move from pool to silo?",
+        "Cross-tenant pen test approach?"
+      ],
+      "sixtySeconds": "Pool for free with RLS. Enterprise silo DB/VPC vended. Control plane async provision. Subdomain routing. Per-tenant limits. SaaS Lens."
+    },
+    {
+      "question": "Tenant A reports seeing Tenant B data. How investigate and prevent?",
+      "answer": "Incident: identify API logs with wrong tenant_id in response, find missing WHERE clause or auth bypass. Immediate: disable endpoint, notify affected tenants. Root cause: ORM query without tenant filter or client-supplied tenant_id trusted. Prevent: PostgreSQL RLS, middleware tenant context, integration tests asserting cross-tenant returns zero rows, code review rule for unscoped queries.",
+      "followUps": [
+        "RLS vs app-layer only?",
+        "Audit log requirements?"
+      ],
+      "sixtySeconds": "Leak = missing tenant scope. Fix query. Add RLS, middleware, isolation tests. Never trust client tenant_id."
+    },
+    {
+      "question": "One tenant CSV import slows entire platform. Fix without just scaling RDS.",
+      "answer": "Identify offender via per-tenant CloudWatch metrics on DB connections and API rate. Throttle tenant upload API with token bucket. Move import to per-tenant SQS queue with Lambda reserved concurrency cap (50). Limit per-tenant connection pool to 5. Alert on 3x normal tenant usage. Offer silo tier if repeat enterprise offender.",
+      "followUps": [
+        "DynamoDB hot partition same problem?",
+        "Fair queue vs priority queue?"
+      ],
+      "sixtySeconds": "Per-tenant metrics find offender. Rate limit upload. Queue + concurrency cap. Connection pool per tenant. Throttle not just scale."
+    },
+    {
+      "question": "Walk tenant onboarding from signup to first API call.",
+      "answer": "Signup hits control plane API → tenant record PROVISIONING → Step Functions parallel: create DB schema, Cognito app client, API usage plan, Route53 subdomain. On success → status ACTIVE → EventBridge TenantActivated. Data plane accepts requests with tenant JWT claim. User polls /status until ACTIVE then calls API. Target < 5 min self-serve.",
+      "followUps": [
+        "Idempotent provisioning on retry?",
+        "Offboarding data deletion?"
+      ],
+      "sixtySeconds": "CP async Step Functions provision. Status gate. DP serves when ACTIVE. EventBridge lifecycle. Never sync block signup."
+    },
+    {
+      "question": "Enterprise contract requires network isolation. Architecture change?",
+      "answer": "Bridge from pool: vend dedicated VPC or account via landing zone Account Factory. IPAM allocates CIDR. Deploy silo RDS in tenant VPC. Pooled app connects via PrivateLink endpoint. ALB host-header routes enterprise subdomain to silo target group or dedicated stack. Document in SaaS Lens silo tier. Automate — manual 2-week setup fails enterprise sales.",
+      "followUps": [
+        "Account per tenant vs VPC per tenant?",
+        "Cost model for silo tier?"
+      ],
+      "sixtySeconds": "Vend VPC/account automated. PrivateLink to silo data. Host-header routing. IPAM CIDR. Pool remains for standard tier."
+    },
+    {
+      "question": "Compare row-level, schema-per-tenant, and database-per-tenant partitioning.",
+      "answer": "Row-level: one schema, tenant_id column, RLS — best scale, leak risk if filter missed. Schema-per-tenant: PG schema namespace — middle isolation, connection overhead. Database-per-tenant: dedicated RDS — silo enterprise, highest ops cost. DynamoDB: tenant in partition key regardless. Default row+RLS; upgrade enterprise to dedicated DB with pg_dump migration.",
+      "followUps": [
+        "RLS performance at 1M rows?",
+        "DynamoDB vs RDS for SaaS?"
+      ],
+      "sixtySeconds": "Row+RLS for pool scale. Schema middle. DB per tenant for silo. Test cross-tenant fails. Migration runbook for upgrades."
+    },
+    {
+      "question": "How does SaaS Lens relate to core Well-Architected pillars?",
+      "answer": "SaaS Lens adds tenant isolation, noisy neighbor, tiering, onboarding/offboarding questions atop six pillars. Security: per-tenant access control. Reliability: blast radius containment. Performance: fairness and partition key design. Cost: pool vs silo unit economics. Use both in WAFR for multi-tenant products.",
+      "followUps": [
+        "Serverless Lens overlap?",
+        "WAFR HRI examples for SaaS?"
+      ],
+      "sixtySeconds": "SaaS Lens extends six pillars with multi-tenant specifics. Isolation, fairness, tiering, control/data plane. Use in WAFR for SaaS products."
+    },
+    {
+      "question": "Design blast radius containment for pooled tier.",
+      "answer": "Layers: auth JWT tenant claim validated; middleware enforces; RLS at DB; per-tenant rate limits and connection caps; circuit breakers per tenant for external calls; separate SQS queues for batch; CloudWatch per-tenant dashboards; chaos test kill one tenant workload — others within SLO. Enterprise escape hatch to silo tier.",
+      "followUps": [
+        "Shared ALB DDoS affects all?",
+        "Cell-based architecture?"
+      ],
+      "sixtySeconds": "Auth, middleware, RLS, per-tenant limits, queues, circuit breakers, metrics, chaos test. Silo tier for escape."
+    },
+    {
+      "question": "Control plane vs data plane — what goes where?",
+      "answer": "Control plane: signup, billing, tier change, provisioning workflows, admin APIs, tenant config. Data plane: end-user CRUD, real-time features, tenant-scoped business logic. Never provision in data plane request path. EventBridge connects planes. Separate scaling, monitoring, and deployment for each.",
+      "followUps": [
+        "Same account or separate?",
+        "Multi-region control plane?"
+      ],
+      "sixtySeconds": "CP = lifecycle and provision async. DP = user traffic with tenant context. Decouple with events. Separate SLOs."
+    },
+    {
+      "question": "VPC per tenant for 5000 customers — viable?",
+      "answer": "No for standard tier — ops nightmare (5000 VPCs, TGW attachments, patching). Viable only for top enterprise subset (<50) with automation and premium pricing. Default pooled VPC with app-layer isolation. Use bridge: 4950 pooled, 50 silo VPCs vended on contract. IPAM and Step Functions automate silo; never manual.",
+      "followUps": [
+        "Heroku-style multi-tenant comparison?",
+        "Kubernetes namespace vs VPC?"
+      ],
+      "sixtySeconds": "5000 VPCs not viable. Pool default. Silo automate for enterprise few. IPAM + Step Functions. Cost model must support silo ops."
+    }
+  ]
+}

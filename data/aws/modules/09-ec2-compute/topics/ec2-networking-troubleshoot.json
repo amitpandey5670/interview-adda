@@ -1,0 +1,277 @@
+{
+  "id": "aws-09-ec2-networking-troubleshoot",
+  "slug": "ec2-networking-troubleshoot",
+  "title": "EC2 networking troubleshooting playbook",
+  "moduleId": "aws-09-ec2-compute",
+  "order": 5,
+  "hook": "When an EC2 instance cannot be reached, debug outside-in: routing, Network ACLs (NACLs), security groups, ENI placement, then the operating system firewall.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "EC2 networking failures stem from layered controls: subnet route tables (Internet Gateway, NAT Gateway, VPC endpoints), stateless NACLs at subnet boundary, stateful security groups on ENIs, Elastic IP versus public IP assignment, and host iptables or Windows firewall. VPC Flow Logs and Reachability Analyzer provide evidence."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Flow Logs",
+              "longForm": "VPC Flow Logs",
+              "plainDefinition": "Captures accepted/rejected IP traffic for VPC, subnet, or ENI.",
+              "example": "REJECT count spikes on NACL deny rule."
+            },
+            {
+              "term": "NACL",
+              "longForm": "Network Access Control List",
+              "plainDefinition": "Stateless subnet-level allow/deny rules with numbered priority.",
+              "example": "Deny inbound 22 from 0.0.0.0/0 at NACL layer."
+            },
+            {
+              "term": "Reachability Analyzer",
+              "longForm": "VPC Reachability Analyzer",
+              "plainDefinition": "Tests whether path between source and destination is allowed.",
+              "example": "Prove ALB can reach EC2 on port 8080."
+            },
+            {
+              "term": "Ephemeral ports",
+              "longForm": "TCP ephemeral return ports",
+              "plainDefinition": "Return traffic uses high ports — NACL must allow ephemeral range.",
+              "example": "NACL outbound 1024-65535 for established connections."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Random SG edits cause outages. Senior engineers follow a checklist instead of guessing. Same layers apply to Lambda in VPC reaching RDS."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: route table proves path, NACL stateless both directions, SG stateful on ENI, then OS. Use Reachability Analyzer before SSH guessing."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Outside-in debug order",
+          "items": [
+            {
+              "title": "Confirm ENI subnet and IP",
+              "body": "Primary ENI in intended subnet with correct private or public IP."
+            },
+            {
+              "title": "Route table",
+              "body": "Public: 0.0.0.0/0 → IGW. Private egress: NAT or endpoints."
+            },
+            {
+              "title": "NACL then SG",
+              "body": "NACL inbound/outbound allow required ports and ephemeral return."
+            },
+            {
+              "title": "Application listen",
+              "body": "Process bound to 0.0.0.0:port; OS firewall allows; target group port matches."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Troubleshoot layers",
+            "source": "flowchart TB\n  Client[Client] --> IGW[Internet Gateway]\n  IGW --> RT[Route table]\n  RT --> NACL[NACL subnet]\n  NACL --> SG[Security group ENI]\n  SG --> OS[OS firewall + app listen]\n  Flow[VPC Flow Logs] -.-> NACL\n  Reach[VPC Reachability Analyzer] -.-> SG"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "VPC Reachability Analyzer path",
+            "code": "aws ec2 create-network-insights-path \\\n  --source ip=10.0.1.5 \\\n  --destination ip=10.0.10.20,port=8080,protocol=tcp\naws ec2 start-network-insights-analysis \\\n  --network-insights-path-id nip-0abc",
+            "explanation": "Proves whether routing and SG allow path before packet capture."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Enable VPC Flow Logs",
+            "code": "aws ec2 create-flow-logs \\\n  --resource-type NetworkInterface \\\n  --resource-ids eni-0app \\\n  --traffic-type REJECT \\\n  --log-destination-type cloud-watch-logs \\\n  --log-group-name /vpc/flow/reject",
+            "explanation": "Filter REJECT first to find NACL or SG blocks quickly."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Describe SG rules for ENI",
+            "code": "aws ec2 describe-network-interfaces --network-interface-ids eni-0app \\\n  --query 'NetworkInterfaces[0].Groups'\naws ec2 describe-security-groups --group-ids sg-0web",
+            "explanation": "SG is stateful — confirm inbound and that return egress is allowed (default allow all egress)."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Test from instance with curl and ss",
+            "code": "curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/\nss -tlnp | grep 8080\nsudo iptables -L -n",
+            "explanation": "On-instance checks: app listening, local firewall, metadata reachable (IMDS)."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Layer",
+              "AWS VPC controls",
+              "Node.js app debugging"
+            ],
+            [
+              "Routing",
+              "Route table + IGW/NAT",
+              "Wrong HOST env or bind address"
+            ],
+            [
+              "Firewall",
+              "SG stateful, NACL stateless",
+              "No built-in — rely on VPC SG on EC2"
+            ],
+            [
+              "Evidence",
+              "Flow Logs, Reachability Analyzer",
+              "tcpdump, curl, netstat/ss"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Editing SG without checking NACL ephemeral return. Assuming public IP without IGW route. Debugging SSH when SSM Session Manager is the production access path."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Asymmetric routing breaks NACL return path — common with multi-ENI appliances. How to prove it in production: Flow Logs REJECT reason, Reachability Analyzer failed component, and TargetGroup UnHealthyHostCount correlated with deploy."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Flow Logs REJECT only",
+              "Fast signal on blocks",
+              "Volume and cost at full capture"
+            ],
+            [
+              "Reachability Analyzer",
+              "Pre-change validation",
+              "Not real-time continuous monitor"
+            ],
+            [
+              "SSM Session Manager",
+              "No inbound SSH required",
+              "IAM and VPC endpoints needed"
+            ],
+            [
+              "Traffic Mirroring",
+              "Deep packet inspection",
+              "Complex setup"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Opening SG 0.0.0.0/0 SSH as first fix gets rejected. Strong answer: layered checklist, Reachability Analyzer, SSM access, least privilege SG."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Debug outside-in: route → NACL → SG → OS → application listen port.",
+    "NACLs are stateless — allow ephemeral return ports.",
+    "VPC Flow Logs and Reachability Analyzer provide evidence, not guesses.",
+    "60s: Route IGW/NAT, NACL both ways, SG on ENI, app listens. Flow Logs REJECT. SSM not SSH.",
+    "Follow-up: why does NACL block work when SG allows?"
+  ],
+  "commonPitfalls": [
+    "Fixing only SG when NACL blocks ephemeral return — weak answer.",
+    "Strong answer: check NACL inbound and outbound rules with ephemeral port range.",
+    "Public IP on instance in private subnet route table — no IGW path.",
+    "ALB health check port mismatch with app listen port."
+  ],
+  "relatedTopicIds": [
+    "aws-09-eni-vpc-attachment",
+    "aws-11-lambda-in-vpc",
+    "aws-11-lambda-triggers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "app.listen port binding",
+      "note": "Express app.listen(8080, \"0.0.0.0\") — binding localhost only breaks ALB health checks, like SG allowing traffic ENI never receives.",
+      "futureTopicSlug": "aws/ec2/app-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Health check endpoint",
+      "note": "/health route must respond before ASG grace expires — similar to k8s readiness probe timing.",
+      "futureTopicSlug": "aws/ec2/health-checks"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "VPC Flow Logs",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html"
+    },
+    {
+      "title": "Reachability Analyzer",
+      "url": "https://docs.aws.amazon.com/vpc/latest/reachability/what-is-reachability-analyzer.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "vpc-troubleshoot"
+}

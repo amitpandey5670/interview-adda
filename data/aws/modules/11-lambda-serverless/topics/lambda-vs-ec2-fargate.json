@@ -1,0 +1,277 @@
+{
+  "id": "aws-11-lambda-vs-ec2-fargate",
+  "slug": "lambda-vs-ec2-fargate",
+  "title": "Lambda versus EC2 and Fargate — when to choose",
+  "moduleId": "aws-11-lambda-serverless",
+  "order": 6,
+  "hook": "Lambda excels at event-driven short tasks; EC2 and AWS Fargate fit long-running processes, WebSockets, and steady traffic where per-hour compute wins.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS Lambda charges per invoke and duration with 15-minute maximum timeout. Amazon EC2 provides virtual machines you manage — full OS control, any duration, WebSockets. AWS Fargate runs containers without managing EC2 — middle ground for always-on services. Decision factors: traffic pattern, connection model, duration, operational burden, and cost at steady state."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Fargate",
+              "longForm": "AWS Fargate",
+              "plainDefinition": "Serverless compute engine for ECS/EKS without managing EC2.",
+              "example": "Always-on API in container task 0.25 vCPU 512MB."
+            },
+            {
+              "term": "15-minute cap",
+              "longForm": "Lambda maximum timeout",
+              "plainDefinition": "Lambda cannot run longer than 900 seconds.",
+              "example": "Long video transcode → Fargate or MediaConvert."
+            },
+            {
+              "term": "WebSocket",
+              "longForm": "Long-lived TCP connection",
+              "plainDefinition": "Persistent connection ill-suited to Lambda invoke model.",
+              "example": "API Gateway WebSocket with Lambda per message OK; not same as server-held socket on EC2."
+            },
+            {
+              "term": "Steady QPS",
+              "longForm": "Sustained queries per second",
+              "plainDefinition": "Continuous load often cheaper on right-sized EC2/Fargate.",
+              "example": "24/7 500 RPS API on c7g.large ASG vs Lambda bill."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior architects justify compute choice with traffic shape and ops cost. Wrong choice: WebSocket chat on Lambda (connection model mismatch) or cron every minute on EC2 t3.micro (Lambda cheaper)."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Lambda event burst short; Fargate container steady; EC2 when need kernel, GPU, or lowest steady $ with RI."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choose compute platform",
+          "items": [
+            {
+              "title": "Duration and model",
+              "body": "Under 15 min event-driven → Lambda candidate. Hours → EC2/Fargate."
+            },
+            {
+              "title": "Traffic shape",
+              "body": "Spiky/idle → Lambda. Flat 24/7 → EC2/Fargate with RI/Savings Plans."
+            },
+            {
+              "title": "Connection needs",
+              "body": "WebSocket server, gRPC streaming → EC2/Fargate."
+            },
+            {
+              "title": "Ops tolerance",
+              "body": "Lambda least ops; EC2 most control; Fargate middle for containers."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Compute choice matrix",
+            "source": "flowchart TB\n  Q{Workload?}\n  Q -->|Event short burst| L[Lambda]\n  Q -->|Container steady| F[Fargate ECS]\n  Q -->|Full OS kernel GPU| E[EC2 ASG]\n  Q -->|Long workflow| SF[Step Functions + Lambda slices]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Fargate task definition excerpt",
+            "code": "TaskDefinition:\n  Type: AWS::ECS::TaskDefinition\n  Properties:\n    RequiresCompatibilities: [FARGATE]\n    Cpu: \"256\"\n    Memory: \"512\"\n    NetworkMode: awsvpc\n    ContainerDefinitions:\n      - Name: api\n        Image: !Sub \"${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/api:latest\"\n        PortMappings:\n          - ContainerPort: 8080",
+            "explanation": "Fargate for always-on container without EC2 patching burden."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Lambda for S3 triggered ETL",
+            "code": "EtlFunction:\n  Type: AWS::Lambda::Function\n  Properties:\n    Runtime: nodejs20.x\n    Handler: index.handler\n    Timeout: 300\n    MemorySize: 1024",
+            "explanation": "Short event-driven transform — Lambda sweet spot vs idle EC2."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Compare Lambda vs EC2 rough invoke cost",
+            "code": "# Lambda: requests + GB-seconds\n# EC2: hourly on-demand or RI for 730h/month steady\n# Use AWS Pricing Calculator for crossover at your RPS + duration",
+            "explanation": "Interview answer: calculate crossover — no universal winner."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "ECS Fargate service create sketch",
+            "code": "aws ecs create-service \\\n  --cluster prod \\\n  --service-name api \\\n  --task-definition api:3 \\\n  --desired-count 2 \\\n  --launch-type FARGATE \\\n  --network-configuration \"awsvpcConfiguration={subnets=[subnet-a,subnet-b],securityGroups=[sg-api],assignPublicIp=DISABLED}\"",
+            "explanation": "Multi-AZ Fargate behind ALB — parallel to EC2 ASG pattern."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Billing",
+              "Per invoke + GB-second",
+              "EC2 per second/hour; Fargate per task vCPU/GB hour"
+            ],
+            [
+              "Max duration",
+              "15 minutes",
+              "Unlimited on EC2/Fargate"
+            ],
+            [
+              "Cold start",
+              "Yes — init latency",
+              "EC2/Fargate warm after boot"
+            ],
+            [
+              "Control",
+              "Runtime only",
+              "EC2 full OS; Fargate container"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Lambda for 24/7 high RPS API without cost model — EC2 may win. EC2 t3.micro for sporadic cron every hour — Lambda cheaper. Fargate for sub-second cron — Lambda simpler."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "EKS on Fargate vs EC2 node groups trade ops vs cost. Lambda Function URLs for simple HTTP without API Gateway. How to prove it in production: Cost Explorer by service, P99 latency under load test, ops hours for patching EC2 AMIs."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Lambda + API GW",
+              "Spiky HTTP APIs",
+              "Cold start P99; 29s API GW limit"
+            ],
+            [
+              "Fargate + ALB",
+              "Steady container service",
+              "No scale-to-zero default cost"
+            ],
+            [
+              "EC2 ASG + RI",
+              "Lowest steady $ at scale",
+              "Patch and AMI pipeline burden"
+            ],
+            [
+              "Hybrid",
+              "Lambda edges + Fargate core",
+              "Architecture complexity"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Lambda for everything or EC2 for everything gets rejected. Strong answer: traffic shape, duration, connection model, ops cost — hybrid common."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Lambda: event-driven, short, spiky — not long TCP or >15 min jobs.",
+    "Fargate: containers without EC2 management for steady services.",
+    "EC2: full control, WebSockets, GPU, lowest steady cost with commitment.",
+    "60s: Burst short → Lambda. Steady container → Fargate. Kernel/long TCP → EC2. Calculate crossover.",
+    "Follow-up: when Step Functions over single Lambda?"
+  ],
+  "commonPitfalls": [
+    "WebSocket server entirely on Lambda — weak; API GW WebSocket per message differs from EC2 socket server.",
+    "Strong answer: persistent connections on EC2/Fargate; Lambda for handlers.",
+    "Ignoring Lambda 15-minute timeout for batch ETL.",
+    "EC2 for once-daily 30s cron — Lambda EventBridge schedule cheaper."
+  ],
+  "relatedTopicIds": [
+    "aws-09-ec2-instances-amis",
+    "aws-09-auto-scaling-groups",
+    "aws-11-lambda-cold-starts"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express on Fargate vs Lambda adapter",
+      "note": "@vendia/serverless-express wraps Express for Lambda — same app code, different deployment target tradeoffs.",
+      "futureTopicSlug": "aws/lambda/express-adapter"
+    },
+    {
+      "language": "typescript",
+      "concept": "Long-running worker",
+      "note": "BullMQ worker on Fargate for jobs >15 min vs Step Functions chaining Lambda steps for workflow.",
+      "futureTopicSlug": "aws/compute/workflow-split"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Lambda quotas",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html"
+    },
+    {
+      "title": "AWS Fargate",
+      "url": "https://docs.aws.amazon.com/AmazonECS/latest/developerguide/AWS_Fargate.html"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
+}

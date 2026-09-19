@@ -1,0 +1,187 @@
+{
+  "id": "aws-01-shared-responsibility-model",
+  "slug": "shared-responsibility-model",
+  "title": "Shared responsibility model (security of the cloud vs in the cloud)",
+  "moduleId": "aws-01-cloud-and-aws-fundamentals",
+  "order": 2,
+  "hook": "AWS secures the physical data centers and hypervisors. You secure what you put in the cloud — operating system patches, firewall rules, and who can call which API.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The shared responsibility model splits security duties between AWS and the customer. AWS is responsible for security of the cloud: hardware, global infrastructure, and managed service foundations. You are responsible for security in the cloud: data classification, Identity and Access Management (IAM) policies, network configuration, encryption choices, and guest operating system patching on Infrastructure as a Service (IaaS) workloads."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Security of the cloud",
+              "longForm": "AWS responsibility",
+              "plainDefinition": "Physical security, hypervisor, and the managed control planes AWS operates.",
+              "example": "AWS patches the Nitro hypervisor; you do not."
+            },
+            {
+              "term": "Security in the cloud",
+              "longForm": "Customer responsibility",
+              "plainDefinition": "Configuration and data you control inside your account.",
+              "example": "Your S3 bucket policy deciding public versus private access."
+            },
+            {
+              "term": "Abstracted service",
+              "longForm": "Fully managed AWS service",
+              "plainDefinition": "AWS takes more of the stack; you configure fewer layers.",
+              "example": "Amazon RDS manages the database engine; you set credentials and network access."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Most AWS security interview failures come from blaming AWS for customer misconfigurations — public S3 buckets, overly broad IAM policies, missing encryption. The model shifts as you move up the stack: on EC2 you patch the OS; on Lambda AWS patches the runtime; on S3 you own bucket policies and object encryption settings."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "AWS secures the cloud; you secure what you configure in it. Responsibility shrinks as services become more managed."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Who owns which layer",
+          "items": [
+            {
+              "title": "IaaS (EC2)",
+              "body": "You patch OS, configure Security Groups, manage data encryption."
+            },
+            {
+              "title": "PaaS (RDS, Lambda)",
+              "body": "AWS patches runtime/engine; you set network access, IAM, and encryption keys."
+            },
+            {
+              "title": "SaaS (WorkMail)",
+              "body": "You configure users and data handling; AWS runs the application stack."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Shared responsibility by service type",
+            "source": "flowchart TB\n  subgraph AWS[\"AWS owns\"]\n    HW[Physical hardware]\n    HV[Hypervisor]\n    CP[Managed control planes]\n  end\n  subgraph Customer[\"You own\"]\n    DATA[Data classification]\n    IAM[IAM policies]\n    NET[Network rules]\n    OS[Guest OS on EC2]\n  end\n  HW --> HV --> CP\n  CP --> DATA\n  CP --> IAM\n  CP --> NET"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: block public S3 access at account level",
+            "code": "aws s3control put-public-access-block \\\n  --account-id 123456789012 \\\n  --public-access-block-configuration \\\n    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true",
+            "explanation": "Your responsibility: prevent accidental public buckets. AWS provides the control; you must enable it."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: S3 bucket with encryption and block public access",
+            "code": "Resources:\n  AppBucket:\n    Type: AWS::S3::Bucket\n    Properties:\n      BucketEncryption:\n        ServerSideEncryptionConfiguration:\n          - ServerSideEncryptionByDefault:\n              SSEAlgorithm: AES256\n      PublicAccessBlockConfiguration:\n        BlockPublicAcls: true\n        BlockPublicPolicy: true\n        IgnorePublicAcls: true\n        RestrictPublicBuckets: true",
+            "explanation": "Encryption and public access settings are customer configuration — not automatic defaults you can ignore."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: attach least-privilege IAM policy to a role",
+            "code": "aws iam put-role-policy \\\n  --role-name AppTaskRole \\\n  --policy-name S3ReadOnlyAppData \\\n  --policy-document '{\n    \"Version\": \"2012-10-17\",\n    \"Statement\": [{\n      \"Effect\": \"Allow\",\n      \"Action\": [\"s3:GetObject\"],\n      \"Resource\": \"arn:aws:s3:::app-data-prod/*\"\n    }]\n  }'",
+            "explanation": "IAM permissions are always your responsibility. Scope actions and resources narrowly."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare service responsibility shifts",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Responsibility by compute choice",
+          "headers": ["Layer", "EC2", "Lambda", "S3"],
+          "rows": [
+            ["Guest OS / runtime", "You", "AWS", "N/A"],
+            ["Network perimeter", "Security Groups + you", "IAM + service config", "Bucket policy + you"],
+            ["Data encryption", "You configure", "You configure env vars/secrets", "You choose SSE settings"],
+            ["Physical hardware", "AWS", "AWS", "AWS"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming AWS encrypts everything by default without checking. Using root account access keys for automation. Leaving Security Groups open to 0.0.0.0/0 because 'it's in the cloud.'"
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "AWS secures the cloud (hardware, hypervisor, managed foundations); you secure configuration and data in the cloud.",
+    "Responsibility decreases as services become more managed — but never reaches zero.",
+    "Enable S3 Block Public Access and least-privilege IAM before your first production deploy.",
+    "60s: Split is AWS vs customer. EC2 you patch OS; Lambda AWS patches runtime; S3 you own bucket policy and encryption. Most breaches are misconfiguration, not AWS infrastructure failure.",
+    "Follow-up: who patches the database engine on RDS versus self-managed on EC2?"
+  ],
+  "commonPitfalls": [
+    "Saying 'AWS handles security' — that gets you rejected because IAM, network rules, and data classification are always yours.",
+    "Strong answer: name the specific layer — OS, network, IAM, encryption — and who owns it for the service in question.",
+    "Relying on default S3 ACLs without Block Public Access.",
+    "Using AdministratorAccess for application roles instead of task-scoped policies."
+  ],
+  "relatedTopicIds": [
+    "aws-01-what-is-cloud-computing",
+    "aws-03-iam-fundamentals",
+    "aws-03-organizations-and-scps",
+    "aws-04-public-vs-private-networking"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Environment secrets in Node apps",
+      "note": "On EC2 or Lambda you inject secrets via environment variables or Secrets Manager — AWS does not choose your secret storage pattern. That is security in the cloud.",
+      "futureTopicSlug": "aws/security/secrets-manager"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Shared Responsibility Model",
+      "url": "https://aws.amazon.com/compliance/shared-responsibility-model/"
+    },
+    {
+      "title": "Security Pillar - Well-Architected",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/security-pillar/welcome.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

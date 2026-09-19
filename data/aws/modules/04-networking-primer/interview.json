@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-04-networking-primer",
+  "title": "Networking primer for AWS — interview",
+  "items": [
+    {
+      "question": "Design a VPC CIDR layout for a three-tier app in two Availability Zones.",
+      "answer": "Use 10.0.0.0/16 for the VPC. Public subnets 10.0.0.0/24 and 10.0.1.0/24 (one per AZ) for ALB and NAT Gateways with routes to Internet Gateway. Private app subnets 10.0.10.0/24 and 10.0.11.0/24 route 0.0.0.0/0 to NAT in the same AZ. Database subnets 10.0.20.0/24 and 10.0.21.0/24 with no internet route — only app Security Group access on database port. Verify no overlap with corporate VPN ranges.",
+      "followUps": [
+        "How many usable IPs in a /24 subnet?",
+        "When would you add a secondary VPC CIDR?"
+      ],
+      "sixtySeconds": "/16 VPC. /24 per tier per AZ. Public IGW, private NAT same AZ. DB no internet. No CIDR overlap with on-prem."
+    },
+    {
+      "question": "Users report api.example.com is down but the ALB shows healthy targets. Where do you look?",
+      "answer": "Peel OSI layers. DNS: dig api.example.com — does it resolve to current ALB? TLS: openssl s_client or curl -vI — certificate mismatch or expiry? If DNS and TLS pass, check ALB listener rules and target group health at layer 7. If TCP fails, check Security Groups and route tables at layer 3–4. Stale DNS TTL pointing to decommissioned ALB is a common cause when targets are healthy.",
+      "followUps": [
+        "What is the difference between ALB 502 and 503?",
+        "How do weighted Route 53 records help rollback?"
+      ],
+      "sixtySeconds": "dig → nc/curl → SG/Flow Logs. Healthy targets but DNS stale is classic. Layer-by-layer, not random SG changes."
+    },
+    {
+      "question": "Why put application servers in private subnets?",
+      "answer": "Private subnets have no route to Internet Gateway for inbound traffic — instances lack direct internet exposure even if Security Group is misconfigured briefly. Only the ALB in public subnets accepts inbound HTTPS. Outbound package updates go through NAT Gateway. RDS stays in private subnets with Security Group allowing only app tier. Defense in depth: routing plus Security Groups.",
+      "followUps": [
+        "Can a private subnet instance receive inbound from the internet?",
+        "What is a bastion host pattern?"
+      ],
+      "sixtySeconds": "No IGW route to private subnet — no inbound internet. ALB public entry. NAT for outbound. SG chains between tiers."
+    },
+    {
+      "question": "Private ECS tasks cannot pull Docker images or call external APIs. Diagnose.",
+      "answer": "Check private subnet route table — 0.0.0.0/0 must point to NAT Gateway in the same AZ. Verify NAT has Elastic IP and sits in public subnet with IGW route. Check Security Group egress allows HTTPS outbound. For Amazon ECR, add VPC interface endpoints to avoid NAT for AWS API traffic. Test with curl from task ENI. Wrong AZ NAT mapping is the top cause after missing default route.",
+      "followUps": [
+        "NAT Gateway vs NAT instance?",
+        "How do interface endpoints differ from gateway endpoints?"
+      ],
+      "sixtySeconds": "Default route to NAT same AZ. NAT in public subnet with EIP. SG egress open. ECR/S3 endpoints reduce NAT dependency."
+    },
+    {
+      "question": "How do Security Groups differ from Network ACLs?",
+      "answer": "Security Groups are stateful virtual firewalls at the Elastic Network Interface — allow rules only, evaluated before traffic reaches instance. Network ACLs are stateless subnet-level filters with allow and deny rules evaluated in order. Default: use Security Groups for instance protection. NACLs for explicit deny (block IP ranges) or subnet-level compliance. SG reference by SG ID is preferred over CIDR for tier chaining.",
+      "followUps": [
+        "Can NACL block traffic that SG allows?",
+        "Are Security Groups evaluated inbound and outbound separately?"
+      ],
+      "sixtySeconds": "SG stateful, ENI level, allow only. NACL stateless, subnet level, allow and deny. SG for daily use; NACL for explicit subnet deny."
+    },
+    {
+      "question": "CloudFront serves your SPA but API calls fail with certificate errors. Explain.",
+      "answer": "CloudFront requires ACM certificate in us-east-1 regardless of origin Region. Certificate must cover the domain users hit — if API is api.example.com, cert needs that SAN. Origin protocol policy must match — HTTPS-only origin needs valid cert on ALB too. Mixed content or wrong alternate domain name on distribution causes browser TLS errors even when origin ALB is fine.",
+      "followUps": [
+        "What is SNI?",
+        "Should ALB-to-target traffic be HTTPS?"
+      ],
+      "sixtySeconds": "CloudFront cert us-east-1. SAN must match browser hostname. Origin protocol policy aligned. Check cert chain end-to-end."
+    },
+    {
+      "question": "Your NAT Gateway bill is $800/month in dev. How do you reduce it?",
+      "answer": "NAT Gateway bills hourly per AZ plus per-GB processed. Dev VPCs left running 24/7 are common waste — destroy off-hours or use single NAT accepting AZ risk in dev only. Add S3 and DynamoDB Gateway endpoints so S3 traffic skips NAT. Use VPC interface endpoints for high-volume AWS APIs. For production, NAT per AZ is required for resilience — optimize endpoints, not remove prod NAT.",
+      "followUps": [
+        "What traffic still needs NAT after S3 endpoint?",
+        "How does VPC endpoint pricing compare to NAT per-GB?"
+      ],
+      "sixtySeconds": "NAT = hourly + per GB. Dev: tear down off-hours. Prod: endpoints for S3/SQS/ECR. NAT per AZ for HA in prod."
+    },
+    {
+      "question": "Map ALB, Security Group, Route 53, and VPC Flow Logs to OSI layers.",
+      "answer": "Route 53 is layer 7 (DNS application protocol). Route tables and VPC CIDR are layer 3 (IP routing). Security Groups filter layer 4 (TCP/UDP ports) statefully. TLS/ACM operates at layer 6 presentation wrapping layer 7 HTTP. ALB does layer 7 HTTP routing and health checks. VPC Flow Logs capture layer 3–4 accept/reject decisions. Systematic troubleshooting moves up the stack after each layer passes.",
+      "followUps": [
+        "Where does API Gateway sit?",
+        "What layer is ICMP ping?"
+      ],
+      "sixtySeconds": "Route53 L7 DNS. Route table L3. SG L4. TLS L6. ALB L7 HTTP. Flow Logs L3-4. Bottom-up debug."
+    }
+  ]
+}

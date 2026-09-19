@@ -1,0 +1,191 @@
+{
+  "id": "aws-04-nat-routing-gateways",
+  "slug": "nat-routing-gateways",
+  "title": "NAT, routing, and gateways (egress without inbound exposure)",
+  "moduleId": "aws-04-networking-primer",
+  "order": 5,
+  "hook": "Private subnet instances need outbound internet for patches and API calls but should not accept inbound connections from the internet. A Network Address Translation (NAT) Gateway in a public subnet provides one-way egress.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "NAT Gateway translates private IP addresses to a public IP for outbound connections. Return traffic is mapped back to the originating instance. NAT Gateway is managed, highly available per Availability Zone, and billed per hour plus data processed. Route tables connect subnets to gateways: 0.0.0.0/0 → NAT for private subnets, 0.0.0.0/0 → Internet Gateway for public subnets. VPC endpoints (Gateway or Interface) route AWS service traffic privately without traversing the public internet or NAT."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "NAT Gateway",
+              "longForm": "NAT Gateway",
+              "plainDefinition": "Managed AWS service for outbound internet from private subnets.",
+              "example": "ECS task in private subnet pulls npm packages via NAT."
+            },
+            {
+              "term": "Route table",
+              "longForm": "VPC route table",
+              "plainDefinition": "Rules determining where network traffic is directed — local, IGW, NAT, TGW.",
+              "example": "Private subnet associated with route table pointing to NAT."
+            },
+            {
+              "term": "VPC endpoint",
+              "longForm": "VPC endpoint",
+              "plainDefinition": "Private connection to AWS services without internet gateway.",
+              "example": "S3 Gateway endpoint — free, route table entry."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "NAT Gateway is a frequent cost surprise in dev accounts left running 24/7. Production designs place one NAT per AZ for resilience — if AZ-a NAT fails, only that AZ's private subnets lose egress. VPC endpoints for S3 and DynamoDB eliminate NAT data processing charges for those services. Interviews ask you to troubleshoot 'private instance cannot reach internet' by checking route table, NAT AZ, and Security Group egress."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "NAT for generic internet egress; VPC endpoints for AWS APIs to save cost and improve security."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Outbound packet from private instance",
+          "items": [
+            {
+              "title": "Instance sends packet",
+              "body": "Destination 203.0.113.50 — route table matches 0.0.0.0/0 → NAT Gateway."
+            },
+            {
+              "title": "NAT translates source",
+              "body": "Private IP 10.0.10.5 becomes NAT Gateway public Elastic IP."
+            },
+            {
+              "title": "Internet Gateway forwards",
+              "body": "NAT is in public subnet — packet exits via IGW."
+            },
+            {
+              "title": "Return path",
+              "body": "Response hits NAT public IP; NAT maps back to 10.0.10.5."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "NAT egress path",
+            "source": "flowchart LR\n  EC2[Private EC2 10.0.10.5] --> RT[Route table 0.0.0.0/0 to NAT]\n  RT --> NAT[NAT Gateway public subnet]\n  NAT --> IGW[Internet Gateway]\n  IGW --> NET[Internet]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: NAT Gateway with Elastic IP",
+            "code": "Resources:\n  NatEIP:\n    Type: AWS::EC2::EIP\n    DependsOn: InternetGatewayAttachment\n    Properties:\n      Domain: vpc\n  NatGateway:\n    Type: AWS::EC2::NatGateway\n    Properties:\n      AllocationId: !GetAtt NatEIP.AllocationId\n      SubnetId: !Ref PublicSubnetA\n      Tags:\n        - Key: Name\n          Value: nat-az-a",
+            "explanation": "NAT lives in public subnet with Elastic IP. One NAT per AZ for HA — repeat for AZ-b."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: S3 Gateway VPC endpoint",
+            "code": "Resources:\n  S3Endpoint:\n    Type: AWS::EC2::VPCEndpoint\n    Properties:\n      VpcId: !Ref AppVpc\n      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3\n      RouteTableIds:\n        - !Ref PrivateRouteTable\n      VpcEndpointType: Gateway",
+            "explanation": "Gateway endpoint adds route to S3 prefix list — traffic stays on AWS network, no NAT charge."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: troubleshoot private instance connectivity",
+            "code": "# From private instance — check route and DNS\nip route | grep default\ncurl -s --max-time 5 https://checkip.amazonaws.com\n\naws ec2 describe-route-tables \\\n  --filters Name=association.subnet-id,Values=subnet-private-a \\\n  --query 'RouteTables[0].Routes'",
+            "explanation": "Default route must point to NAT in same AZ. Missing route or wrong AZ NAT is the top cause of egress failure."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare egress options",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "NAT vs VPC endpoint vs public subnet",
+          "headers": ["Option", "Use for", "Cost note"],
+          "rows": [
+            ["NAT Gateway", "Arbitrary internet (npm, external APIs)", "Hourly + per-GB processed"],
+            ["S3 Gateway endpoint", "S3 access from VPC", "Free"],
+            ["Interface endpoint", "Other AWS APIs (SQS, Secrets Manager)", "Hourly per endpoint per AZ"],
+            ["Public subnet + IGW", "Bastion or ALB only", "No NAT charge for those resources"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single NAT in one AZ serving all private subnets — AZ failure kills all egress. Forgetting Elastic IP for NAT. Routing S3 through NAT instead of Gateway endpoint. NAT instance (self-managed) when NAT Gateway is available — more ops burden."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "NAT Gateway enables outbound internet from private subnets without inbound exposure.",
+    "One NAT per AZ; private subnet route table points 0.0.0.0/0 to NAT in same AZ.",
+    "Use S3/DynamoDB Gateway endpoints to avoid NAT data processing charges.",
+    "60s: Private egress via NAT in public subnet with EIP. Route table is key. VPC endpoints for AWS services. NAT costs hourly + per GB — common bill surprise.",
+    "Follow-up: how does Transit Gateway differ from VPC peering?"
+  ],
+  "commonPitfalls": [
+    "One NAT for all AZs — AZ outage kills cross-AZ egress for subnets pointing to that NAT.",
+    "Strong answer: NAT per AZ, subnet routes to local AZ NAT, endpoints for S3/SQS.",
+    "Leaving NAT Gateway running in idle dev VPC over weekends.",
+    "Missing default route in private route table — instance has no egress path."
+  ],
+  "relatedTopicIds": [
+    "aws-04-public-vs-private-networking",
+    "aws-04-ip-cidr-subnets",
+    "aws-01-billing-and-resources",
+    "aws-04-osi-layers-aws-services"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Lambda in VPC cold start",
+      "note": "Lambda in private subnet needs NAT or VPC endpoints to reach internet and AWS APIs. Missing endpoint for SQS causes timeouts — not an IAM issue.",
+      "futureTopicSlug": "aws/networking/lambda-vpc-egress"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "NAT gateways",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html"
+    },
+    {
+      "title": "VPC endpoints",
+      "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

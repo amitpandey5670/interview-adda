@@ -1,0 +1,228 @@
+{
+  "id": "aws-03-multi-tenant-isolation-overview",
+  "slug": "multi-tenant-isolation-overview",
+  "title": "Multi-tenant isolation overview (SaaS on AWS)",
+  "moduleId": "aws-03-accounts-identity-tenancy",
+  "order": 4,
+  "hook": "Software as a Service (SaaS) means many customers share your platform. On AWS you isolate tenants by silo (account per tenant), pool (shared stack with row-level separation), or bridge (hybrid) — each trades cost against blast radius.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Multi-tenancy is an architecture pattern where one deployment serves multiple customers (tenants). AWS SaaS patterns classify isolation models: silo deploys dedicated resources per tenant (separate accounts or stacks), pool shares compute and database with tenant_id discrimination, bridge mixes pooled app tier with siloed data for premium tenants. Identity routing — subdomain, JWT claim, or API key — maps requests to the correct tenant context at the application layer."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Tenant",
+              "longForm": "SaaS tenant",
+              "plainDefinition": "A customer organization whose data and configuration must be isolated from others.",
+              "example": "company-a.example.com maps to tenant_id acme-corp."
+            },
+            {
+              "term": "Silo model",
+              "longForm": "Silo isolation model",
+              "plainDefinition": "Dedicated infrastructure per tenant — strongest isolation, highest cost.",
+              "example": "Separate RDS instance per enterprise customer."
+            },
+            {
+              "term": "Pool model",
+              "longForm": "Pooled multi-tenant model",
+              "plainDefinition": "Shared application and database with logical separation via tenant key.",
+              "example": "Single DynamoDB table with partition key tenantId."
+            },
+            {
+              "term": "Noisy neighbor",
+              "longForm": "Noisy neighbor problem",
+              "plainDefinition": "One tenant's load degrades performance for others in a pooled stack.",
+              "example": "Heavy batch job from tenant A slows API for tenant B."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "FAANG and B2B SaaS interviews ask how you prevent cross-tenant data leaks. AWS provides account and IAM boundaries, but application code must enforce tenant_id on every query. A missing WHERE tenant_id = ? clause in pooled RDS is a headline breach. Premium tiers often justify silo or bridge models for compliance (HIPAA, SOC 2)."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Name silo vs pool tradeoff, then explain how you enforce tenant context in app layer and IAM — AWS does not auto-isolate pooled rows."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request routing for pooled SaaS",
+          "items": [
+            {
+              "title": "Tenant resolution",
+              "body": "Extract tenant from subdomain, JWT claim, or API key at API Gateway or ALB."
+            },
+            {
+              "title": "Context propagation",
+              "body": "Pass tenant_id through middleware to every database query and cache key."
+            },
+            {
+              "title": "Authorization check",
+              "body": "Verify user belongs to resolved tenant before any data access."
+            },
+            {
+              "title": "Audit",
+              "body": "Log tenant_id on every mutation for forensics and compliance."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Silo vs pool on AWS",
+            "source": "flowchart TB\n  subgraph Silo[\"Silo - account per tenant\"]\n    T1[Tenant A account]\n    T2[Tenant B account]\n  end\n  subgraph Pool[\"Pool - shared stack\"]\n    ALB[Shared ALB] --> APP[Shared ECS service]\n    APP --> DB[(RDS with tenant_id column)]\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: per-tenant S3 prefix policy with ABAC",
+            "code": "Policies:\n  - PolicyName: TenantScopedS3\n    PolicyDocument:\n      Version: '2012-10-17'\n      Statement:\n        - Effect: Allow\n          Action: s3:GetObject\n          Resource: arn:aws:s3:::saas-uploads/${aws:PrincipalTag/tenantId}/*\n          Condition:\n            StringEquals:\n              aws:ResourceTag/tenantId: '${aws:PrincipalTag/tenantId}'",
+            "explanation": "Attribute-Based Access Control (ABAC) scopes S3 access to the tenant tag on the principal — IAM enforces isolation at storage layer."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: provision silo account via Organizations",
+            "code": "aws organizations create-account \\\n  --email tenant-acme@company.internal \\\n  --account-name tenant-acme-prod\n\naws organizations move-account \\\n  --account-id 333333333333 \\\n  --source-parent-id r-root \\\n  --destination-parent-id ou-tenants-silo",
+            "explanation": "Silo model: dedicated account per premium tenant under a Tenants OU with tailored SCPs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: DynamoDB pooled table design",
+            "code": "Resources:\n  TenantDataTable:\n    Type: AWS::DynamoDB::Table\n    Properties:\n      BillingMode: PAY_PER_REQUEST\n      AttributeDefinitions:\n        - AttributeName: tenantId\n          AttributeType: S\n        - AttributeName: itemId\n          AttributeType: S\n      KeySchema:\n        - AttributeName: tenantId\n          KeyType: HASH\n        - AttributeName: itemId\n          KeyType: RANGE",
+            "explanation": "Partition key tenantId isolates data at storage engine level — every query must include tenantId."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare isolation models",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Silo vs pool vs bridge",
+          "headers": ["Model", "Isolation", "Cost", "Best for"],
+          "rows": [
+            ["Silo", "Strongest — separate accounts/stacks", "Highest", "Enterprise, regulated workloads"],
+            ["Pool", "Application-enforced logical separation", "Lowest", "SMB SaaS at scale"],
+            ["Bridge", "Pooled app, siloed data tier", "Medium", "Tiered pricing (standard vs premium)"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Trusting client-supplied tenant_id without server-side verification. Shared Redis cache keys without tenant prefix. Running pooled and silo tenants on the same IAM role without ABAC conditions."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Tenant isolation is defense in depth: routing layer resolves tenant, middleware enforces membership, data layer scopes every query, IAM ABAC scopes object storage, and audit logs correlate tenant_id. Pen tests focus on IDOR (Insecure Direct Object Reference) — changing tenantId in a JWT or URL. How to prove it in production: integration tests that attempt cross-tenant reads, CloudTrail data events on tenant buckets, and per-tenant rate limits at API Gateway to mitigate noisy neighbor."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Control", "Pool implementation", "Silo implementation"],
+          "rows": [
+            ["Data leak risk", "High if app bug — one missing filter", "Lower — network/account boundary"],
+            ["Compliance narrative", "Harder for dedicated tenancy contracts", "Clean per-tenant account story"],
+            ["Operational cost", "One deploy serves all", "N stacks or accounts to patch"],
+            ["Noisy neighbor", "Need rate limits and fair scheduling", "Natural isolation"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'we use separate databases so we are multi-tenant safe' without explaining request routing and authorization — or claiming pooled RDS is secure without row-level enforcement and integration tests for cross-tenant access."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Multi-tenant SaaS uses silo, pool, or bridge models — trade isolation against cost and ops burden.",
+    "AWS provides account and IAM boundaries; application code must enforce tenant_id on every data path.",
+    "ABAC with principal tags, DynamoDB partition keys, and rate limits are production patterns for pooled SaaS.",
+    "60s: Silo = account/stack per tenant. Pool = shared with tenant_id everywhere. Bridge = hybrid tiers. Defense in depth: routing, authz, query scope, IAM, audit. Test IDOR.",
+    "Follow-up: how would you migrate a pooled tenant to silo for an enterprise deal?"
+  ],
+  "commonPitfalls": [
+    "Accepting tenant_id from the client without binding to authenticated user — saying pooled RDS is enough gets you rejected.",
+    "Strong answer: resolve tenant server-side, enforce on every query, ABAC on S3, integration tests for cross-tenant reads.",
+    "Cache keys without tenant prefix causing data bleed between customers.",
+    "Single IAM role for all tenants without session tags or resource conditions."
+  ],
+  "relatedTopicIds": [
+    "aws-03-iam-fundamentals",
+    "aws-03-aws-account-boundary",
+    "aws-03-tags-and-environments",
+    "aws-04-public-vs-private-networking"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Express middleware tenant context",
+      "note": "Attach tenantId to AsyncLocalStorage or request context after JWT validation — every repository method reads from context, never from req.body.tenantId alone.",
+      "futureTopicSlug": "aws/saas/tenant-middleware"
+    },
+    {
+      "language": "javascript",
+      "concept": "API Gateway authorizer claims",
+      "note": "Lambda authorizer returns IAM policy with principalId and context map — pass tenantId as context for downstream Lambda without re-parsing JWT in every function.",
+      "futureTopicSlug": "aws/saas/api-gateway-authorizer"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Architecture Fundamentals",
+      "url": "https://docs.aws.amazon.com/whitepapers/latest/saas-architecture-fundamentals/saas-architecture-fundamentals.html"
+    },
+    {
+      "title": "IAM ABAC for multi-tenant",
+      "url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction_attribute-based-access-control.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "saas-tenant-routing"
+}

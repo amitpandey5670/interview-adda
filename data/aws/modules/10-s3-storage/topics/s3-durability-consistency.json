@@ -1,0 +1,277 @@
+{
+  "id": "aws-10-s3-durability-consistency",
+  "slug": "s3-durability-consistency",
+  "title": "S3 durability, availability, and consistency",
+  "moduleId": "aws-10-s3-storage",
+  "order": 2,
+  "hook": "S3 promises 99.999999999% (11 nines) durability and strong read-after-write consistency for new objects — but versioning and replication still matter for operational recovery.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon S3 replicates data across multiple facilities in a Region for durability. Availability SLA varies by storage class. Since December 2020, S3 provides strong read-after-write consistency for PUTs of new objects and overwrite PUTs and DELETEs. Versioning keeps multiple versions of an object; delete markers hide current version without purging history."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Durability",
+              "longForm": "S3 durability",
+              "plainDefinition": "Probability object persists — 99.999999999% over a year.",
+              "example": "AWS manages replication — you do not pick AZ for Standard."
+            },
+            {
+              "term": "Versioning",
+              "longForm": "S3 versioning",
+              "plainDefinition": "Keeps all versions of object; delete creates delete marker.",
+              "example": "Restore previous version after accidental overwrite."
+            },
+            {
+              "term": "CRR",
+              "longForm": "Cross-Region Replication",
+              "plainDefinition": "Async copy of objects to bucket in another Region.",
+              "example": "us-east-1 to eu-west-1 for DR read access."
+            },
+            {
+              "term": "Delete marker",
+              "longForm": "S3 delete marker",
+              "plainDefinition": "Zero-byte marker hiding current version when versioning on.",
+              "example": "List shows deleted until marker removed."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers still cite outdated eventual consistency. Versioning protects against accidental delete and overwrite. Cross-Region Replication (CRR) is DR geography, not a substitute for versioning within Region."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: 11 nines durability in Region, strong consistency for new objects since 2020, versioning for ops recovery, CRR for geographic DR."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Protect object data",
+          "items": [
+            {
+              "title": "Enable versioning",
+              "body": "Required for replication and accidental delete recovery."
+            },
+            {
+              "title": "Understand consistency",
+              "body": "New PUT immediately readable; LIST may paginate large buckets."
+            },
+            {
+              "title": "Configure replication",
+              "body": "CRR rule with IAM role; destination bucket policy allows replication."
+            },
+            {
+              "title": "Lifecycle noncurrent",
+              "body": "Transition or expire old versions to control cost."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Versioning and replication",
+            "source": "flowchart LR\n  PUT[PutObject v1] --> B[Bucket source]\n  B --> V[Version 1 stored]\n  PUT2[PutObject v2] --> V2[Version 2 current]\n  B --> CRR[Cross-Region Replication]\n  CRR --> DR[Bucket destination Region B]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Enable bucket versioning",
+            "code": "aws s3api put-bucket-versioning \\\n  --bucket my-app-data \\\n  --versioning-configuration Status=Enabled\naws s3api get-bucket-versioning --bucket my-app-data",
+            "explanation": "Once enabled, only suspended — not fully disabled without deleting versions."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List object versions",
+            "code": "aws s3api list-object-versions \\\n  --bucket my-app-data \\\n  --prefix reports/2026/jan.csv",
+            "explanation": "Shows version IDs and delete markers for recovery."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CRR rule in CloudFormation",
+            "code": "ReplicationConfiguration:\n  Role: !GetAtt ReplicationRole.Arn\n  Rules:\n    - Id: ReplicateAll\n      Status: Enabled\n      Priority: 1\n      Filter: {}\n      DeleteMarkerReplication:\n        Status: Enabled\n      Destination:\n        Bucket: !Sub arn:aws:s3:::${DestBucket}\n        StorageClass: STANDARD",
+            "explanation": "Requires versioning on source and destination. Replication is asynchronous."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Restore previous version",
+            "code": "aws s3api copy-object \\\n  --bucket my-app-data \\\n  --copy-source my-app-data/reports/jan.csv?versionId=abc123VERSION \\\n  --key reports/jan.csv",
+            "explanation": "Copy old version over current to restore without deleting history."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Consistency",
+              "Strong read-after-write new objects",
+              "MongoDB read concern / Postgres MVCC different model"
+            ],
+            [
+              "Delete",
+              "Delete marker with versioning",
+              "fs.unlink permanent unless backup"
+            ],
+            [
+              "Geo copy",
+              "CRR async to another Region",
+              "Manual rsync or DB replication lag"
+            ],
+            [
+              "Backup",
+              "Versioning + lifecycle",
+              "pg_dump scheduled backup"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Assuming delete removes data when versioning enabled — only adds delete marker. CRR without versioning on source fails. Expecting instant cross-Region read after write in source Region."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "S3 Replication Time Control (RTC) SLA for predictable CRR lag. Object Lock WORM for compliance immutability. How to prove it in production: S3 Inventory version counts, replication metrics ReplicationLatency, and restore drill from delete marker."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Versioning only",
+              "Accidental delete recovery",
+              "Storage cost for all versions"
+            ],
+            [
+              "CRR + RTC",
+              "Geographic DR with SLA",
+              "Duplicate storage cost"
+            ],
+            [
+              "Object Lock",
+              "Regulatory immutability",
+              "Cannot delete until retention expires"
+            ],
+            [
+              "MFA Delete",
+              "Protect version purge",
+              "Operational friction"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying S3 is eventually consistent in 2026 gets rejected. Strong answer: strong for new PUTs since Dec 2020; versioning; CRR async."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "11 nines durability — AWS manages within Region.",
+    "Strong read-after-write for new object PUTs since December 2020.",
+    "Versioning enables undelete; delete marker hides current version.",
+    "60s: Strong consistency new objects. Versioning for ops recovery. CRR async DR. Not backup alone.",
+    "Follow-up: difference delete marker and permanent delete?"
+  ],
+  "commonPitfalls": [
+    "Outdated eventual consistency answer — rejected in modern interviews.",
+    "Strong answer: strong since 2020; LIST still paginate carefully at scale.",
+    "CRR without versioning enabled on source bucket.",
+    "No lifecycle on noncurrent versions — unbounded storage cost."
+  ],
+  "relatedTopicIds": [
+    "aws-10-s3-buckets-keys-prefixes",
+    "aws-10-s3-storage-classes",
+    "aws-10-s3-security-policies"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Immutable data patterns",
+      "note": "Storing content-addressed keys (hash in filename) like git blobs — new version is new key, similar to S3 versioning without overwrite.",
+      "futureTopicSlug": "aws/s3/immutable-keys"
+    },
+    {
+      "language": "typescript",
+      "concept": "Optimistic concurrency",
+      "note": "If-Match with versionId on CopyObject — like ETag checks in REST APIs for conflict detection.",
+      "futureTopicSlug": "aws/s3/concurrency"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "S3 data consistency",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html#ConsistencyModel"
+    },
+    {
+      "title": "Versioning",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "datasync-migration"
+}

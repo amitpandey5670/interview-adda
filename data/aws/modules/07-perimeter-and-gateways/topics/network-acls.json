@@ -1,0 +1,198 @@
+{
+  "id": "aws-07-network-acls",
+  "slug": "network-acls",
+  "title": "Network ACLs (stateless subnet boundary)",
+  "moduleId": "aws-07-perimeter-and-gateways",
+  "order": 2,
+  "hook": "A Network Access Control List (NACL) is a stateless subnet-level firewall evaluated in rule number order. Unlike security groups, NACLs support explicit deny rules — useful for blocking known bad CIDRs at the subnet edge.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Each subnet associates with exactly one NACL (default NACL allows all). NACL rules are numbered (e.g., 100, 200) and evaluated lowest-first until a match. Stateless means inbound and outbound are independent — allowing inbound tcp/443 requires a separate outbound rule for ephemeral return ports. NACLs filter before security groups on the way in."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "NACL", "longForm": "Network Access Control List", "plainDefinition": "Stateless subnet boundary firewall with numbered allow/deny rules.", "example": "nacl-private denying 198.51.100.0/24 inbound." },
+            { "term": "Stateless", "longForm": "Stateless filtering", "plainDefinition": "Inbound and outbound rules are evaluated independently — no connection tracking.", "example": "Must allow outbound ephemeral ports for inbound HTTP responses." },
+            { "term": "Rule number", "longForm": "NACL rule number", "plainDefinition": "Lower numbers evaluate first; first match wins.", "example": "Rule 100 deny bad IP; rule 200 allow 10.0.0.0/16." },
+            { "term": "Ephemeral ports", "longForm": "Ephemeral port range", "plainDefinition": "Temporary client ports used for TCP/UDP return traffic — must be allowed outbound on NACL.", "example": "1024-65535 outbound when inbound 443 allowed." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Most designs rely on security groups alone. NACLs add subnet-level guardrails: block a malicious CIDR, separate DMZ subnet policy, or compliance deny lists. Interviewers test stateless behavior — the classic 'inbound 443 allowed but responses dropped' mistake."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "SG vs NACL",
+          "body": "Security group = stateful ENI allow-only. NACL = stateless subnet allow/deny with numbered rules."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Packet through NACL and SG",
+          "items": [
+            { "title": "Inbound to subnet", "body": "NACL inbound rules evaluated first (lowest rule number)." },
+            { "title": "Reach ENI", "body": "Security group inbound rules evaluated on the ENI — stateful." },
+            { "title": "Outbound from subnet", "body": "Security group outbound (stateful return), then NACL outbound rules separately." },
+            { "title": "Deny wins at NACL", "body": "Explicit NACL deny blocks before SG if rule matches first." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "NACL vs security group order",
+            "source": "flowchart TB\n  IN[Inbound packet] --> NACL_IN[NACL inbound rules stateless]\n  NACL_IN --> SG_IN[Security group inbound stateful]\n  SG_IN --> ENI[ENI / instance]\n  ENI --> SG_OUT[Security group outbound]\n  SG_OUT --> NACL_OUT[NACL outbound rules]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — deny known bad CIDR on NACL",
+            "code": "aws ec2 create-network-acl-entry \\\n  --network-acl-id acl-0abc \\\n  --rule-number 50 \\\n  --protocol -1 \\\n  --rule-action deny \\\n  --egress false \\\n  --cidr-block 198.51.100.0/24",
+            "explanation": "Low rule number ensures deny matches before broader allow rules."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — private subnet NACL",
+            "code": "PrivateNacl:\n  Type: AWS::EC2::NetworkAcl\n  Properties:\n    VpcId: !Ref Vpc\n\nAllowVpcInbound:\n  Type: AWS::EC2::NetworkAclEntry\n  Properties:\n    NetworkAclId: !Ref PrivateNacl\n    RuleNumber: 100\n    Protocol: -1\n    RuleAction: allow\n    Egress: false\n    CidrBlock: 10.0.0.0/16",
+            "explanation": "Custom NACL replaces default allow-all when you need explicit subnet policy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — allow ephemeral return traffic",
+            "code": "aws ec2 create-network-acl-entry \\\n  --network-acl-id acl-0abc \\\n  --rule-number 120 \\\n  --protocol 6 \\\n  --port-range From=1024,To=65535 \\\n  --rule-action allow \\\n  --egress true \\\n  --cidr-block 0.0.0.0/0",
+            "explanation": "Stateless NACL needs outbound ephemeral allow for TCP responses to inbound connections."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — associate NACL with subnet",
+            "code": "aws ec2 replace-network-acl-association \\\n  --association-id aclassoc-0abc \\\n  --network-acl-id acl-private-custom",
+            "explanation": "Each subnet has one NACL association — changing it affects all ENIs in the subnet."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Defense layers",
+          "headers": ["Aspect", "NACL", "App middleware (Node/TS)"],
+          "rows": [
+            ["Deny rules", "Explicit deny by CIDR", "IP block lists in middleware — rare at L7"],
+            ["State", "Stateless — bidirectional rules needed", "HTTP request/response paired by server"],
+            ["Scope", "Entire subnet", "Single process listening ports"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Allow inbound 443 without outbound ephemeral range — responses die at NACL. Rule 100 allow all before rule 50 deny — ordering wrong. Replacing default NACL without documenting ephemeral rules."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Default NACL allows all — custom NACLs start implicit deny at end. NACL changes apply instantly to all subnet ENIs. How to prove it in production: Flow Logs show REJECT with NACL action; temporarily open ephemeral outbound rule and watch SYN-ACK succeed; Reachability Analyzer includes NACL in path."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["SG only", "Simpler operations", "No subnet-level deny list"],
+            ["NACL deny bad actors", "Block CIDR at subnet edge", "Stateless ops burden — ephemeral ports"],
+            ["Identical NACL per AZ subnet", "Consistent policy", "Drift if one AZ edited manually"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying NACLs are stateful like security groups. Strong answer: stateless numbered rules with explicit deny; must mirror inbound/outbound for TCP flows."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "NACLs are stateless subnet firewalls with numbered allow and deny rules.",
+    "Evaluated lowest rule number first; separate inbound and outbound rule sets.",
+    "Allow inbound 443 requires outbound ephemeral port rule — unlike stateful SG.",
+    "60s: Subnet boundary, stateless, deny supported, rule order matters. SG is stateful ENI layer inside. Use NACL for CIDR block lists.",
+    "Follow-up: what ephemeral port range would you allow for HTTPS responses?"
+  ],
+  "commonPitfalls": [
+    "Calling NACLs stateful — rejected; that is security groups.",
+    "Strong answer: stateless, numbered rules, explicit deny, need return path rules.",
+    "Inbound allow without outbound ephemeral — classic silent TCP hang.",
+    "Rule ordering wrong — broad allow at 100 prevents deny at 200 from ever matching."
+  ],
+  "relatedTopicIds": [
+    "aws-07-security-groups",
+    "aws-07-full-request-path",
+    "aws-06-vpc-peering",
+    "aws-06-hybrid-scenario"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "IP block middleware vs NACL",
+      "note": "Express rate-limit by IP runs at L7 after packets already passed NACL/SG — NACL deny is earlier and cheaper for known bad CIDRs.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Subnet tier design",
+      "note": "Public ALB subnets may use different NACL than private app subnets — TypeScript deploy targets must land in subnets whose NACL permits ALB health paths.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "Network ACLs", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-network-acls.html" },
+    { "title": "Compare security groups and NACLs", "url": "https://docs.aws.amazon.com/vpc/latest/userguide/infrastructure-security.html" }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

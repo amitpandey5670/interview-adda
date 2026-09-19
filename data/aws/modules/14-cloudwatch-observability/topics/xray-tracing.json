@@ -1,0 +1,237 @@
+{
+  "id": "aws-14-xray-tracing",
+  "slug": "xray-tracing",
+  "title": "AWS X-Ray tracing (segments, subsegments, and service map)",
+  "moduleId": "aws-14-cloudwatch-observability",
+  "order": 4,
+  "hook": "AWS X-Ray traces requests across services as a tree of segments and subsegments. When CloudWatch shows high Lambda duration but logs look fine, the service map reveals which downstream call consumed the time.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A trace has a trace ID and segments per service. Subsegments cover internal work — HTTP calls, DynamoDB, SQL. Lambda active tracing creates segments automatically. SDK instrumentation adds subsegments. Sampling reduces cost — default 1 req/sec + 5% thereafter. Service map visualizes dependencies and error rates."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Trace",
+              "longForm": "distributed trace",
+              "plainDefinition": "End-to-end path of a request across services.",
+              "example": "API GW → Lambda → DynamoDB → SQS"
+            },
+            {
+              "term": "Segment",
+              "longForm": "X-Ray segment",
+              "plainDefinition": "Timing block for one service in a trace.",
+              "example": "Lambda function segment with init subsegment"
+            },
+            {
+              "term": "Subsegment",
+              "longForm": "X-Ray subsegment",
+              "plainDefinition": "Child timing within a segment for downstream calls.",
+              "example": "DynamoDB GetItem 45ms subsegment"
+            },
+            {
+              "term": "Sampling",
+              "longForm": "X-Ray sampling rule",
+              "plainDefinition": "Fraction of requests traced to control cost.",
+              "example": "100% sample on errors via reservoir rule"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Logs tell you Lambda failed; X-Ray shows RDS query took 7 seconds. Missing propagation breaks trace at service boundaries. VPC cold start visible in init subsegment — proves ENI not business logic caused latency."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: enable active tracing on Lambda. Log trace_id in structured logs. Subsegments for external calls. Tune sampling for cost."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Trace propagation",
+          "items": [
+            {
+              "title": "Entry service generates trace",
+              "body": "API Gateway or Lambda creates root segment."
+            },
+            {
+              "title": "Header propagation",
+              "body": "X-Amzn-Trace-Id passed to downstream HTTP calls."
+            },
+            {
+              "title": "Subsegments recorded",
+              "body": "AWS SDK auto-instruments DynamoDB, SQS, etc."
+            },
+            {
+              "title": "Service map aggregates",
+              "body": "Visual graph of latency and errors between nodes."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Trace tree",
+            "source": "flowchart TD\n  ROOT[API Gateway segment] --> L[Lambda segment]\n  L --> INIT[init subsegment]\n  L --> DDB[DynamoDB subsegment]\n  L --> SQS[SQS subsegment]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Lambda active tracing",
+            "code": "Resources:\n  PaymentProcessor:\n    Type: AWS::Lambda::Function\n    Properties:\n      FunctionName: payment-processor\n      TracingConfig:\n        Mode: Active\n      Runtime: nodejs20.x\n      Handler: index.handler",
+            "explanation": "Active mode creates X-Ray segment per invocation. PassThrough mode requires manual SDK setup."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — log trace ID from Lambda context",
+            "code": "import { captureAWSv3Client } from 'aws-xray-sdk-core';\nimport { DynamoDBClient } from '@aws-sdk/client-dynamodb';\nimport type { Context } from 'aws-lambda';\n\nconst ddb = captureAWSv3Client(new DynamoDBClient({}));\n\nexport async function handler(event: unknown, context: Context) {\n  const traceId = process.env._X_AMZN_TRACE_ID?.split(';')[0].replace('Root=', '');\n  console.log(JSON.stringify({ trace_id: traceId, action: 'start' }));\n  // ... use instrumented ddb client\n}",
+            "explanation": "trace_id in logs links Insights query to X-Ray console trace view."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — custom subsegment",
+            "code": "import AWSXRay from 'aws-xray-sdk-core';\n\nasync function chargeCard(orderId: string) {\n  const segment = AWSXRay.getSegment();\n  const sub = segment?.addNewSubsegment('chargeCard');\n  try {\n    sub?.addAnnotation('orderId', orderId);\n    await paymentApi.charge(orderId);\n  } catch (err) {\n    sub?.addError(err as Error);\n    throw err;\n  } finally {\n    sub?.close();\n  }\n}",
+            "explanation": "Custom subsegments isolate business logic timing in trace waterfall."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — get trace summaries by filter",
+            "code": "aws xray get-trace-summaries \\\n  --start-time $(date -u -v-1H +%s) \\\n  --end-time $(date -u +%s) \\\n  --filter-expression 'service(id(name: \"payment-processor\", type: \"AWS::Lambda::Function\")) { fault = true }'",
+            "explanation": "Find fault traces for specific Lambda in last hour — faster than console browsing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "X-Ray vs OpenTelemetry",
+          "headers": ["Aspect", "AWS X-Ray", "OpenTelemetry"],
+          "rows": [
+            ["AWS integration", "Native Lambda/API GW", "ADOT collector export"],
+            ["Service map", "Built-in console", "Grafana/Jaeger"],
+            ["Sampling", "X-Ray rules", "OTel sampler"],
+            ["Portability", "AWS-centric", "Vendor neutral"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "No trace propagation across async SQS — broken trace. 100% sampling on high traffic — cost. Forgetting to instrument HTTP client — gap in waterfall. Confusing @requestId with trace ID."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: compare trace end-to-end duration to Lambda Duration metric — gap means missing subsegments. Init subsegment > 1s on VPC = ENI cold start evidence. Sampling rule: reservoir 1/sec + 5% + 100% on fault flag. X-Ray now integrates with CloudWatch Application Signals."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Choice", "When", "Downside"],
+          "rows": [
+            ["Active tracing", "Prod microservices", "Cost at volume"],
+            ["Log trace_id only", "Low traffic", "No automatic map"],
+            ["100% sample", "Debug session brief", "Expensive long term"],
+            ["OTel export", "Multi-cloud", "More setup"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'X-Ray replaces logs.' Strong answer: traces show where time went; logs show why it failed; correlate with trace_id."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Traces = segments per service + subsegments for downstream calls.",
+    "Lambda active tracing + captured AWS SDK clients for complete waterfall.",
+    "Log trace_id in structured logs to jump from Insights to X-Ray.",
+    "60s: Service map shows slow node. Init subsegment equals cold start. Sample to control cost. trace_id in logs.",
+    "Follow-up: how propagate trace across SQS async boundary?"
+  ],
+  "commonPitfalls": [
+    "Broken trace at SQS — no trace header in message attributes.",
+    "Strong answer: pass trace ID in message attribute; continue segment in consumer.",
+    "100% sampling on million RPS — cost rejection.",
+    "Uninstrumented fetch() call — mystery gap in trace."
+  ],
+  "relatedTopicIds": [
+    "aws-14-cloudwatch-logs",
+    "aws-14-lambda-sqs-debug-runbook",
+    "aws-12-sqs-lambda-consumer"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "OpenTelemetry trace context",
+      "note": "OTel context propagation with traceparent header is W3C standard — X-Ray uses X-Amzn-Trace-Id; ADOT bridges both.",
+      "futureTopicSlug": "typescript/observability/opentelemetry"
+    },
+    {
+      "language": "javascript",
+      "concept": "Chrome DevTools Performance tab",
+      "note": "Flame chart in DevTools parallels X-Ray waterfall — nested timing blocks for nested async calls.",
+      "futureTopicSlug": "javascript/browser/performance"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "X-Ray concepts",
+      "url": "https://docs.aws.amazon.com/xray/latest/devguide/xray-concepts.html"
+    },
+    {
+      "title": "Lambda and X-Ray",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/services-xray.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "lambda-vpc"
+}

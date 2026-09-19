@@ -1,0 +1,197 @@
+{
+  "id": "aws-04-osi-layers-aws-services",
+  "slug": "osi-layers-aws-services",
+  "title": "OSI layers mapped to AWS services (where each service sits)",
+  "moduleId": "aws-04-networking-primer",
+  "order": 6,
+  "hook": "The Open Systems Interconnection (OSI) model divides networking into seven layers. Mapping AWS services to layers helps you troubleshoot 'where is the failure?' and choose the right tool in interviews.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The OSI model layers (from bottom): Physical (1), Data Link (2), Network (3), Transport (4), Session (5), Presentation (6), Application (7). AWS abstracts layers 1–2. You work primarily at layers 3–7: VPC and subnets (layer 3), Security Groups and Network ACLs (layer 3–4), ALB (layer 7 HTTP routing), Route 53 (layer 7 DNS), TLS in ACM (layer 6–7). Understanding this mapping clarifies whether to fix a route table, Security Group, or application header."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Layer 3",
+              "longForm": "Network layer",
+              "plainDefinition": "IP addressing and routing between networks.",
+              "example": "VPC route tables and CIDR blocks operate here."
+            },
+            {
+              "term": "Layer 4",
+              "longForm": "Transport layer",
+              "plainDefinition": "End-to-end delivery with ports — TCP and UDP.",
+              "example": "Security Group rules on port 443 TCP."
+            },
+            {
+              "term": "Layer 7",
+              "longForm": "Application layer",
+              "plainDefinition": "Application-specific protocols — HTTP, DNS, SMTP.",
+              "example": "ALB path-based routing on /api/*."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "When HTTPS fails, peel the onion: DNS resolution (layer 7) → TCP connect to ALB IP (layer 4) → TLS handshake (layer 6) → HTTP response (layer 7). VPC Flow Logs show layer 3–4 accept/reject. ALB access logs show layer 7 status codes. Interviewers use OSI framing to test systematic troubleshooting versus random guessing."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Bottom-up troubleshoot: routing (L3) → SG/NACL (L4) → TLS (L6) → HTTP/app (L7)."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "HTTPS request through OSI layers on AWS",
+          "items": [
+            {
+              "title": "Layer 7 — DNS",
+              "body": "Route 53 resolves api.example.com to ALB hostname."
+            },
+            {
+              "title": "Layer 3 — Routing",
+              "body": "Packet routed through IGW to public subnet ALB ENI."
+            },
+            {
+              "title": "Layer 4 — Security Group",
+              "body": "TCP 443 allowed on ALB Security Group."
+            },
+            {
+              "title": "Layer 6–7 — TLS and HTTP",
+              "body": "ACM cert presented; ALB forwards HTTP to target group."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "AWS services by OSI layer",
+            "source": "flowchart TB\n  subgraph L7[\"Layer 7 - Application\"]\n    R53[Route 53 DNS]\n    ALB[ALB HTTP routing]\n    CF[CloudFront]\n  end\n  subgraph L4[\"Layer 4 - Transport\"]\n    SG[Security Groups]\n    NACL[Network ACLs]\n  end\n  subgraph L3[\"Layer 3 - Network\"]\n    VPC[VPC CIDR]\n    RT[Route tables]\n    TGW[Transit Gateway]\n  end\n  R53 --> ALB\n  ALB --> SG\n  SG --> VPC"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: layer-by-layer connectivity check",
+            "code": "# Layer 7 - DNS\ndig +short api.example.com\n\n# Layer 4 - TCP reachability\nnc -zv $(dig +short api.example.com | head -1) 443\n\n# Layer 7 - HTTP\ncurl -vI https://api.example.com/health",
+            "explanation": "Isolate failure: DNS failure vs TCP timeout vs TLS/cert error vs HTTP 502 from unhealthy targets."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: VPC Flow Logs for layer 3-4 rejects",
+            "code": "aws ec2 create-flow-logs \\\n  --resource-type VPC \\\n  --resource-ids vpc-0abc123 \\\n  --traffic-type REJECT \\\n  --log-destination-type cloud-watch-logs \\\n  --log-group-name /vpc/flow/rejects\n\n# Query REJECT records — often SG or NACL mismatch",
+            "explanation": "Flow Logs show ACCEPT/REJECT at IP/port level — layer 3–4 evidence when curl times out."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: ALB layer 7 path routing",
+            "code": "Resources:\n  ApiListenerRule:\n    Type: AWS::ElasticLoadBalancingV2::ListenerRule\n    Properties:\n      ListenerArn: !Ref HttpsListener\n      Priority: 10\n      Conditions:\n        - Field: path-pattern\n          Values: ['/api/*']\n      Actions:\n        - Type: forward\n          TargetGroupArn: !Ref ApiTargetGroup",
+            "explanation": "Layer 7 routing inspects HTTP path — Security Groups cannot do path-based routing."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare troubleshooting tools by layer",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "OSI layer to AWS diagnostic",
+          "headers": ["Layer", "AWS component", "Diagnostic tool"],
+          "rows": [
+            ["3 — Network", "Route tables, VPC", "VPC Flow Logs, reachability analyzer"],
+            ["4 — Transport", "Security Groups, NACL", "Flow Logs REJECT, SG rules"],
+            ["6 — Presentation", "TLS / ACM", "openssl s_client, ACM cert status"],
+            ["7 — Application", "ALB, CloudFront", "ALB access logs, curl -v, X-Ray"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Changing Security Groups when the issue is DNS (layer 7 vs layer 4). Expecting NACL to do path-based routing — that is ALB layer 7. Ignoring TLS layer when HTTP works with -k but fails in browser."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "OSI layers map AWS services: VPC/route tables (L3), SG/NACL (L4), TLS/ACM (L6), ALB/Route 53 (L7).",
+    "Troubleshoot bottom-up: routing → firewall → TLS → HTTP application.",
+    "VPC Flow Logs for L3–4; ALB access logs and curl for L7.",
+    "60s: AWS abstracts L1–2. You manage L3 VPC routing, L4 SG ports, L7 ALB HTTP and Route 53 DNS. Peel layers when debugging HTTPS failures.",
+    "Follow-up: what is the difference between Security Group and Network ACL?"
+  ],
+  "commonPitfalls": [
+    "Jumping to application logs when route table has no path — fix L3 before L7.",
+    "Strong answer: systematic layer isolation with dig, nc, curl, Flow Logs.",
+    "Using NACL for fine-grained app rules — SG is stateful and preferred for instances.",
+    "Confusing control plane API errors with data plane connectivity issues."
+  ],
+  "relatedTopicIds": [
+    "aws-04-public-vs-private-networking",
+    "aws-04-dns-route53-fundamentals",
+    "aws-04-tls-certificates",
+    "aws-01-control-plane-data-plane"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "fetch errors and network layers",
+      "note": "TypeError: fetch failed in Node often means DNS (L7) or TCP timeout (L4) — not an HTTP 500. Check layers before blaming application code.",
+      "futureTopicSlug": "aws/networking/debug-fetch-errors"
+    },
+    {
+      "language": "typescript",
+      "concept": "ALB 502 vs 503",
+      "note": "502 Bad Gateway = ALB reached target but got invalid response (L7 app). 503 = no healthy targets (L7 health check / L4 connectivity to target).",
+      "futureTopicSlug": "aws/networking/alb-status-codes"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "VPC Flow Logs",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html"
+    },
+    {
+      "title": "ALB access logs",
+      "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

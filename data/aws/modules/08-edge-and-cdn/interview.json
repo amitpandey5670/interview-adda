@@ -1,0 +1,96 @@
+{
+  "moduleId": "aws-08-edge-and-cdn",
+  "title": "Edge and CDN interview drills",
+  "items": [
+    {
+      "question": "Your React SPA in us-east-1 S3 is slow for users in Singapore. Walk through the fix without making the bucket public.",
+      "answer": "Put Amazon CloudFront in front of the private S3 bucket. Create a distribution with an S3 origin, attach Origin Access Control (OAC), and update the bucket policy to allow s3:GetObject only from that distribution's ARN. Point the app domain CNAME to the distribution. Static assets get cached at the Singapore edge PoP on first request; subsequent users hit cache. Block all public access stays on. Tradeoff: you must handle cache invalidation or versioned filenames on deploy.",
+      "followUps": [
+        "Why OAC instead of Origin Access Identity (OAI)?",
+        "How do you route 404 to index.html for client-side routing?"
+      ],
+      "sixtySeconds": "CloudFront + private S3 + OAC. CNAME to distribution. Edge caches assets. Bucket stays private. Version URLs on deploy."
+    },
+    {
+      "question": "After deploy, users still see the old JavaScript bundle. What do you check before running a full-path invalidation?",
+      "answer": "First check whether filenames are content-hashed (main.a3f2b1.js). If not, the cache key is the same path so edge serves stale until TTL expires or you invalidate. Prefer immutable versioned URLs with long max-age and no invalidation. If you must invalidate, target only /assets/* not /* — invalidation has per-path cost and a monthly free tier. Also verify Cache-Control from origin and the behavior's min/default/max TTL. CloudWatch metric CacheHitRate dropping after deploy often means TTL too long or missing versioning.",
+      "followUps": [
+        "What is the difference between min TTL and max TTL on a behavior?",
+        "When would you use Origin Shield?"
+      ],
+      "sixtySeconds": "Version hashed filenames first. Invalidate only changed paths. Check TTL and Cache-Control. Full /* invalidation is a last resort."
+    },
+    {
+      "question": "Authenticated API responses are leaking between users at the CDN. How did that happen and how do you fix it?",
+      "answer": "CloudFront cached a response whose cache key did not include the distinguishing header — often Authorization or a session cookie was not forwarded into the key, or caching was enabled on /api/* with TTL > 0. Fix: set TTL to 0 for dynamic behaviors, forward Authorization and any tenant header into the cache key (or disable caching entirely for that behavior). Strong interview answer: default deny caching on APIs; only cache explicitly public GET endpoints with a narrow key. Verify with two different tokens and the same URL — both must not see each other's body.",
+      "followUps": [
+        "Which headers can you include in the cache key?",
+        "How does Cache-Control: private from origin interact with CloudFront?"
+      ],
+      "sixtySeconds": "API cached without auth in cache key. TTL 0 on /api/*, forward Authorization, or disable cache. Test two tokens same URL."
+    },
+    {
+      "question": "Design cache behaviors for a site with /assets/* on S3, /api/* on ALB, and everything else serving the SPA shell.",
+      "answer": "Origin 1: S3 (static). Origin 2: ALB (API). Behaviors ordered most specific first: /api/* → ALB, TTL 0, forward all headers including Host and Authorization, HTTPS only. /assets/* → S3, long TTL (e.g. 86400+), compress, cache GET/HEAD. Default * → S3 index.html, short TTL or no-cache for HTML shell. Custom error responses map 403/404 from S3 to 200 /index.html for client routing. Tradeoff: default behavior TTL on HTML affects how fast deploys propagate — often 0 or 60 seconds.",
+      "followUps": [
+        "Why must you forward the Host header to ALB?",
+        "What is an origin group for failover?"
+      ],
+      "sixtySeconds": "/api/* ALB TTL 0 forward auth. /assets/* S3 long TTL. Default S3 index.html. Custom errors for SPA."
+    },
+    {
+      "question": "OAI vs OAC — what do you tell a team migrating a legacy CloudFront + S3 setup?",
+      "answer": "Origin Access Identity (OAI) is legacy: CloudFront used a special IAM principal in bucket policy. Origin Access Control (OAC) is the current model: CloudFront signs requests to S3 with SigV4, supports all regions, SSE-KMS, and dynamic requests (PUT) if needed. For new distributions AWS recommends OAC. Migration: create OAC, attach to origin, update bucket policy to the new service principal format, remove OAI principal, test, then delete OAI. Weak answer: 'they're the same' — OAC is SigV4-native and required for modern S3 features.",
+      "followUps": [
+        "What does the bucket policy Principal look like with OAC?",
+        "Can CloudFront write to S3 with OAC?"
+      ],
+      "sixtySeconds": "OAC replaces OAI. SigV4 signed GetObject. Works with KMS and all regions. Update bucket policy Principal to distribution ARN."
+    },
+    {
+      "question": "Your origin ALB is getting hammered during a viral traffic spike even with CloudFront. Why?",
+      "answer": "Cache miss storm: objects not cacheable (Set-Cookie, Cache-Control: private, query string variance), TTL too low, or each user has a unique query param busting the key. Another cause: only dynamic paths hit origin but volume is huge — edge cannot help if TTL is 0. Mitigations: raise cache hit rate on static paths, enable Origin Shield in the origin region, use compression, review cache key to drop irrelevant query params. For APIs, scale ALB targets and consider read replicas — CDN won't cache POST. Check CacheHitRate and OriginLatency CloudWatch metrics.",
+      "followUps": [
+        "What query string forwarding mode minimizes cache fragmentation?",
+        "How does Origin Shield change the request path?"
+      ],
+      "sixtySeconds": "Low cache hit rate — TTL, cookies, query busting. Origin Shield for hot objects. APIs at TTL 0 won't shield ALB."
+    },
+    {
+      "question": "When do you use CloudFront Functions vs Lambda@Edge for URL rewriting?",
+      "answer": "CloudFront Functions: lightweight JavaScript at viewer request/response, sub-millisecond, no network I/O — ideal for URL rewrites, header manipulation, A/B path tweaks. Lambda@Edge: Node or Python at viewer or origin triggers, can call AWS APIs, higher cold start and cost, 5–30 second limit. For SPA index.html rewrite or strip /api prefix, Functions usually win. For JWT validation at edge or dynamic origin selection, Lambda@Edge. Tradeoff: Functions cannot access VPC or S3 directly.",
+      "followUps": [
+        "What are the four Lambda@Edge trigger points?",
+        "Can Functions modify the origin request body?"
+      ],
+      "sixtySeconds": "Functions for fast header/URL rewrites. Lambda@Edge when you need AWS API calls or origin-side logic. Functions cheaper and faster."
+    },
+    {
+      "question": "How do you prove CloudFront is actually caching your S3 assets in production?",
+      "answer": "Hit the same URL twice from a distant region; second response should show X-Cache: Hit from cloudfront (or Hit from edge on newer headers). CloudWatch metrics: CacheHitRate, Requests, BytesDownloaded, OriginRequests — rising OriginRequests on static assets means misses. Enable standard logging to S3 and analyze sc-status and x-edge-result-type fields. For deploy verification, compare OriginRequests before/after purge. Do not rely on browser devtools alone — disable cache and you'll always see Miss.",
+      "followUps": [
+        "What does x-edge-result-type Miss mean vs Error?",
+        "How do you alarm on sudden OriginRequests spikes?"
+      ],
+      "sixtySeconds": "X-Cache Hit on repeat. CloudWatch CacheHitRate and OriginRequests. Access logs x-edge-result-type. Browser devtools mislead if cache disabled."
+    },
+    {
+      "question": "A compliance requirement says EU users must not have responses cached outside Europe. What CloudFront knobs apply?",
+      "answer": "Use geo restriction (whitelist EU country codes) on the distribution if content must not be served elsewhere at all. For cache locality, CloudFront does not let you pin cache to arbitrary regions per user — edge is global. Alternative architectures: separate distributions per region with Route 53 geolocation routing, or accept global edge cache with encryption in transit and short TTL on sensitive data. Often the real requirement is data residency at origin (eu-west-1) not edge cache bytes — clarify with legal. WAF geo match can block non-EU viewers.",
+      "followUps": [
+        "Does CloudFront store cache encrypted at rest?",
+        "How does geo restriction differ from WAF geo blocking?"
+      ],
+      "sixtySeconds": "Clarify residency vs edge cache. Geo restriction or regional distributions. Origin in EU. WAF geo rules. CloudFront edge is global by design."
+    },
+    {
+      "question": "Compare putting CloudFront in front of API Gateway HTTP API versus ALB for a global REST API.",
+      "answer": "Both work as custom HTTPS origins. API Gateway: built-in throttling, JWT authorizers, per-route caching (separate from CloudFront), good for serverless. ALB: targets EC2/ECS/IP, connection reuse to containers, WebSocket on ALB (not through CloudFront the same way). CloudFront adds edge TLS termination, AWS WAF, DDoS via Shield, and optional caching of safe GETs. Tradeoff: extra hop adds origin latency on cache miss; forward Host header correctly or API Gateway returns wrong stage. For purely dynamic APIs set TTL 0; use CloudFront for WAF and custom domain, not origin offload.",
+      "followUps": [
+        "Can API Gateway HTTP API be an origin without a custom domain?",
+        "When would you cache at API Gateway instead of CloudFront?"
+      ],
+      "sixtySeconds": "Both HTTPS origins. API GW for serverless throttling. ALB for containers. CloudFront for WAF, TLS, edge. TTL 0 for dynamic. Forward Host."
+    }
+  ]
+}

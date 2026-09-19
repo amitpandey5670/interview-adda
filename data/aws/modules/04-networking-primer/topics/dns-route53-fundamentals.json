@@ -1,0 +1,190 @@
+{
+  "id": "aws-04-dns-route53-fundamentals",
+  "slug": "dns-route53-fundamentals",
+  "title": "DNS and Route 53 fundamentals (names to endpoints)",
+  "moduleId": "aws-04-networking-primer",
+  "order": 2,
+  "hook": "The Domain Name System (DNS) translates human-readable names like api.example.com into IP addresses. Amazon Route 53 is AWS managed DNS that also handles health checks and routing policies.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "DNS is a hierarchical distributed database. A hosted zone in Route 53 holds records for a domain. Record types include A (IPv4 address), AAAA (IPv6), CNAME (alias to another name), and ALIAS (Route 53 extension pointing to AWS resources like Application Load Balancer). TTL (Time To Live) controls how long resolvers cache answers. Route 53 supports simple routing, weighted, latency-based, failover, and geolocation policies."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "DNS",
+              "longForm": "Domain Name System",
+              "plainDefinition": "Protocol that maps domain names to IP addresses and other records.",
+              "example": "api.example.com → 203.0.113.10"
+            },
+            {
+              "term": "Hosted zone",
+              "longForm": "Route 53 hosted zone",
+              "plainDefinition": "Container for DNS records for a domain or subdomain.",
+              "example": "example.com hosted zone with A, MX, and TXT records."
+            },
+            {
+              "term": "TTL",
+              "longForm": "Time To Live",
+              "plainDefinition": "Seconds a resolver caches a DNS answer before re-querying.",
+              "example": "TTL 60 means faster failover but more DNS queries."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Misconfigured DNS is the silent cause of 'works in console, fails for users.' ALIAS records to CloudFront or ALB avoid CNAME-at-apex limitations. Health-checked failover routes traffic away from unhealthy Regions. Interviews ask how you would migrate DNS with minimal downtime and how TTL affects rollback time."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Route 53 ALIAS to AWS resources — no charge for queries to AWS targets. Lower TTL before migrations; raise after stable."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "DNS resolution path",
+          "items": [
+            {
+              "title": "Client queries resolver",
+              "body": "Browser asks OS DNS resolver for api.example.com."
+            },
+            {
+              "title": "Recursive lookup",
+              "body": "Resolver walks root → .com TLD → example.com authoritative nameserver."
+            },
+            {
+              "title": "Route 53 answers",
+              "body": "Hosted zone returns A or ALIAS record pointing to ALB."
+            },
+            {
+              "title": "Client connects",
+              "body": "HTTP client connects to resolved IP — TLS certificate must match hostname."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Route 53 to ALB",
+            "source": "sequenceDiagram\n  participant User\n  participant DNS as Route 53\n  participant ALB\n  User->>DNS: query api.example.com\n  DNS-->>User: ALIAS to ALB\n  User->>ALB: HTTPS request"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: create hosted zone and A record",
+            "code": "ZONE_ID=$(aws route53 create-hosted-zone \\\n  --name example.com \\\n  --caller-reference $(date +%s) \\\n  --query 'HostedZone.Id' --output text)\n\naws route53 change-resource-record-sets \\\n  --hosted-zone-id $ZONE_ID \\\n  --change-batch '{\n    \"Changes\": [{\n      \"Action\": \"CREATE\",\n      \"ResourceRecordSet\": {\n        \"Name\": \"api.example.com\",\n        \"Type\": \"A\",\n        \"AliasTarget\": {\n          \"HostedZoneId\": \"Z35SXDOTRQ7X7K\",\n          \"DNSName\": \"dualstack.my-alb-123.us-east-1.elb.amazonaws.com\",\n          \"EvaluateTargetHealth\": true\n        }\n      }\n    }]\n  }'",
+            "explanation": "ALIAS A record points api.example.com to ALB. EvaluateTargetHealth enables DNS failover integration."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: Route 53 alias to ALB",
+            "code": "Resources:\n  ApiDnsRecord:\n    Type: AWS::Route53::RecordSet\n    Properties:\n      HostedZoneId: !Ref HostedZone\n      Name: api.example.com\n      Type: A\n      AliasTarget:\n        DNSName: !GetAtt AppLoadBalancer.DNSName\n        HostedZoneId: !GetAtt AppLoadBalancer.CanonicalHostedZoneID\n        EvaluateTargetHealth: true",
+            "explanation": "CloudFormation wires DNS to ALB automatically — no hardcoded IP that changes on redeploy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: weighted routing for blue-green",
+            "code": "aws route53 change-resource-record-sets \\\n  --hosted-zone-id Z1234567890ABC \\\n  --change-batch file://weighted-blue-green.json\n# weighted-blue-green.json: two A records with Weight 90 and 10",
+            "explanation": "Weighted policy shifts traffic gradually during deploy — combine with health checks for safe rollback."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare record types",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "A vs CNAME vs ALIAS",
+          "headers": ["Record", "Points to", "Apex domain", "AWS integration"],
+          "rows": [
+            ["A", "IPv4 address", "Yes", "Manual IP — avoid for ALB"],
+            ["CNAME", "Another hostname", "No — not at zone apex", "Standard DNS"],
+            ["ALIAS", "AWS resource", "Yes", "Free queries to AWS targets, health evaluation"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "CNAME at zone apex (example.com) — invalid; use ALIAS. TTL 86400 during migration — rollback takes a day. Forgetting to update registrar nameservers to Route 53 after creating hosted zone."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "DNS maps names to IPs; Route 53 hosted zones hold records with routing policies.",
+    "Use ALIAS for AWS resources — supports apex domains and health evaluation.",
+    "Lower TTL before DNS migrations; use weighted routing for gradual cutover.",
+    "60s: Resolver walks hierarchy to Route 53. ALIAS to ALB/CloudFront. CNAME cannot be at apex. TTL trades cache vs failover speed.",
+    "Follow-up: how does Route 53 health check failover work with ALB?"
+  ],
+  "commonPitfalls": [
+    "Using CNAME at apex — invalid DNS; use ALIAS instead.",
+    "Strong answer: ALIAS for AWS targets, supports apex, integrates health checks.",
+    "High TTL during migration causing slow rollback.",
+    "Hardcoding ALB IP instead of ALIAS — IP changes on redeploy."
+  ],
+  "relatedTopicIds": [
+    "aws-04-tls-certificates",
+    "aws-04-public-vs-private-networking",
+    "aws-04-osi-layers-aws-services",
+    "aws-01-aws-service-map"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "DNS vs application config",
+      "note": "Node apps should use environment variables for service endpoints, not hardcoded IPs. DNS resolution happens at connection time — changing Route 53 record redirects traffic without redeploy if clients respect TTL.",
+      "futureTopicSlug": "aws/networking/service-discovery"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Route 53 routing policies",
+      "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html"
+    },
+    {
+      "title": "Choosing routing policy",
+      "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "cloudfront-origin"
+}

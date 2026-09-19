@@ -1,0 +1,277 @@
+{
+  "id": "aws-09-ebs-vs-instance-store",
+  "slug": "ebs-vs-instance-store",
+  "title": "EBS volumes versus instance store (ephemeral)",
+  "moduleId": "aws-09-ec2-compute",
+  "order": 4,
+  "hook": "Elastic Block Store (EBS) is network-attached durable block storage; instance store is physically local NVMe that disappears when the instance stops or terminates.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon Elastic Block Store (EBS) volumes attach to EC2 over the network — gp3, io2, st1, sc1 types with snapshots and encryption. Instance store volumes come with specific instance types as local NVMe disks — highest IOPS and lowest latency but ephemeral. Root volume is usually EBS; instance store appears as additional block devices mapped at launch."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "EBS",
+              "longForm": "Elastic Block Store",
+              "plainDefinition": "Network block storage persisting independently of instance lifecycle.",
+              "example": "gp3 100 GiB encrypted root volume."
+            },
+            {
+              "term": "Instance store",
+              "longForm": "EC2 instance store",
+              "plainDefinition": "Local NVMe/SSD tied to hardware — lost on stop or terminate.",
+              "example": "i3.large exposes 475 GB NVMe instance store."
+            },
+            {
+              "term": "gp3",
+              "longForm": "General Purpose SSD gp3",
+              "plainDefinition": "Default EBS type — baseline IOPS and throughput configurable.",
+              "example": "3000 IOPS / 125 MB/s baseline on gp3."
+            },
+            {
+              "term": "Snapshot",
+              "longForm": "EBS snapshot",
+              "plainDefinition": "Incremental point-in-time backup stored in S3.",
+              "example": "Daily snapshot lifecycle to warm archive."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Choosing wrong storage causes data loss on stop/terminate or insufficient IOPS for databases. Snapshots enable backup and AMI creation for EBS only. Interview scenarios pit cost, durability, and performance tradeoffs."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: EBS = durable network disk with snapshots. Instance store = fast ephemeral — only with replication or cache workloads."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Pick storage for workload",
+          "items": [
+            {
+              "title": "Durability requirement",
+              "body": "Sole copy of data → EBS with snapshots. Cache/scratch → instance store OK."
+            },
+            {
+              "title": "Performance profile",
+              "body": "Benchmark IOPS/latency — io2 for sustained DB, instance store for Kafka/Cassandra."
+            },
+            {
+              "title": "Lifecycle",
+              "body": "Stop/start preserves EBS; instance store cleared on stop for most types."
+            },
+            {
+              "title": "Encrypt and attach",
+              "body": "Enable encryption at rest with AWS KMS; attach data volumes at launch or runtime."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "EBS vs instance store attachment",
+            "source": "flowchart LR\n  EC2[EC2 instance]\n  EC2 --> EBS[EBS gp3 root\\npersists stop/start]\n  EC2 --> IS[Instance store NVMe\\nephemeral]\n  EBS --> SNAP[EBS snapshot]\n  IS --> X[Lost on stop/terminate]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create encrypted gp3 volume and attach",
+            "code": "VOL=$(aws ec2 create-volume \\\n  --availability-zone ap-south-1a \\\n  --size 100 \\\n  --volume-type gp3 \\\n  --encrypted \\\n  --query VolumeId --output text)\naws ec2 attach-volume \\\n  --volume-id $VOL \\\n  --instance-id i-0app \\\n  --device /dev/sdf",
+            "explanation": "Volume AZ must match instance AZ. Encrypt by default in production."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Snapshot EBS volume",
+            "code": "aws ec2 create-snapshot \\\n  --volume-id vol-0data \\\n  --description \"nightly-db-backup\"\naws ec2 describe-snapshots --owner-ids self --filters Name=volume-id,Values=vol-0data",
+            "explanation": "Snapshots are incremental and stored durably — basis for DR and AMI."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Launch template block device mappings",
+            "code": "BlockDeviceMappings:\n  - DeviceName: /dev/xvda\n    Ebs:\n      VolumeSize: 50\n      VolumeType: gp3\n      Encrypted: true\n      DeleteOnTermination: true\n  - DeviceName: /dev/xvdb\n    Ebs:\n      VolumeSize: 500\n      VolumeType: io2\n      Iops: 10000",
+            "explanation": "Root gp3 plus io2 data volume. Instance store types use VirtualName not Ebs block."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List instance store devices",
+            "code": "aws ec2 describe-instance-types \\\n  --instance-types i3.large \\\n  --query 'InstanceTypes[0].InstanceStorageInfo'",
+            "explanation": "Confirm instance store presence before relying on local NVMe."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Durability",
+              "EBS survives stop/start",
+              "Instance store lost on stop/terminate"
+            ],
+            [
+              "Performance",
+              "Network latency — gp3/io2 tunable",
+              "Local NVMe — lowest latency"
+            ],
+            [
+              "Backup",
+              "Snapshots and AMIs",
+              "No snapshot — replicate in app"
+            ],
+            [
+              "Resize",
+              "Modify volume size/type online",
+              "Fixed at instance type"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Storing sole database copy on instance store. Forgetting DeleteOnTermination=false loses data volumes on terminate. io1/io2 cost surprise without IOPS planning."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Multi-Attach io2 only for clustered filesystems (Oracle RAC patterns). How to prove it in production: CloudWatch VolumeQueueLength, VolumeReadOps/WriteOps, and fio benchmarks before production cutover."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "gp3 baseline",
+              "Cost-effective general purpose",
+              "Network latency vs local NVMe"
+            ],
+            [
+              "io2 Block Express",
+              "Highest EBS IOPS",
+              "Premium cost per IOPS"
+            ],
+            [
+              "Instance store RAID0",
+              "Max throughput scratch",
+              "No durability — node loss = data loss"
+            ],
+            [
+              "EBS-optimized instances",
+              "Dedicated EBS bandwidth",
+              "Required for high IOPS workloads"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Putting production database on instance store without replication gets rejected. Strong answer: EBS io2 + snapshots, or instance store only for replicated shards."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "EBS persists across stop/start; instance store is ephemeral on most instance types.",
+    "Snapshots and encryption apply to EBS — not instance store.",
+    "Match volume type to IOPS needs — gp3 default, io2 for databases.",
+    "60s: EBS durable + snapshots. Instance store fast ephemeral. DB on EBS or replicated on local NVMe.",
+    "Follow-up: what happens to instance store on reboot vs stop?"
+  ],
+  "commonPitfalls": [
+    "Database on instance store as sole copy — rejected.",
+    "Strong answer: EBS with snapshots or Cassandra/Kafka style replication on local disk.",
+    "Assuming all instance types have instance store.",
+    "Ignoring DeleteOnTermination on data EBS volumes."
+  ],
+  "relatedTopicIds": [
+    "aws-09-ec2-instances-amis",
+    "aws-09-auto-scaling-groups",
+    "aws-10-s3-storage-classes"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Temp files vs persistent disk",
+      "note": "os.tmpdir() on EC2 is local disk — like instance store scratch. EBS mounted /data is durable like a persistent volume in k8s.",
+      "futureTopicSlug": "aws/ec2/storage"
+    },
+    {
+      "language": "typescript",
+      "concept": "Log rotation on ephemeral disk",
+      "note": "Writing logs to instance store risks loss on replace — ship to CloudWatch Logs or S3 like centralized logging in Node apps.",
+      "futureTopicSlug": "aws/ec2/logging"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon EBS volume types",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-volume-types.html"
+    },
+    {
+      "title": "EC2 instance store",
+      "url": "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/InstanceStorage.html"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "datasync-migration"
+}

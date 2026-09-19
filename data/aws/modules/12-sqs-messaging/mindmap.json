@@ -1,0 +1,52 @@
+{
+  "moduleId": "aws-12-sqs-messaging",
+  "title": "SQS messaging — concept map",
+  "intro": "Amazon Simple Queue Service (SQS) is a managed message queue that buffers work between producers and consumers. Standard queues offer high throughput and best-effort ordering; FIFO queues guarantee order and deduplication within a message group. Consumers pull messages, process them, then delete — but only after the visibility timeout window. When processing fails repeatedly, Dead Letter Queues (DLQs) isolate poison messages. Lambda, SNS, and EventBridge are common producers; idempotent handlers are mandatory because delivery is at-least-once.",
+  "overviewDiagram": {
+    "type": "mermaid",
+    "title": "SQS producer-consumer flow",
+    "source": "flowchart LR\n  P[Producer\\nAPI / SNS / EventBridge] -->|SendMessage| Q[(SQS Queue)]\n  Q -->|ReceiveMessage| C[Consumer\\nLambda / ECS / EC2]\n  C -->|DeleteMessage on success| Q\n  C -->|fail / timeout| Q\n  Q -->|maxReceiveCount exceeded| DLQ[(Dead Letter Queue)]"
+  },
+  "conceptCards": [
+    {
+      "id": "card-standard-fifo",
+      "title": "Standard vs FIFO",
+      "summary": "Standard: unlimited throughput, best-effort order. FIFO: .fifo suffix, message groups, deduplication ID.",
+      "example": "Order pipeline uses FIFO with orderId as MessageGroupId",
+      "topicSlug": "sqs-standard-vs-fifo"
+    },
+    {
+      "id": "card-visibility-dlq",
+      "title": "Visibility & DLQ",
+      "summary": "Hidden message reappears after visibility timeout. Redrive policy sends poison pills to DLQ after N receives.",
+      "example": "visibilityTimeout 6× p99 handler time; maxReceiveCount 3",
+      "topicSlug": "sqs-visibility-dlq"
+    },
+    {
+      "id": "card-lambda-consumer",
+      "title": "Lambda consumer",
+      "summary": "Event source mapping polls SQS, invokes Lambda in batches. ReportBatchItemFailures for partial retry.",
+      "example": "batchSize 10, maximumBatchingWindow 5s, reserved concurrency cap",
+      "topicSlug": "sqs-lambda-consumer"
+    },
+    {
+      "id": "card-fanout",
+      "title": "SNS / EventBridge fan-out",
+      "summary": "One event fans to many SQS queues. Filter policies route by attribute. SQS buffers downstream spikes.",
+      "example": "order.placed → inventory-queue + analytics-queue",
+      "topicSlug": "sns-eventbridge-sqs"
+    },
+    {
+      "id": "card-idempotency",
+      "title": "Idempotency",
+      "summary": "At-least-once delivery means duplicates. Use idempotency keys in DynamoDB or conditional writes.",
+      "example": "paymentId stored before charge; skip if already processed",
+      "topicSlug": "sqs-idempotency"
+    }
+  ],
+  "revisionDiagram": {
+    "type": "mermaid",
+    "title": "SQS revision map",
+    "source": "mindmap\n  root((SQS Messaging))\n    Queue types\n      Standard high throughput\n      FIFO ordering dedup\n      MessageGroupId parallelism\n    Visibility\n      Hidden until timeout\n      ChangeMessageVisibility extend\n      Too short equals duplicate work\n      Too long equals stuck queue\n    DLQ\n      maxReceiveCount redrive\n      Inspect replay tooling\n    Lambda\n      Event source mapping\n      Batch partial failure\n      Scaling with backlog\n    Fan-out\n      SNS to SQS\n      EventBridge rules filters\n    Idempotency\n      At-least-once reality\n      DynamoDB idempotency table\n      Exactly-once is app concern"
+  }
+}

@@ -1,0 +1,237 @@
+{
+  "id": "aws-12-sqs-standard-vs-fifo",
+  "slug": "sqs-standard-vs-fifo",
+  "title": "SQS Standard versus FIFO queues (ordering, throughput, and deduplication)",
+  "moduleId": "aws-12-sqs-messaging",
+  "order": 1,
+  "hook": "Amazon Simple Queue Service (SQS) Standard queues prioritize throughput and availability over strict ordering. FIFO queues guarantee first-in-first-out delivery within a message group and offer deduplication — but naming, throughput, and producer fields differ. Picking the wrong type is a common production mistake.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "SQS Standard queues deliver messages with best-effort ordering and nearly unlimited throughput. FIFO queues require a .fifo suffix on the queue name, support exactly-once processing semantics through deduplication, and process messages in strict order within each MessageGroupId. Different message groups in a FIFO queue run in parallel — one group per customer, shard, or partition key."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Standard queue",
+              "longForm": "SQS Standard queue",
+              "plainDefinition": "Default queue type with high throughput and best-effort ordering.",
+              "example": "Click-stream events where order across users does not matter."
+            },
+            {
+              "term": "FIFO queue",
+              "longForm": "First-In-First-Out queue",
+              "plainDefinition": "Queue guaranteeing order and deduplication within a message group.",
+              "example": "order-payments.fifo with MessageGroupId per customer."
+            },
+            {
+              "term": "MessageGroupId",
+              "longForm": "message group identifier",
+              "plainDefinition": "FIFO key that scopes strict ordering; different groups process in parallel.",
+              "example": "customerId-8821 — all messages for this customer are ordered."
+            },
+            {
+              "term": "MessageDeduplicationId",
+              "longForm": "deduplication identifier",
+              "plainDefinition": "Token preventing duplicate sends within a 5-minute deduplication interval.",
+              "example": "paymentId used as deduplication ID on retry send."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Using a Standard queue for payment sequencing causes double charges when messages reorder. Using FIFO for firehose telemetry caps throughput at 3,000 messages per second per API action (higher with batching and high-throughput mode). The interview question is always: does any consumer need strict order for a subset of messages, and can you partition that subset with MessageGroupId?"
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Standard for throughput and loose ordering. FIFO when order or dedup matters per partition key. MessageGroupId is your parallelism knob."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Choosing queue type",
+          "items": [
+            {
+              "title": "List ordering requirements",
+              "body": "If no consumer cares about global order, Standard is the default."
+            },
+            {
+              "title": "Identify partition key",
+              "body": "Per-customer or per-entity order → FIFO with MessageGroupId."
+            },
+            {
+              "title": "Check throughput",
+              "body": "FIFO caps require high-throughput FIFO or sharded queues if volume exceeds limits."
+            },
+            {
+              "title": "Enable deduplication",
+              "body": "Content-based deduplication or explicit MessageDeduplicationId on every send."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "FIFO message groups",
+            "source": "flowchart TB\n  P[Producer] --> Q[(orders.fifo)]\n  Q --> G1[Group A\\ncustomer-1\\nordered]\n  Q --> G2[Group B\\ncustomer-2\\nordered]\n  Q --> G3[Group C\\ncustomer-3\\nordered]\n  G1 --> C1[Consumer]\n  G2 --> C1\n  G3 --> C1"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create FIFO queue with content-based deduplication",
+            "code": "aws sqs create-queue \\\n  --queue-name order-events.fifo \\\n  --attributes '{\n    \"FifoQueue\": \"true\",\n    \"ContentBasedDeduplication\": \"true\",\n    \"VisibilityTimeout\": \"60\"\n  }'",
+            "explanation": "FifoQueue and .fifo suffix are required. ContentBasedDeduplication hashes the body — omit MessageDeduplicationId when enabled."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — send to FIFO with message group",
+            "code": "aws sqs send-message \\\n  --queue-url https://sqs.us-east-1.amazonaws.com/123456789012/order-events.fifo \\\n  --message-body '{\"orderId\":\"ord-99\",\"action\":\"charge\"}' \\\n  --message-group-id 'customer-8821' \\\n  --message-deduplication-id 'ord-99-charge'",
+            "explanation": "MessageGroupId scopes ordering to one customer. DeduplicationId prevents duplicate charge if producer retries send within 5 minutes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — SQS client send with group and dedup",
+            "code": "import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';\n\nconst sqs = new SQSClient({});\n\nawait sqs.send(new SendMessageCommand({\n  QueueUrl: process.env.ORDER_FIFO_URL!,\n  MessageBody: JSON.stringify({ orderId, action: 'charge' }),\n  MessageGroupId: customerId,\n  MessageDeduplicationId: `${orderId}-charge`,\n}));",
+            "explanation": "AWS SDK v3 requires FIFO fields on send. Missing MessageGroupId throws InvalidParameterValue."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Standard queue for high-throughput events",
+            "code": "Resources:\n  ClickStreamQueue:\n    Type: AWS::SQS::Queue\n    Properties:\n      QueueName: click-stream\n      VisibilityTimeout: 30\n      ReceiveMessageWaitTimeSeconds: 20\n      MessageRetentionPeriod: 345600",
+            "explanation": "No FifoQueue attribute — Standard. Long polling on queue default reduces empty receives for EC2 consumers."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SQS FIFO versus in-process event bus",
+          "headers": ["Aspect", "SQS FIFO", "Node EventEmitter"],
+          "rows": [
+            ["Ordering", "Per MessageGroupId", "Single process only"],
+            ["Durability", "Persisted across restarts", "Lost if process dies"],
+            ["Scale", "Multiple consumers across hosts", "One Node process"],
+            ["Duplicates", "At-least-once; dedup on send only", "No automatic dedup"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "FIFO queue without .fifo suffix fails creation. Standard queue for per-account payment order. Single MessageGroupId for all messages — kills FIFO parallelism. Assuming FIFO eliminates consumer-side duplicates — visibility timeout retries still duplicate."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "High-throughput FIFO raises limits to 70,000 messages per second with batching. How to prove it in production: CloudWatch NumberOfMessagesSent versus throttling errors; if SendMessage returns throttling, shard into multiple FIFO queues by hash prefix. Standard duplicate delivery rate is higher under burst — measure with idempotency table hit rate."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Choice", "When to use", "Downside"],
+          "rows": [
+            ["Standard", "Telemetry, notifications, fan-out buffers", "Best-effort order; more duplicates"],
+            ["FIFO + groups", "Per-entity sequencing (orders, ledger)", "Throughput caps; .fifo naming"],
+            ["Multiple FIFO shards", "Global order not needed but per-shard order is", "Routing logic in producer"],
+            ["Kinesis instead", "Strict global ordering at shard level", "Different programming model"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'FIFO is always better because exactly-once.' Strong answer: FIFO gives ordered groups and send-side dedup within 5 minutes; consumers still need idempotency for receive-side retries."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Standard = throughput + best-effort order; FIFO = strict order per MessageGroupId + send deduplication.",
+    "MessageGroupId is the parallelism partition — one group serial, many groups concurrent.",
+    "Production: enable high-throughput FIFO or shard queues before hitting 3k msg/sec per queue.",
+    "60s: Standard for firehose. FIFO when per-key order matters. GroupId partitions. Dedup is send-side only.",
+    "Follow-up: when would you pick Kinesis over FIFO?"
+  ],
+  "commonPitfalls": [
+    "Using Standard for ledger entries that must not reorder — rejection answer because payment B can process before A.",
+    "Strong answer: FIFO with MessageGroupId per account; compensating logic still required for consumer retries.",
+    "One MessageGroupId for entire queue — serializes all traffic and negates FIFO throughput benefit.",
+    "Forgetting .fifo suffix on queue name — creation fails at deploy time."
+  ],
+  "relatedTopicIds": [
+    "aws-12-sqs-visibility-dlq",
+    "aws-12-sqs-idempotency",
+    "aws-12-sns-eventbridge-sqs"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Async queue workers",
+      "note": "A long-polling ReceiveMessage loop in Node resembles a C# BackgroundService with ExecuteAsync — both pull, process, and ack. See csharp-13-async-await for Task-based worker shutdown and cancellation.",
+      "futureTopicSlug": "csharp-13-async-await"
+    },
+    {
+      "language": "javascript",
+      "concept": "BullMQ / Redis streams ordering",
+      "note": "Redis stream consumer groups give per-stream order similar to FIFO MessageGroupId but you manage Redis durability and scaling yourself.",
+      "futureTopicSlug": "javascript/backend/job-queues"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "FIFO queue logic",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues.html"
+    },
+    {
+      "title": "Amazon SQS quotas",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

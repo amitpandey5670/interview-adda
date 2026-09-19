@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-07-perimeter-and-gateways",
+  "title": "Perimeter and gateways interview drills",
+  "items": [
+    {
+      "question": "Users get 502 from ALB but your Node app logs show no requests. Where do you look?",
+      "answer": "502 means ALB got bad response or no healthy target — not WAF block (that is often 403). Check target group health: describe-target-health. If unhealthy, usually target SG does not allow ALB SG on app port, wrong port in target group, or app not listening on 0.0.0.0. If healthy but 502, app returns invalid response to ALB health check path.",
+      "followUps": [
+        "How does awsvpc ECS mode change SG design?",
+        "Difference between 502 and 503 from ALB?"
+      ],
+      "sixtySeconds": "502 = ALB/target issue. Check target health first. Target SG must allow ALB SG on app port. No app logs means traffic never reached container."
+    },
+    {
+      "question": "Explain security groups versus NACLs with a TCP connection example.",
+      "answer": "SG is stateful ENI firewall: allow inbound 443 from 0.0.0.0/0 and return traffic auto-allowed outbound. NACL is stateless subnet: need inbound 443 allow AND separate outbound ephemeral 1024-65535 allow. NACL has deny rules and lowest rule number wins. Packet hits NACL then SG inbound on way in.",
+      "followUps": [
+        "Can you deny one IP with security groups?",
+        "When would you use NACL deny?"
+      ],
+      "sixtySeconds": "SG stateful allow-only on ENI. NACL stateless numbered allow/deny on subnet. NACL needs return ephemeral rules. Different layers."
+    },
+    {
+      "question": "When do you pick NLB over ALB for a public API?",
+      "answer": "NLB when you need Layer 4 TCP/UDP, extreme performance, preserve client IP trivially, static Elastic IP per AZ, TLS pass-through, or PrivateLink provider service. ALB when you need HTTP path routing, host headers, OIDC auth, AWS WAF on ALB, or WebSocket over HTTP. gRPC over HTTP/2 can use ALB; raw TCP game protocol needs NLB.",
+      "followUps": [
+        "Why must PrivateLink provider use NLB?",
+        "GWLB use case in one sentence?"
+      ],
+      "sixtySeconds": "HTTP features → ALB. TCP/static IP/PrivateLink/performance → NLB. Inline firewall → GWLB."
+    },
+    {
+      "question": "HTTP API versus REST API Gateway — how do you choose?",
+      "answer": "Default HTTP API (v2) for Lambda and HTTP proxy — lower cost and latency. REST API (v1) when you need usage plans, API keys, request validators, or certain integration types not on HTTP API. WebSocket API for persistent connections — separate from both. VPC Link works with both for private backends.",
+      "followUps": [
+        "Can HTTP API attach AWS WAF the same way?",
+        "Lambda timeout vs API Gateway timeout?"
+      ],
+      "sixtySeconds": "HTTP API default. REST for usage plans/API keys/validation. WebSocket for live. Match features to flavor."
+    },
+    {
+      "question": "How do WAF, Shield, and security groups differ?",
+      "answer": "WAF inspects HTTP request content at CloudFront/ALB/API Gateway — SQLi, rate limits, geo block. Shield Standard mitigates network/transport DDoS automatically free. Shield Advanced adds DRT and cost protection. Security groups are ENI TCP/UDP allow rules — no HTTP awareness. All three stack: Shield under DDoS, WAF on HTTP, SG on ENI.",
+      "followUps": [
+        "CLOUDFRONT vs REGIONAL WAF scope?",
+        "False positive on managed rule group — what do you do?"
+      ],
+      "sixtySeconds": "Shield DDoS L3/L4. WAF HTTP L7. SG ENI firewall. Complementary not interchangeable."
+    },
+    {
+      "question": "Walk the full path for https://app.example.com/api/orders from browser to ECS task.",
+      "answer": "Route53 resolves to CloudFront. Client TLS to CloudFront edge. WAF Web ACL evaluates on distribution. Cache miss forwards HTTPS to ALB origin. ALB listener rule routes /api/* to target group. ALB SG allowed 443 inbound; target SG allows 8080 from ALB SG. ECS task receives HTTP with X-Forwarded-For. Response reverses; stateful SG handles return; custom NACL needs outbound ephemeral allow.",
+      "followUps": [
+        "Origin Access Control for S3 vs ALB origin?",
+        "Which hop generates x-amz-cf-id?"
+      ],
+      "sixtySeconds": "DNS → CloudFront → WAF → ALB → dual SG → ECS. Debug each hop with right tool: WAF sampled requests, target health, Flow Logs."
+    },
+    {
+      "question": "Interface VPC endpoint to Secrets Manager times out from Lambda — SG are open to 0.0.0.0/0. Still failing?",
+      "answer": "0.0.0.0/0 on Lambda SG outbound does not replace needing Lambda SG referenced on endpoint ENI inbound for tcp/443. Interface endpoints require both sides. Also verify private DNS, endpoint policy, and Lambda in subnets with route to endpoint. NACL ephemeral outbound if custom NACL in subnet.",
+      "followUps": [
+        "Gateway endpoint SG requirement?",
+        "Lambda in VPC cold start vs timeout distinction?"
+      ],
+      "sixtySeconds": "Interface endpoint needs client SG on endpoint ENI ingress 443. Both ENIs matter. Not Gateway type for Secrets Manager."
+    },
+    {
+      "question": "Your API is under credential-stuffing attack. First AWS controls?",
+      "answer": "WAF rate-based rule per IP on CloudFront or ALB Web ACL — blocks before origin scale-out costs. Enable AWS Managed Rules bot control if licensed. Shield Standard already absorbs volumetric floods; consider Shield Advanced if scaling costs hurt. Application layer: lock accounts, MFA — but perimeter first stop is WAF rate limit to protect origin and bill.",
+      "followUps": [
+        "Shared NAT IP false positive on rate rule?",
+        "AWS WAF Captcha/Challenge when?"
+      ],
+      "sixtySeconds": "WAF rate-based rule at edge first. Managed rules for bots. Shield for DDoS volume. SG cannot rate-limit HTTP."
+    }
+  ]
+}

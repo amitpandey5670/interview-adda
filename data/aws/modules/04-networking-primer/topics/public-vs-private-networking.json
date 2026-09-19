@@ -1,0 +1,191 @@
+{
+  "id": "aws-04-public-vs-private-networking",
+  "slug": "public-vs-private-networking",
+  "title": "Public versus private networking (internet-facing vs internal)",
+  "moduleId": "aws-04-networking-primer",
+  "order": 4,
+  "hook": "Public subnets route to an Internet Gateway so resources can have public IP addresses. Private subnets have no direct internet route — workloads stay hidden while reaching the internet outbound through Network Address Translation (NAT).",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "In a Virtual Private Cloud (VPC), 'public' and 'private' describe routing, not morality. A public subnet has a route table entry 0.0.0.0/0 → Internet Gateway (IGW). Instances with public IPs can receive inbound internet traffic. A private subnet routes 0.0.0.0/0 → NAT Gateway in a public subnet for outbound-only internet access. Databases and application servers belong in private subnets; load balancers and NAT live in public subnets."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "IGW",
+              "longForm": "Internet Gateway",
+              "plainDefinition": "Horizontally scaled VPC component allowing bidirectional internet access for public IPs.",
+              "example": "ALB in public subnet uses IGW for inbound HTTPS."
+            },
+            {
+              "term": "Public IP",
+              "longForm": "Public IPv4 address",
+              "plainDefinition": "Globally routable address assigned to an instance or Elastic IP.",
+              "example": "Bastion host in public subnet with Elastic IP for SSH jump."
+            },
+            {
+              "term": "Security Group",
+              "longForm": "VPC Security Group",
+              "plainDefinition": "Stateful virtual firewall at instance ENI level — allow rules only.",
+              "example": "ALB SG allows 443 from 0.0.0.0/0; app SG allows 8080 only from ALB SG."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The classic interview architecture: internet-facing ALB in public subnets, app tier in private subnets, RDS in private database subnets with no internet route. Security Groups enforce least-privilege traffic between tiers. Putting databases in public subnets is an immediate red flag. Understanding routing tables versus Security Groups prevents 'I opened port 22 to the world but it's private subnet' confusion."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Public subnet = route to IGW. Private subnet = no IGW route, NAT for egress. Security Groups are stateful firewalls on ENIs."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Three-tier traffic flow",
+          "items": [
+            {
+              "title": "Inbound HTTPS",
+              "body": "Internet → IGW → public subnet ALB (Security Group allows 443)."
+            },
+            {
+              "title": "App tier",
+              "body": "ALB → private subnet EC2/ECS (SG allows traffic only from ALB SG)."
+            },
+            {
+              "title": "Database tier",
+              "body": "App → private DB subnet RDS (SG allows 5432 only from app SG)."
+            },
+            {
+              "title": "Outbound updates",
+              "body": "Private instance → NAT Gateway → IGW → internet for package updates."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Public and private subnet layout",
+            "source": "flowchart TB\n  INTERNET[Internet] --> IGW[Internet Gateway]\n  IGW --> PUB[Public subnet - ALB NAT]\n  PUB --> PRIV[Private subnet - App tier]\n  PRIV --> DB[Private DB subnet - RDS]\n  PRIV -->|outbound via NAT| NAT[NAT Gateway]\n  NAT --> IGW"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: public and private route tables",
+            "code": "Resources:\n  PublicRouteTable:\n    Type: AWS::EC2::RouteTable\n    Properties:\n      VpcId: !Ref AppVpc\n  PublicRoute:\n    Type: AWS::EC2::Route\n    DependsOn: InternetGatewayAttachment\n    Properties:\n      RouteTableId: !Ref PublicRouteTable\n      DestinationCidrBlock: 0.0.0.0/0\n      GatewayId: !Ref InternetGateway\n  PrivateRoute:\n    Type: AWS::EC2::Route\n    Properties:\n      RouteTableId: !Ref PrivateRouteTable\n      DestinationCidrBlock: 0.0.0.0/0\n      NatGatewayId: !Ref NatGateway",
+            "explanation": "Public route table points to IGW. Private route table points to NAT — no inbound internet path to private instances."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: Security Group chaining",
+            "code": "Resources:\n  AlbSecurityGroup:\n    Type: AWS::EC2::SecurityGroup\n    Properties:\n      GroupDescription: Allow HTTPS from internet\n      VpcId: !Ref AppVpc\n      SecurityGroupIngress:\n        - IpProtocol: tcp\n          FromPort: 443\n          ToPort: 443\n          CidrIp: 0.0.0.0/0\n  AppSecurityGroup:\n    Type: AWS::EC2::SecurityGroup\n    Properties:\n      SecurityGroupIngress:\n        - IpProtocol: tcp\n          FromPort: 8080\n          ToPort: 8080\n          SourceSecurityGroupId: !Ref AlbSecurityGroup",
+            "explanation": "App tier accepts traffic only from ALB Security Group — not from the open internet."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: verify route tables and associations",
+            "code": "aws ec2 describe-route-tables \\\n  --filters Name=vpc-id,Values=vpc-0abc123 \\\n  --query 'RouteTables[].{RT:RouteTableId,Routes:Routes,Assoc:Associations[].SubnetId}'\n\naws ec2 describe-security-groups \\\n  --filters Name=vpc-id,Values=vpc-0abc123 \\\n  --query 'SecurityGroups[].{Name:GroupName,Ingress:IpPermissions}'",
+            "explanation": "Connectivity debugging starts with route tables (where packets go) and Security Groups (what is allowed)."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare public vs private placement",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Where to place resources",
+          "headers": ["Resource", "Subnet type", "Reason"],
+          "rows": [
+            ["Application Load Balancer", "Public", "Must receive internet inbound"],
+            ["ECS / EC2 app servers", "Private", "No direct internet exposure"],
+            ["RDS database", "Private (no NAT route optional)", "No internet access needed"],
+            ["NAT Gateway", "Public", "Needs IGW route for outbound translation"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Confusing 'private subnet' with 'no outbound internet' — NAT provides egress. Opening Security Group to 0.0.0.0/0 on app tier because 'it's private.' RDS with publicly accessible=true in public subnet."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Public subnet routes to Internet Gateway; private subnet uses NAT for outbound-only internet.",
+    "ALB in public, app and DB in private — Security Groups chain between tiers.",
+    "Route tables control packet path; Security Groups control allowed traffic on ENIs.",
+    "60s: IGW for public inbound/outbound. NAT in public subnet for private egress. SG reference other SGs, not 0.0.0.0/0 on app tier.",
+    "Follow-up: what is the difference between Security Group and Network ACL?"
+  ],
+  "commonPitfalls": [
+    "Thinking private subnet means no internet at all — NAT provides outbound path.",
+    "Strong answer: private = no inbound from internet; outbound via NAT if route exists.",
+    "Security Group 0.0.0.0/0 on SSH for app servers 'because private subnet protects us.'",
+    "RDS publicly accessible in public subnet for 'easier debugging.'"
+  ],
+  "relatedTopicIds": [
+    "aws-04-ip-cidr-subnets",
+    "aws-04-nat-routing-gateways",
+    "aws-04-tls-certificates",
+    "aws-03-iam-fundamentals"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Binding to 0.0.0.0 in containers",
+      "note": "Node in ECS listens on 0.0.0.0:8080 inside the task — reachable only from ALB SG, not the internet, when task runs in private subnet without public IP.",
+      "futureTopicSlug": "aws/networking/ecs-networking"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Internet gateways",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Internet_Gateway.html"
+    },
+    {
+      "title": "Security groups",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-security-groups.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "lambda-vpc"
+}

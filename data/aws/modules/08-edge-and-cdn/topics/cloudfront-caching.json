@@ -1,0 +1,238 @@
+{
+  "id": "aws-08-cloudfront-caching",
+  "slug": "cloudfront-caching",
+  "title": "CloudFront caching — cache keys, TTL, and invalidation",
+  "moduleId": "aws-08-edge-and-cdn",
+  "order": 3,
+  "hook": "CloudFront does not cache 'a URL' — it caches a cache key built from the path, query string, and any headers or cookies you told it to care about. Get the key wrong and you either serve stale assets or leak one user's response to another.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Time To Live (TTL) controls how long an object stays in edge cache before CloudFront revalidates or fetches fresh. TTL comes from the origin Cache-Control header, constrained by the behavior's minimum, default, and maximum TTL settings. The cache key is the tuple CloudFront uses to store and lookup objects — typically path plus selected query parameters plus whitelisted headers and cookies. Invalidation explicitly removes paths from all edge locations; it is slower and costlier than shipping versioned filenames."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TTL",
+              "longForm": "Time To Live",
+              "plainDefinition": "Seconds an object may be served from cache before expiry.",
+              "example": "max-age=31536000 on hashed app.js with immutable flag."
+            },
+            {
+              "term": "Cache key",
+              "longForm": "cache key",
+              "plainDefinition": "Unique identifier for a cached response at the edge.",
+              "example": "/api/users + Authorization header in key = per-user cache entry."
+            },
+            {
+              "term": "Invalidation",
+              "longForm": "cache invalidation",
+              "plainDefinition": "API-driven purge of path patterns from all PoPs.",
+              "example": "create-invalidation --paths '/index.html' after emergency hotfix."
+            },
+            {
+              "term": "Stale-while-revalidate",
+              "longForm": "stale-while-revalidate",
+              "plainDefinition": "Serve stale content while fetching fresh in background.",
+              "example": "Cache-Control: max-age=60, stale-while-revalidate=300"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Caching is a correctness problem before it is a performance problem. A static site with long TTL on /index.html means users run old SPA shells after deploy. An API with TTL 300 and no Authorization in the cache key serves user A's JSON to user B. Senior teams treat cache policies as security boundaries: default deny caching on dynamic paths, immutable long TTL only on content-hashed assets, and invalidation as emergency surgery not deploy workflow."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: cache key = path + query + forwarded headers/cookies. TTL is the minimum of origin Cache-Control and behavior max. Prefer app.v2.js over invalidation."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "TTL resolution on cache miss",
+          "items": [
+            {
+              "title": "Edge receives request",
+              "body": "Compute cache key from cache policy settings."
+            },
+            {
+              "title": "Check edge store",
+              "body": "If key exists and not expired → Hit. If expired → revalidate or fetch based on policy."
+            },
+            {
+              "title": "Origin responds with Cache-Control",
+              "body": "s-maxage applies to shared caches like CloudFront; max-age applies to browsers too."
+            },
+            {
+              "title": "Apply min/default/max caps",
+              "body": "Behavior TTL bounds clip origin values — origin cannot exceed max TTL unless policy allows."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Cache key components",
+            "source": "flowchart LR\n  REQ[Request] --> PATH[URL path]\n  REQ --> QRY[Query strings\\nall or whitelist]\n  REQ --> HDR[Headers in key\\ne.g. Accept-Language]\n  REQ --> CK[Cookies in key\\ne.g. session]\n  PATH --> KEY[Cache key]\n  QRY --> KEY\n  HDR --> KEY\n  CK --> KEY\n  KEY --> STORE[(Edge cache)]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — custom cache policy with header in key",
+            "code": "Resources:\n  ApiCachePolicy:\n    Type: AWS::CloudFront::CachePolicy\n    Properties:\n      CachePolicyConfig:\n        Name: api-tenant-cache\n        DefaultTTL: 60\n        MaxTTL: 300\n        MinTTL: 0\n        ParametersInCacheKeyAndForwardedToOrigin:\n          EnableAcceptEncodingGzip: true\n          HeadersConfig:\n            HeaderBehavior: whitelist\n            Headers:\n              - Authorization\n              - X-Tenant-Id\n          QueryStringsConfig:\n            QueryStringBehavior: whitelist\n            QueryStrings:\n              - page\n          CookiesConfig:\n            CookieBehavior: none",
+            "explanation": "Only cache GET responses where tenant and auth differ per key. Whitelist query strings to avoid ?utm= fragmenting cache. Cookies none prevents accidental session bleed unless you whitelist."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create invalidation and poll completion",
+            "code": "INVALIDATION_ID=$(aws cloudfront create-invalidation \\\n  --distribution-id E1234567890ABC \\\n  --paths '/index.html' '/assets/main-*.js' \\\n  --query 'Invalidation.Id' --output text)\n\naws cloudfront wait invalidation-completed \\\n  --distribution-id E1234567890ABC \\\n  --id \"$INVALIDATION_ID\"",
+            "explanation": "Wildcards allowed in paths. Wait for completed before running smoke tests. First 1,000 paths/month free then per-path charge."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — inspect response headers for cache status",
+            "code": "curl -sI 'https://app.example.com/assets/app.a3f2b1.js' | \\\n  grep -iE '^(x-cache|age|cache-control|via):'\n\n# Example output:\n# cache-control: public, max-age=31536000, immutable\n# x-cache: Hit from cloudfront\n# age: 86400",
+            "explanation": "Age header shows seconds in cache. Hit from cloudfront confirms edge served without origin. Miss on second request means TTL 0 or key mismatch."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — deploy with per-object Cache-Control headers",
+            "code": "aws s3 cp dist/assets/app.a3f2b1.js s3://app-static/assets/app.a3f2b1.js \\\n  --cache-control 'public, max-age=31536000, immutable' \\\n  --content-type 'application/javascript'\n\naws s3 cp dist/index.html s3://app-static/index.html \\\n  --cache-control 'no-cache, must-revalidate' \\\n  --content-type 'text/html'",
+            "explanation": "Hashed bundles get one-year immutable TTL. index.html stays fresh so deploys pick up new script references without invalidating every chunk."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CloudFront TTL vs HTTP caching in Node",
+          "headers": ["Aspect", "CloudFront edge", "Express res.set('Cache-Control')"],
+          "rows": [
+            ["Audience", "All users at PoP", "Browser + any downstream CDN"],
+            ["Override", "Behavior min/max TTL caps origin", "Header sent as-is unless CDN strips"],
+            ["Purge", "Invalidation API", "Must wait TTL or purge CDN separately"],
+            ["Key control", "Cache policy headers/query", "Vary header hints browser only"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forwarding all query strings on static assets — ?v=1 and ?v=2 duplicate cache. Caching Set-Cookie responses. Long TTL on index.html. Using /* invalidation instead of filename hashing. Forgetting s-maxage for CDN-specific TTL separate from browser max-age."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Origin returns Cache-Control: private → CloudFront will not cache even if behavior allows. Use-Origin-Cache-Control-Headers mode respects origin directives precisely. For zero-downtime deploys: blue/green at DNS is overkill for static — ship new hashed assets, update index.html reference, short TTL on HTML. How to prove it in production: compare OriginRequests metric during deploy; spike means poor cache hit. Access log field x-edge-result-type RefreshHit means served stale while revalidating."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Strategy", "When to use", "Downside"],
+          "rows": [
+            ["Versioned URLs", "Every production static deploy", "Requires build pipeline discipline"],
+            ["Invalidation", "Emergency rollback of unhashed file", "Cost, propagation delay, ops toil"],
+            ["Short HTML TTL", "SPA shell picks new chunks", "Extra origin hits on index.html only"],
+            ["Query whitelist", "Pagination APIs with ?page=", "Wrong whitelist = wrong cached page"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'set TTL to 1 day for everything.' Strong answer: immutable hashed assets get max TTL; HTML and APIs get explicit policies; cache key must include any dimension that changes the response body."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Cache key = path + selected query + headers + cookies; TTL is bounded by behavior min/default/max and origin Cache-Control.",
+    "Never cache authenticated APIs unless Authorization (or tenant header) is in the cache key — default is TTL 0.",
+    "Production: ship content-hashed filenames with immutable max-age; reserve invalidation for emergencies.",
+    "60s: Key defines uniqueness. TTL defines freshness. Version URLs beat purge. private and Set-Cookie block cache.",
+    "Follow-up: what is the difference between Hit, Miss, and RefreshHit in access logs?"
+  ],
+  "commonPitfalls": [
+    "Caching /api/* with CachingOptimized policy — rejection answer because it ignores auth in cache key.",
+    "Strong answer: CachingDisabled for APIs; custom policy only for explicitly public GET endpoints.",
+    "Forwarding all query strings causing cache fragmentation on marketing UTM params.",
+    "Long TTL on index.html so users load old SPA after deploy."
+  ],
+  "relatedTopicIds": [
+    "aws-08-cdn-fundamentals",
+    "aws-08-cloudfront-distributions",
+    "aws-08-cloudfront-s3",
+    "aws-08-cloudfront-api-alb"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Cache-Control in fetch and service workers",
+      "note": "Service worker cache is browser-local. CloudFront cache is shared — stale-while-revalidate at edge does not automatically apply in the service worker unless you implement it.",
+      "futureTopicSlug": "javascript/browser/service-workers"
+    },
+    {
+      "language": "typescript",
+      "concept": "Vite / webpack content hashing",
+      "note": "import.meta.url and chunk filenames include content hash — designed for CDN immutable caching. index.html is the only file that must stay short-TTL.",
+      "futureTopicSlug": "typescript/tooling/bundler-output"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Understanding how CloudFront caches content",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/UnderstandingCache.html"
+    },
+    {
+      "title": "Invalidate files",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "cloudfront-origin"
+}

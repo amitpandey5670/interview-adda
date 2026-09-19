@@ -1,0 +1,237 @@
+{
+  "id": "aws-12-sqs-visibility-dlq",
+  "slug": "sqs-visibility-dlq",
+  "title": "Visibility timeout, retries, and Dead Letter Queues (DLQ)",
+  "moduleId": "aws-12-sqs-messaging",
+  "order": 2,
+  "hook": "When a consumer receives an SQS message, it becomes invisible to other consumers for the visibility timeout. If processing fails or takes too long, the message reappears — or after too many attempts, lands in a Dead Letter Queue (DLQ) for inspection.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Visibility timeout is the interval during which a received message is hidden from other pollers. Successful processing ends with DeleteMessage. Failure without delete causes redelivery after timeout. A redrive policy moves messages to a DLQ after maxReceiveCount failed receives. DLQs isolate poison messages so the main queue keeps flowing."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Visibility timeout",
+              "longForm": "message visibility timeout",
+              "plainDefinition": "Seconds a message is hidden after ReceiveMessage.",
+              "example": "60 seconds — handler must finish or extend visibility."
+            },
+            {
+              "term": "DLQ",
+              "longForm": "Dead Letter Queue",
+              "plainDefinition": "Queue holding messages that exceeded max receive attempts.",
+              "example": "orders-dlq receives malformed JSON after 3 failures."
+            },
+            {
+              "term": "maxReceiveCount",
+              "longForm": "maximum receive count",
+              "plainDefinition": "Redrive threshold before message moves to DLQ.",
+              "example": "3 — third failed receive triggers DLQ move."
+            },
+            {
+              "term": "Redrive",
+              "longForm": "DLQ redrive",
+              "plainDefinition": "Moving messages from DLQ back to source queue after fix.",
+              "example": "start-dlq-redrive after deploying parser fix."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Visibility timeout shorter than handler duration causes duplicate processing — the classic SQS bug. No DLQ means poison messages retry forever, inflating queue depth and costs. Senior engineers alarm on DLQ depth and set visibility to roughly 6× Lambda timeout per AWS guidance."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: visibility hides in-flight work. Too short = duplicates. maxReceiveCount + DLQ = circuit breaker for poison pills."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Message lifecycle with DLQ",
+          "items": [
+            {
+              "title": "Receive",
+              "body": "Consumer gets message; visibility clock starts."
+            },
+            {
+              "title": "Process",
+              "body": "Success → DeleteMessage. Failure → do not delete."
+            },
+            {
+              "title": "Timeout or fail",
+              "body": "Message visible again; ApproximateReceiveCount increments."
+            },
+            {
+              "title": "Exceed maxReceiveCount",
+              "body": "SQS moves message to configured DLQ automatically."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Visibility and DLQ path",
+            "source": "stateDiagram-v2\n  [*] --> Visible\n  Visible --> InFlight: ReceiveMessage\n  InFlight --> Deleted: DeleteMessage success\n  InFlight --> Visible: visibility timeout\n  Visible --> DLQ: receiveCount >= maxReceiveCount"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — main queue with DLQ redrive",
+            "code": "Resources:\n  OrdersDLQ:\n    Type: AWS::SQS::Queue\n    Properties:\n      QueueName: orders-dlq\n  OrdersQueue:\n    Type: AWS::SQS::Queue\n    Properties:\n      QueueName: orders\n      VisibilityTimeout: 180\n      RedrivePolicy:\n        deadLetterTargetArn: !GetAtt OrdersDLQ.Arn\n        maxReceiveCount: 3",
+            "explanation": "RedrivePolicy links DLQ. VisibilityTimeout 180 suits Lambda with 30s timeout × 6 rule of thumb."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — extend visibility during long processing",
+            "code": "aws sqs change-message-visibility \\\n  --queue-url \"$QUEUE_URL\" \\\n  --receipt-handle \"$RECEIPT_HANDLE\" \\\n  --visibility-timeout 300",
+            "explanation": "Call periodically for jobs longer than initial visibility. Receipt handle invalid after delete or timeout expiry."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — heartbeat visibility extension",
+            "code": "async function processWithHeartbeat(\n  queueUrl: string,\n  receiptHandle: string,\n  work: () => Promise<void>,\n) {\n  const interval = setInterval(() => {\n    sqs.send(new ChangeMessageVisibilityCommand({\n      QueueUrl: queueUrl,\n      ReceiptHandle: receiptHandle,\n      VisibilityTimeout: 120,\n    })).catch(console.error);\n  }, 60_000);\n  try {\n    await work();\n  } finally {\n    clearInterval(interval);\n  }\n}",
+            "explanation": "Pattern for EC2/ECS workers with variable duration. Lambda usually sets visibility via event source mapping instead."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — redrive DLQ messages after fix",
+            "code": "aws sqs start-message-move-task \\\n  --source-arn arn:aws:sqs:us-east-1:123456789012:orders-dlq \\\n  --destination-arn arn:aws:sqs:us-east-1:123456789012:orders \\\n  --max-number-of-messages-per-second 50",
+            "explanation": "DLQ redrive API replays after root cause fixed. Throttle rate to avoid overwhelming consumers."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SQS visibility versus BullMQ stalled jobs",
+          "headers": ["Aspect", "SQS visibility", "BullMQ stalled interval"],
+          "rows": [
+            ["Mechanism", "AWS-managed hide timer", "Worker heartbeat in Redis"],
+            ["Poison handling", "DLQ after maxReceiveCount", "failed event + manual inspect"],
+            ["Extension", "ChangeMessageVisibility API", "job.progress() heartbeat"],
+            ["Ops model", "CloudWatch metrics", "Bull Board UI"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Visibility timeout 30s with 5-minute Lambda. No DLQ on production queues. maxReceiveCount 100 — delays poison detection. Deleting message before work commits to database — message lost on crash after delete."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: plot ApproximateNumberOfMessagesNotVisible alongside Errors — rising invisible count with duplicates in DB confirms visibility misconfiguration. DLQ alarm threshold ≥ 1 message for payment queues. Inspect ApproximateReceiveCount on sample messages before redrive."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Setting", "Low value effect", "High value effect"],
+          "rows": [
+            ["Visibility timeout", "Duplicate processing", "Slow failure recovery"],
+            ["maxReceiveCount", "Fast DLQ on transient blips", "Slow poison detection"],
+            ["Heartbeat extension", "Handles variable jobs", "Complex worker code"],
+            ["Immediate delete", "No retry on crash after delete", "Must commit before delete"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'set visibility to same as Lambda timeout.' Strong answer: 6× Lambda timeout or heartbeat extension; delete only after idempotent commit."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Visibility timeout hides in-flight messages; shorter than handler duration causes duplicates.",
+    "DLQ + maxReceiveCount isolates poison messages — alarm DLQ depth in production.",
+    "Delete message only after durable commit; extend visibility for long jobs.",
+    "60s: Visibility 6× handler. DLQ after 3 receives. Alarm DLQ. Redrive after fix not before.",
+    "Follow-up: how does Lambda event source mapping set visibility automatically?"
+  ],
+  "commonPitfalls": [
+    "Visibility 30s with 2-minute handler — classic duplicate charge scenario.",
+    "Strong answer: 6× timeout or ChangeMessageVisibility heartbeat during processing.",
+    "No DLQ — poison message retries forever inflating costs.",
+    "Deleting message before database transaction commits — data loss on crash."
+  ],
+  "relatedTopicIds": [
+    "aws-12-sqs-standard-vs-fifo",
+    "aws-12-sqs-lambda-consumer",
+    "aws-14-lambda-sqs-debug-runbook"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Worker retry with backoff",
+      "note": "C# Polly retry policies on SQS receive map to manual re-queue with DelaySeconds — similar to BackgroundService catch block with exponential backoff before rethrow.",
+      "futureTopicSlug": "csharp-13-async-await"
+    },
+    {
+      "language": "javascript",
+      "concept": "Ack/nack in AMQP",
+      "note": "RabbitMQ nack requeue resembles not deleting SQS message; DLQ is like dead-letter exchange after max retries.",
+      "futureTopicSlug": "javascript/backend/message-brokers"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Visibility timeout",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html"
+    },
+    {
+      "title": "Using dead-letter queues",
+      "url": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "sqs-consumer"
+}

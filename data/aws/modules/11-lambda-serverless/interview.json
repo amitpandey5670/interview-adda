@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-11-lambda-serverless",
+  "title": "lambda-serverless interview drills",
+  "items": [
+    {
+      "question": "Explain what persists between two Lambda invocations on the same execution environment.",
+      "answer": "Static init code, global variables, and /tmp contents may persist until AWS recycles the environment — not guaranteed. Never rely on in-memory state for correctness. Database connection pools can reuse TCP if still open. Strong answer: design stateless handlers; externalize session to DynamoDB or ElastiCache; treat warm reuse as optimization only.",
+      "followUps": [
+        "When is /tmp cleared?",
+        "Connection pool stale connections?"
+      ],
+      "sixtySeconds": "Globals and /tmp may persist warm — not guaranteed. Stateless design. External store for session. Init outside handler for perf."
+    },
+    {
+      "question": "API Gateway + Lambda P99 spikes on cold starts. Mitigations?",
+      "answer": "Provisioned concurrency on function alias, reduce package size, ARM Graviton2, SnapStart for Java, avoid VPC unless needed, keep handler lean. CloudWatch InitDuration metric proves cold contribution. Tradeoff: provisioned concurrency cost 24/7. Weak: only increase memory without measuring init.",
+      "followUps": [
+        "SnapStart limitations?",
+        "Lambda@Edge cold starts?"
+      ],
+      "sixtySeconds": "Provisioned concurrency. Smaller package. Avoid VPC if possible. InitDuration metric. ARM/SnapStart for JVM."
+    },
+    {
+      "question": "Lambda in VPC cannot reach S3 or DynamoDB. Fix without NAT Gateway cost?",
+      "answer": "Add VPC gateway endpoint for S3 and interface endpoints for DynamoDB (and other APIs). Route tables for gateway endpoint automatic. SG on interface endpoints allow 443 from Lambda SG. Strong: split functions — VPC only for RDS access; public API functions outside VPC use IAM to S3.",
+      "followUps": [
+        "Gateway vs interface endpoint?",
+        "Hyperplane ENI impact on cold start?"
+      ],
+      "sixtySeconds": "S3 gateway endpoint free. Interface endpoints for DynamoDB. Or run non-VPC Lambda for AWS API calls."
+    },
+    {
+      "question": "S3 upload triggers Lambda twice for one file. Is that a bug?",
+      "answer": "S3 event notifications are at-least-once — duplicates possible on retry or rare double delivery. Not a bug if handler is idempotent using object key + versionId/etag conditional write. Compare with SQS event source mapping partial batch failures. Weak: assume exactly-once from S3 events.",
+      "followUps": [
+        "How idempotency with DynamoDB?",
+        "EventBridge vs S3 notification?"
+      ],
+      "sixtySeconds": "S3 events at-least-once. Idempotent handler on key+etag. DynamoDB conditional write for dedup."
+    },
+    {
+      "question": "Function throttled with 429 — account limit or function limit?",
+      "answer": "Check ConcurrentExecutions metric vs account limit (default 1000 soft). Reserved concurrency on one function reduces pool for others — can cause throttling elsewhere. Burst limits apply per Region. Fix: request limit increase, tune reserved concurrency, SQS buffer to smooth spikes, optimize duration to free concurrency faster.",
+      "followUps": [
+        "What is unreserved concurrency?",
+        "Does provisioned concurrency count against limit?"
+      ],
+      "sixtySeconds": "Check account vs reserved concurrency. 429 = no capacity. SQS buffer. Limit increase. Faster handlers free slots."
+    },
+    {
+      "question": "When would you reject Lambda for a new microservice?",
+      "answer": "Sustained high QPS with minimal idle (EC2/Fargate cheaper), WebSocket/long-lived TCP, execution >15 min, custom kernel or GPU drivers, strict predictable latency without provisioned concurrency budget, legacy monolith lift without decomposition. Strong: Lambda for event-driven, spiky, short work; Fargate for containerized steady services; EC2 for full control.",
+      "followUps": [
+        "Lambda vs Fargate cost crossover?",
+        "Step Functions for long workflows?"
+      ],
+      "sixtySeconds": "Reject Lambda for long TCP, >15 min jobs, steady 24/7 load, kernel/GPU needs. Use Fargate/EC2."
+    },
+    {
+      "question": "Configure DLQ for async Lambda invoked by S3.",
+      "answer": "Set DeadLetterConfig TargetArn to SQS queue or SNS topic on function. IAM lambda:SendMessage to DLQ. Async invoke retries twice (1 min, 2 min) then DLQ. Monitor DLQ depth alarm. Redrive after fix. Sync API Gateway invokes return 502 to client — different path. Event source mapping failures use separate DLQ on mapping for SQS.",
+      "followUps": [
+        "Retry count configurable?",
+        "Difference mapping DLQ vs function DLQ?"
+      ],
+      "sixtySeconds": "DeadLetterConfig on function for async. Alarms on DLQ depth. Mapping has own DLQ for poll failures."
+    },
+    {
+      "question": "Compare Lambda provisioned concurrency vs EC2 ASG for a Node API.",
+      "answer": "Provisioned concurrency: no server patch burden, scales to zero possible without PC, 15 min cap, per-invoke billing + PC hourly. EC2 ASG: always-on cost, full OS control, WebSockets, predictable per-hour with Reserved Instances, you manage AMI and scaling policies. Crossover: steady traffic 24/7 often cheaper on small ASG; spiky or low traffic Lambda wins.",
+      "followUps": [
+        "Lambda on Graviton pricing?",
+        "ALB vs API Gateway with Lambda?"
+      ],
+      "sixtySeconds": "Steady load → EC2 ASG often cheaper. Spiky/short → Lambda. PC adds fixed cost. EC2 for WebSockets and long jobs."
+    }
+  ]
+}

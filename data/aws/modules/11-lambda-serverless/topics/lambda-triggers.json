@@ -1,0 +1,277 @@
+{
+  "id": "aws-11-lambda-triggers",
+  "slug": "lambda-triggers",
+  "title": "Lambda triggers and event sources",
+  "moduleId": "aws-11-lambda-serverless",
+  "order": 4,
+  "hook": "Lambda integrates with S3, API Gateway, SQS, EventBridge, DynamoDB streams, and more — each trigger differs in invoke mode, batching, and retry semantics.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lambda triggers include synchronous invokes (API Gateway, ALB Lambda target) returning errors to caller, and asynchronous invokes (S3, SNS, EventBridge) with automatic retry and optional Dead Letter Queue (DLQ). Event source mappings poll Amazon SQS, Kinesis, and DynamoDB streams with batching and partial failure responses."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Sync invoke",
+              "longForm": "Lambda synchronous invocation",
+              "plainDefinition": "Caller waits for response — API Gateway, direct invoke.",
+              "example": "API returns 502 if Lambda throws."
+            },
+            {
+              "term": "Async invoke",
+              "longForm": "Lambda asynchronous invocation",
+              "plainDefinition": "Lambda queues invoke, retries twice, then DLQ.",
+              "example": "S3 ObjectCreated notification."
+            },
+            {
+              "term": "Event source mapping",
+              "longForm": "Lambda event source mapping",
+              "plainDefinition": "Lambda polls stream/queue and invokes with batch.",
+              "example": "SQS batch size 10 with window 5s."
+            },
+            {
+              "term": "DLQ",
+              "longForm": "Dead Letter Queue",
+              "plainDefinition": "Destination for failed async invokes after retries.",
+              "example": "SQS queue captures failed S3 processor events."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Wrong invoke type expectations — S3 trigger does not block upload on handler failure. SQS mapping needs ReportBatchItemFailures for partial batch retry. API Gateway 502 when unhandled exception in sync invoke."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: sync vs async invoke. Event source mapping for queues/streams. S3 async at-least-once. API Gateway sync timeout 29s integration limit."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Wire a trigger",
+          "items": [
+            {
+              "title": "Choose integration",
+              "body": "API sync vs S3 async vs SQS mapping vs EventBridge rule."
+            },
+            {
+              "title": "Grant permissions",
+              "body": "Resource policy on Lambda for S3; IAM for mapping poller."
+            },
+            {
+              "title": "Configure batch/retry",
+              "body": "SQS partial batch failure; async DLQ on function."
+            },
+            {
+              "title": "Test failure modes",
+              "body": "Verify retry, DLQ depth alarm, idempotent handler."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Trigger types",
+            "source": "flowchart TB\n  APIGW[API Gateway] -->|sync| L[Lambda]\n  S3[S3 event] -->|async retry| L\n  SQS[SQS queue] -->|event source mapping| L\n  EB[EventBridge rule] -->|async| L\n  L --> DLQ[DLQ after retries]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "SQS event source mapping",
+            "code": "Mapping:\n  Type: AWS::Lambda::EventSourceMapping\n  Properties:\n    FunctionName: !Ref Worker\n    EventSourceArn: !GetAtt WorkQueue.Arn\n    BatchSize: 10\n    MaximumBatchingWindowInSeconds: 5\n    FunctionResponseTypes:\n      - ReportBatchItemFailures",
+            "explanation": "Partial batch failure returns failed message IDs only for retry."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "EventBridge rule target Lambda",
+            "code": "OrderRule:\n  Type: AWS::Events::Rule\n  Properties:\n    EventPattern:\n      source: [custom.orders]\n      detail-type: [OrderPlaced]\n    Targets:\n      - Arn: !GetAtt OrderHandler.Arn\n        Id: OrderLambda\nPermission:\n  Type: AWS::Lambda::Permission\n  Properties:\n    Action: lambda:InvokeFunction\n    FunctionName: !Ref OrderHandler\n    Principal: events.amazonaws.com\n    SourceArn: !GetAtt OrderRule.Arn",
+            "explanation": "EventBridge needs Lambda permission for events.amazonaws.com principal."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create event source mapping",
+            "code": "aws lambda create-event-source-mapping \\\n  --function-name Worker \\\n  --event-source-arn arn:aws:sqs:ap-south-1:123456789012:work-queue \\\n  --batch-size 10 \\\n  --function-response-types ReportBatchItemFailures",
+            "explanation": "Enable partial batch failures for SQS consumer best practice."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List event source mappings",
+            "code": "aws lambda list-event-source-mappings \\\n  --function-name Worker \\\n  --query 'EventSourceMappings[].{UUID:UUID,State:State,Batch:BatchSize}'",
+            "explanation": "State Enabled required — Disabled stops polling."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "S3 trigger",
+              "Async, at-least-once",
+              "Express POST handler sync"
+            ],
+            [
+              "API Gateway",
+              "Sync, caller sees error",
+              "REST route await handler"
+            ],
+            [
+              "SQS mapping",
+              "Poll batch, delete on success",
+              "while loop ReceiveMessage worker"
+            ],
+            [
+              "EventBridge",
+              "Filtered async routing",
+              "topic subscription pattern"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Expecting S3 to retry until handler succeeds — async retries then DLQ only. SQS mapping without partial batch failure duplicates successful records. API Gateway timeout shorter than Lambda timeout causes 504."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "EventBridge Pipes connect sources to targets with transformation. Kinesis enhanced fan-out for multiple consumers. How to prove it in production: IteratorAge for streams, ApproximateAgeOfOldestMessage for queue, DLQ alarm, API Gateway 5xx vs Lambda Errors correlation."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "S3 direct Lambda",
+              "Simple ETL",
+              "Burst throttling"
+            ],
+            [
+              "S3 SQS Lambda",
+              "Buffer backpressure",
+              "More moving parts"
+            ],
+            [
+              "API sync",
+              "User-facing latency",
+              "Must handle errors in response"
+            ],
+            [
+              "EventBridge",
+              "Schema evolution filter",
+              "Rule quota limits"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Treating S3 trigger as sync blocking upload gets rejected. Strong answer: async retry + DLQ + idempotent handler."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Sync invokes return errors to caller; async retries then DLQ.",
+    "Event source mappings poll SQS/Kinesis with batching options.",
+    "S3 events at-least-once — idempotent processing required.",
+    "60s: API sync. S3 async + DLQ. SQS mapping with partial batch failure. EventBridge filtered async.",
+    "Follow-up: difference mapping DLQ vs function DLQ?"
+  ],
+  "commonPitfalls": [
+    "S3 trigger exactly-once assumption — rejected.",
+    "Strong answer: idempotent on key; async retries twice then DLQ.",
+    "SQS whole batch retry on one failure without ReportBatchItemFailures.",
+    "Lambda timeout > API Gateway integration timeout."
+  ],
+  "relatedTopicIds": [
+    "aws-10-s3-events-hosting",
+    "aws-11-lambda-concurrency-dlq",
+    "aws-11-lambda-execution-environment"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "SQS partial batch failure response",
+      "note": "return { batchItemFailures: [{ itemIdentifier: msg.messageId }] } — typed in TypeScript for SQSBatchResponse.",
+      "futureTopicSlug": "aws/lambda/sqs-batch"
+    },
+    {
+      "language": "typescript",
+      "concept": "API Gateway proxy integration",
+      "note": "APIGatewayProxyResult statusCode/body — like Express res.status().json() returned from handler.",
+      "futureTopicSlug": "aws/lambda/apigw"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Lambda event sources",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-services.html"
+    },
+    {
+      "title": "SQS event source mapping",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "sqs-consumer"
+}

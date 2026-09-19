@@ -1,0 +1,267 @@
+{
+  "id": "aws-17-identity-foundation-sso",
+  "slug": "identity-foundation-sso",
+  "title": "Identity foundation (IAM Identity Center SSO)",
+  "moduleId": "aws-17-cloud-foundation",
+  "order": 4,
+  "hook": "IAM Identity Center (formerly AWS Single Sign-On) is the enterprise identity hub. Users authenticate once via your corporate IdP and receive short-lived credentials to access multiple AWS accounts with permission sets.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Identity Center integrates with Okta, Azure AD, or other SAML/OIDC IdPs. Permission sets are IAM role templates assigned per account. Users see an access portal listing accounts they can enter. No long-lived IAM users. Cross-account roles are assumed via Identity Center — central audit of who accessed what account."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Identity Center",
+              "longForm": "IAM Identity Center",
+              "plainDefinition": "AWS SSO service for multi-account access",
+              "example": "Okta SAML federation"
+            },
+            {
+              "term": "Permission set",
+              "longForm": "SSO permission set",
+              "plainDefinition": "IAM role template for account access",
+              "example": "ReadOnly vs PowerUser per OU"
+            },
+            {
+              "term": "IdP",
+              "longForm": "Identity Provider",
+              "plainDefinition": "Corporate directory — Okta, Azure AD",
+              "example": "SAML assertion to AWS"
+            },
+            {
+              "term": "Access portal",
+              "longForm": "AWS access portal",
+              "plainDefinition": "User UI to pick account and role",
+              "example": "User clicks Prod → AdminAccess"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Landing zones fail without identity foundation. Interviewers ask how 500 engineers access 50 accounts without 500×50 IAM users. Answer: SSO permission sets with least privilege per OU."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: corporate IdP → Identity Center → permission sets → account roles. No IAM users."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Configure IdP federation",
+              "body": "SAML 2.0 or OIDC trust between corporate IdP and Identity Center."
+            },
+            {
+              "title": "Create permission sets",
+              "body": "Map job roles: Developer, ReadOnly, SecurityAudit — least privilege."
+            },
+            {
+              "title": "Assign to accounts",
+              "body": "Assign permission sets per account or OU via groups."
+            },
+            {
+              "title": "Audit access",
+              "body": "CloudTrail logs sts:AssumeRoleWithSAML from Identity Center."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "SSO flow",
+            "source": "sequenceDiagram\n  User->>IdP: Login\n  IdP->>IdentityCenter: SAML assertion\n  User->>IdentityCenter: Pick account+role\n  IdentityCenter->>Account: AssumeRole short-lived creds"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create permission set",
+            "code": "aws sso-admin create-permission-set \\\n  --name DeveloperAccess \\\n  --session-duration PT8H",
+            "explanation": "Template for developer role in workload accounts."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Attach managed policy",
+            "code": "aws sso-admin attach-managed-policy-to-permission-set \\\n  --permission-set-arn arn:aws:sso:::permissionSet/ps-abc \\\n  --managed-policy-arn arn:aws:iam::aws:policy/PowerUserAccess",
+            "explanation": "Least privilege — prefer custom policy over PowerUser in prod."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Assign to account",
+            "code": "aws sso-admin create-account-assignment \\\n  --instance-arn arn:aws:sso:::instance/ssoins-abc \\\n  --permission-set-arn arn:aws:sso:::permissionSet/ps-abc \\\n  --principal-id group-dev \\\n  --principal-type GROUP \\\n  --target-id 123456789012 \\\n  --target-type AWS_ACCOUNT",
+            "explanation": "Dev group gets DeveloperAccess in dev account only."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI login via SSO",
+            "code": "aws configure sso\naws sso login --profile prod-admin",
+            "explanation": "Developers use short-lived creds — no access keys in ~/.aws/credentials."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Identity",
+              "Identity Center SSO",
+              "OAuth login to internal admin UI"
+            ],
+            [
+              "Roles",
+              "Permission sets per account",
+              "RBAC middleware per route"
+            ],
+            [
+              "Audit",
+              "CloudTrail AssumeRoleWithSAML",
+              "Auth logs in app DB"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "PowerUserAccess permission set on production accounts. IAM users alongside SSO — shadow access. No group-based assignment — manual per-user grants."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: zero IAM users with console access; permission set review quarterly; CloudTrail identity queries for break-glass usage only."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Group-based assignment",
+              "Scales to thousands",
+              "Group hygiene in IdP"
+            ],
+            [
+              "ABAC permission sets",
+              "Fine-grained",
+              "Complex attribute rules"
+            ],
+            [
+              "Separate IdP groups per OU",
+              "Clear blast radius",
+              "More groups to manage"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "IAM users with access keys for developers — rejected. Strong answer: Identity Center, permission sets, IdP groups, short-lived creds."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Identity Center = corporate SSO to multi-account AWS access.",
+    "Permission sets are role templates — assign via IdP groups.",
+    "No long-lived IAM users for humans.",
+    "60s: IdP SAML to Identity Center, permission sets per role, assign groups to accounts, CloudTrail audit. Landing zone identity pillar.",
+    "Follow-up: how do CI/CD pipelines authenticate without IAM users?"
+  ],
+  "commonPitfalls": [
+    "IAM user access keys for humans — rejected.",
+    "Strong answer: OIDC for CI, Identity Center for humans, roles everywhere.",
+    "PowerUser on prod accounts.",
+    "No periodic permission set review."
+  ],
+  "relatedTopicIds": [
+    "aws-17-landing-zone-concept",
+    "aws-17-account-vending-guardrails",
+    "aws-17-centralized-logging-baseline"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "OIDC for CI",
+      "note": "GitHub Actions OIDC to AWS replaces IAM user keys — same federation principle as SSO.",
+      "futureTopicSlug": "javascript/cloud/iam"
+    },
+    {
+      "language": "typescript",
+      "concept": "Session tokens",
+      "note": "SSO short-lived creds like JWT expiry — design apps for token refresh not static secrets.",
+      "futureTopicSlug": "typescript/security/auth"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Cloud Foundation",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/welcome.html"
+    },
+    {
+      "title": "IAM Identity Center",
+      "url": "https://docs.aws.amazon.com/singlesignon/latest/userguide/what-is.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

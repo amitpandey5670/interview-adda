@@ -1,0 +1,96 @@
+{
+  "moduleId": "aws-12-sqs-messaging",
+  "title": "SQS messaging interview drills",
+  "items": [
+    {
+      "question": "Your order service must process payments in strict sequence per customer but handle 10,000 customers in parallel. Which SQS queue type and what key fields do you set?",
+      "answer": "Use a FIFO queue with MessageGroupId set to customerId. Messages within the same group are strictly ordered and processed one at a time; different groups run in parallel up to FIFO throughput limits (3,000 messages/sec with batching, higher with high-throughput mode). Set MessageDeduplicationId or enable content-based deduplication to prevent duplicate charges within the 5-minute dedup window. Tradeoff: FIFO costs more and has naming constraints (.fifo suffix); Standard would break ordering guarantees.",
+      "followUps": [
+        "What happens if one customer's messages poison the group?",
+        "How does high-throughput FIFO differ from standard FIFO limits?"
+      ],
+      "sixtySeconds": "FIFO queue. MessageGroupId = customerId for per-customer order. Parallel across groups. DeduplicationId for idempotent sends. Not Standard — best-effort order."
+    },
+    {
+      "question": "Messages are being processed twice after you deployed a slower Lambda handler. What SQS setting is wrong?",
+      "answer": "Visibility timeout is shorter than handler duration. When a consumer receives a message it becomes invisible; if processing exceeds visibility timeout, another consumer sees the same message. Fix: set visibility timeout to at least 6× the Lambda timeout (AWS recommendation) or call ChangeMessageVisibility to extend during long work. Also verify the handler deletes the message only after successful processing. CloudWatch metric ApproximateNumberOfMessagesNotVisible rising with duplicate side effects confirms this.",
+      "followUps": [
+        "How does ChangeMessageVisibility help for variable-duration jobs?",
+        "What is the relationship between Lambda timeout and visibility timeout?"
+      ],
+      "sixtySeconds": "Visibility timeout too short. Message reappears while still processing. Set 6× handler time. Extend with ChangeMessageVisibility for long jobs."
+    },
+    {
+      "question": "Your DLQ has 500 messages after a bad deploy. Walk through recovery without re-poisoning production.",
+      "answer": "Stop the bleeding: disable or scale down the broken consumer, fix the code, deploy. Inspect DLQ messages in console or via receive-message to identify failure pattern (malformed JSON, missing env var). Replay with a script that send-message copies back to main queue in small batches, or use DLQ redrive feature (start-dlq-redrive) after fix is verified. Set maxReceiveCount (e.g. 3) and alarm on DLQ ApproximateNumberOfMessagesVisible. Do not blindly redrive without understanding root cause — poison messages will return.",
+      "followUps": [
+        "What maxReceiveCount do you recommend for payment processing?",
+        "How do you alarm before DLQ fills completely?"
+      ],
+      "sixtySeconds": "Fix consumer first. Inspect DLQ payloads. Redrive in batches after deploy. Alarm DLQ depth. maxReceiveCount 3 typical. Never blind replay."
+    },
+    {
+      "question": "Lambda processing an SQS batch of 10 messages fails on message 7. How do you avoid reprocessing messages 1–6?",
+      "answer": "Enable ReportBatchItemFailures on the event source mapping and return batchItemFailures with only the failed messageId in the Lambda response. SQS partial batch response (since 2021) retries only failed items; successful ones are deleted. Without this, the entire batch returns to the queue on any failure. Also tune batchSize — smaller batches reduce blast radius. Tradeoff: more Lambda invocations vs finer retry granularity.",
+      "followUps": [
+        "What happens if you throw an unhandled exception with ReportBatchItemFailures enabled?",
+        "How does maximumBatchingWindow interact with partial failure?"
+      ],
+      "sixtySeconds": "ReportBatchItemFailures on mapping. Return failed messageIds only. Rest deleted. Without it whole batch retries. Tune batchSize down for critical paths."
+    },
+    {
+      "question": "Design fan-out: one order.placed event must update inventory, send email, and write analytics — all independently scalable.",
+      "answer": "Publish to SNS topic or EventBridge bus with order.placed detail. Three SQS queues subscribe (SNS) or are targeted (EventBridge) with filter policies if needed. Each queue has its own Lambda consumer with independent scaling and DLQ. SQS buffers spikes so a slow analytics pipeline does not block inventory. EventBridge gives schema registry and content-based filtering; SNS is simpler for pure fan-out. Queue policies must allow the publisher principal.",
+      "followUps": [
+        "SNS versus EventBridge for this pattern?",
+        "How do you handle duplicate events across three queues?"
+      ],
+      "sixtySeconds": "SNS or EventBridge fan-out to three SQS queues. Independent Lambdas per queue. Filters on EventBridge. Queue policy allows publisher. Idempotent each consumer."
+    },
+    {
+      "question": "A payment handler double-charged a customer. Root cause is SQS at-least-once delivery. How do you prevent recurrence?",
+      "answer": "Implement idempotency: extract paymentId from message, conditional write to DynamoDB idempotency table (attribute_not_exists) before charging. If conditional fails, skip — already processed. Store result status for replay queries. Use FIFO with deduplication for send-side dedup but consumer idempotency is still mandatory because visibility timeout retries also cause duplicates. Strong interview answer: exactly-once is an application property, not an SQS guarantee.",
+      "followUps": [
+        "Where do you store idempotency keys and what TTL?",
+        "Does FIFO alone solve double-charge?"
+      ],
+      "sixtySeconds": "DynamoDB idempotency table. Conditional put before charge. FIFO dedup helps send side only. Consumer must be idempotent — at-least-once is guaranteed."
+    },
+    {
+      "question": "SQS queue depth is growing but Lambda concurrent executions are capped at 10. What knobs do you turn?",
+      "answer": "Check reserved concurrency on the function — it may be starving the queue. Raise reserved concurrency or remove the cap (account limit applies). Verify event source mapping scaling: Lambda adds pollers based on queue depth up to account concurrency. Also check if failures cause retries inflating visible count. Tune batchSize and maximumBatchingWindow for throughput. If downstream (RDS) is the bottleneck, scaling Lambda alone worsens contention — fix the bottleneck or add backoff.",
+      "followUps": [
+        "How does reserved concurrency on one function affect the whole account?",
+        "What metric shows Lambda is throttled not SQS?"
+      ],
+      "sixtySeconds": "Check reserved concurrency cap. Raise or remove. Lambda scales pollers with depth. Failures inflate retries. Downstream bottleneck — do not scale Lambda into DB meltdown."
+    },
+    {
+      "question": "Compare long polling versus short polling for a self-managed EC2 consumer fleet.",
+      "answer": "Long polling (WaitTimeSeconds=20) holds the ReceiveMessage call until a message arrives or timeout — fewer empty responses, lower API cost, faster delivery perception. Short polling returns immediately even if queue empty — wastes requests and adds latency. Set WaitTimeSeconds=20 on receive and enable long polling on queue default. Tradeoff: each long poll ties a connection for up to 20 seconds — fine for dedicated workers, tune connection pool size. For Lambda, AWS manages polling — you configure event source mapping instead.",
+      "followUps": [
+        "What is ReceiveMessageWaitTimeSeconds on the queue versus per request?",
+        "How many messages can one ReceiveMessage return?"
+      ],
+      "sixtySeconds": "Long poll WaitTimeSeconds 20. Fewer empty calls lower cost faster delivery. Queue default plus per-request. Lambda uses event source mapping not manual poll."
+    },
+    {
+      "question": "You need to delay retry of failed messages by 5 minutes without a separate scheduler. Options?",
+      "answer": "SQS DelaySeconds on send (0–900 sec) delays initial visibility — use on retry send from error handler. For exponential backoff, consumer catches failure and re-sends to same or delay queue with increasing DelaySeconds. Better pattern: main queue + DLQ with redrive after fix, or Step Functions Wait state for orchestrated backoff. FIFO supports per-message delay. Weak answer: cron Lambda scanning — operational toil. Production: DLQ + alarm + manual or automated redrive after root cause fix.",
+      "followUps": [
+        "Maximum DelaySeconds value?",
+        "How does visibility timeout differ from DelaySeconds?"
+      ],
+      "sixtySeconds": "DelaySeconds 0-900 on send for retry delay. Visibility hides in-flight. DLQ plus redrive for poison. Step Functions Wait for complex backoff. Not cron scan."
+    },
+    {
+      "question": "How do you prove SQS is the bottleneck versus Lambda in a production incident?",
+      "answer": "CloudWatch: ApproximateAgeOfOldestMessage rising = consumers lagging. Lambda ConcurrentExecutions at cap with queue depth rising = need more concurrency. Lambda Errors high with flat queue = failures retrying not throughput. NumberOfMessagesDeleted flat with depth rising = consumers not keeping up or not running. Enable Lambda INSIGHTS and correlate with SQS metrics in same dashboard. X-Ray if handler calls slow downstream. Strong answer: triage metrics in order — age, depth, deleted rate, Lambda errors, throttles.",
+      "followUps": [
+        "What is ApproximateNumberOfMessagesNotVisible telling you?",
+        "How do you dashboard queue lag SLA?"
+      ],
+      "sixtySeconds": "AgeOfOldestMessage rising equals lag. ConcurrentExecutions at cap equals scale Lambda. Errors high equals fix code not scale. Deleted rate flat equals consumers stuck. Dashboard all four."
+    }
+  ]
+}

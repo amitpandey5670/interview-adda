@@ -1,0 +1,267 @@
+{
+  "id": "aws-17-network-foundation-hub-spoke",
+  "slug": "network-foundation-hub-spoke",
+  "title": "Network foundation (hub-and-spoke topology)",
+  "moduleId": "aws-17-cloud-foundation",
+  "order": 3,
+  "hook": "Hub-and-spoke networking centralizes shared connectivity in a hub Virtual Private Cloud (VPC) while workload accounts attach as spokes via AWS Transit Gateway (TGW) or VPC peering. IP Address Management (IPAM) prevents CIDR collisions.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Hub VPC hosts shared services: egress NAT, firewall appliances (GWLB), DNS resolver endpoints, and TGW attachments. Spoke VPCs in workload accounts connect to hub for hybrid connectivity (Direct Connect, VPN) and inter-spoke routing. AWS Network Firewall or third-party NGFW often sits in inspection VPC. IPAM pools allocate non-overlapping CIDR blocks per account."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "TGW",
+              "longForm": "Transit Gateway",
+              "plainDefinition": "Regional hub connecting VPCs and VPN/DX",
+              "example": "Spoke VPC attachments"
+            },
+            {
+              "term": "Hub VPC",
+              "longForm": "Network hub VPC",
+              "plainDefinition": "Central connectivity and shared services",
+              "example": "Egress and firewall VPC"
+            },
+            {
+              "term": "IPAM",
+              "longForm": "VPC IP Address Manager",
+              "plainDefinition": "Central CIDR pool allocation",
+              "example": "/16 per workload account"
+            },
+            {
+              "term": "Inspection VPC",
+              "longForm": "Traffic inspection VPC",
+              "plainDefinition": "NGFW or Network Firewall inline",
+              "example": "GWLB endpoint in hub"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers draw hub-spoke on whiteboards for enterprise AWS. Wrong CIDR planning blocks peering. Centralized egress simplifies allow-listing but creates chokepoint — know the tradeoff."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: hub VPC + TGW, spokes per account/env, IPAM for CIDR, centralized egress with inspection option."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Plan IPAM pools",
+              "body": "Top-level pool; allocate /16 or /20 per account from pool."
+            },
+            {
+              "title": "Deploy hub VPC",
+              "body": "TGW, NAT, optional Network Firewall, Route53 resolver rules."
+            },
+            {
+              "title": "Attach spokes",
+              "body": "Workload VPC TGW attachment; propagate routes via TGW route tables."
+            },
+            {
+              "title": "Segment routing",
+              "body": "Separate TGW route tables for prod vs dev isolation."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Hub and spoke",
+            "source": "flowchart TB\n  DX[Direct Connect] --> HUB[Hub VPC / TGW]\n  HUB --> S1[Spoke dev VPC]\n  HUB --> S2[Spoke prod VPC]\n  HUB --> FW[Inspection VPC]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create IPAM pool",
+            "code": "aws ec2 create-ipam-pool \\\n  --ipam-id ipam-abc \\\n  --address-family ipv4 \\\n  --locale us-east-1 \\\n  --allocation-min-netmask-length 16",
+            "explanation": "Central pool prevents overlapping spoke CIDRs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "TGW attachment",
+            "code": "aws ec2 create-transit-gateway-vpc-attachment \\\n  --transit-gateway-id tgw-abc \\\n  --vpc-id vpc-spoke \\\n  --subnet-ids subnet-a subnet-b",
+            "explanation": "Connect spoke VPC to hub transit."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "TGW route table association",
+            "code": "SpokeRoute:\n  Type: AWS::EC2::TransitGatewayRoute\n  Properties:\n    TransitGatewayRouteTableId: !Ref ProdRouteTable\n    DestinationCidrBlock: 10.20.0.0/16\n    TransitGatewayAttachmentId: !Ref SpokeAttachment",
+            "explanation": "Route propagation controls which spokes talk to which."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Reachability Analyzer",
+            "code": "aws ec2 create-network-insights-path \\\n  --source vpc-spoke \\\n  --destination vpc-hub \\\n  --protocol TCP \\\n  --destination-port 443",
+            "explanation": "Prove hub-spoke path before go-live."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Topology",
+              "Hub-spoke TGW",
+              "Flat VPC peering mesh — scales poorly"
+            ],
+            [
+              "IPAM",
+              "Central CIDR pools",
+              "Manual spreadsheet CIDR tracking"
+            ],
+            [
+              "Egress",
+              "Centralized NAT in hub",
+              "NAT per spoke VPC"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Overlapping CIDRs block peering/TGW routes. Full mesh VPC peering at 20+ VPCs. Single TGW route table for prod and dev."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: IPAM utilization dashboard; TGW route table segmentation audit; Reachability Analyzer paths documented per connection."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Centralized egress",
+              "Single allow-list point",
+              "Hub becomes SPOF"
+            ],
+            [
+              "Distributed NAT",
+              "AZ-local egress",
+              "Higher cost, better resilience"
+            ],
+            [
+              "Network Firewall inline",
+              "Deep inspection",
+              "Latency and cost add"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "VPC peering mesh for 30 accounts — rejected. Strong answer: TGW hub-spoke, IPAM, segmented route tables."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Hub-spoke: central TGW hub, spokes per account/VPC, IPAM for CIDR.",
+    "Overlapping CIDRs are fatal — plan with IPAM upfront.",
+    "Segment TGW route tables for prod/dev isolation.",
+    "60s: Hub VPC with TGW, spokes attach, IPAM allocates CIDRs, optional inspection VPC. Avoid peering mesh at scale.",
+    "Follow-up: centralized vs distributed NAT tradeoff?"
+  ],
+  "commonPitfalls": [
+    "CIDR overlap discovered after account vending — expensive fix.",
+    "Strong answer: IPAM first, then hub-spoke TGW, segmented routes.",
+    "VPC peering full mesh at enterprise scale.",
+    "Prod and dev on same TGW route table."
+  ],
+  "relatedTopicIds": [
+    "aws-17-landing-zone-concept",
+    "aws-17-account-vending-guardrails",
+    "aws-17-centralized-logging-baseline"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "API gateway pattern",
+      "note": "Hub VPC like API gateway for network — central entry for hybrid and shared services.",
+      "futureTopicSlug": "javascript/cloud/networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Module boundaries",
+      "note": "Spoke accounts like TS project references — explicit interfaces (TGW routes) between them.",
+      "futureTopicSlug": "typescript/architecture/modules"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Cloud Foundation",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/welcome.html"
+    },
+    {
+      "title": "Building a scalable network architecture",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/networking.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

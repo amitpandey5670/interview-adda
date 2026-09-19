@@ -1,0 +1,237 @@
+{
+  "id": "aws-15-datasync-agents-tasks",
+  "slug": "datasync-agents-tasks",
+  "title": "AWS DataSync agents, locations, and tasks",
+  "moduleId": "aws-15-data-movement",
+  "order": 1,
+  "hook": "AWS DataSync moves data between on-premises storage, other clouds, and Amazon S3 over a secure connection. A lightweight agent on your network plus source and destination locations and a task definition orchestrate verified bulk and incremental transfers.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "DataSync agent is a VM deployed on-premises or in cloud connecting to NFS, SMB, HDFS, object storage, or S3. A location defines source or destination endpoint. A task runs a transfer with options: bandwidth limit, schedule, verify mode, overwrite behavior. Task execution reports bytes transferred, files skipped, and verification status."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "DataSync agent",
+              "longForm": "AWS DataSync agent",
+              "plainDefinition": "VM appliance bridging on-prem storage to AWS.",
+              "example": "VMware agent VM with NFS mount to file server."
+            },
+            {
+              "term": "Location",
+              "longForm": "DataSync location",
+              "plainDefinition": "Configured source or destination endpoint.",
+              "example": "S3 location arn for s3://migration-bucket/data/"
+            },
+            {
+              "term": "Task",
+              "longForm": "DataSync task",
+              "plainDefinition": "Transfer job between two locations.",
+              "example": "NFS → S3 nightly at 2 AM UTC."
+            },
+            {
+              "term": "Verify mode",
+              "longForm": "transfer verification",
+              "plainDefinition": "Checksum comparison after transfer.",
+              "example": "POINT_IN_TIME_CONSISTENT verifies file integrity."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Datacenter exit timelines depend on transfer throughput and verification. Misconfigured agent networking blocks HTTPS to AWS. Bandwidth throttle too low misses cutover date; too high saturates production NFS. Senior architects compare DataSync versus Snowball versus S3 sync CLI for each migration phase."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: agent + locations + task. Throttle bandwidth. Incremental until cutover. Verify checksums. IAM task role scoped to prefix."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Migration workflow",
+          "items": [
+            {
+              "title": "Deploy agent",
+              "body": "Activate with one-time key; confirm online in console."
+            },
+            {
+              "title": "Create locations",
+              "body": "NFS source, S3 destination with bucket and subdirectory."
+            },
+            {
+              "title": "Create task",
+              "body": "Set bandwidth, schedule, transfer mode, verify options."
+            },
+            {
+              "title": "Initial + incremental",
+              "body": "Full copy then scheduled deltas until cutover weekend."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "DataSync architecture",
+            "source": "flowchart LR\n  NFS[On-prem NFS] --> AG[DataSync agent]\n  AG -->|TLS| DS[DataSync service]\n  DS --> S3[(S3 bucket)]\n  DS --> CW[CloudWatch task metrics]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create S3 location and NFS task",
+            "code": "S3_LOC=$(aws datasync create-location-s3 \\\n  --s3-bucket-arn arn:aws:s3:::migration-landing \\\n  --s3-config '{\"BucketAccessRoleArn\":\"arn:aws:iam::123:role/DataSyncS3Access\"}' \\\n  --subdirectory /prod-data/ \\\n  --query 'LocationArn' --output text)\n\nNFS_LOC=$(aws datasync create-location-nfs \\\n  --subdirectory /export/prod \\\n  --on-prem-config AgentArns=arn:aws:datasync:us-east-1:123:agent/agent-abc \\\n  --server-hostname nfs.corp.example.com \\\n  --query 'LocationArn' --output text)\n\naws datasync create-task \\\n  --source-location-arn \"$NFS_LOC\" \\\n  --destination-location-arn \"$S3_LOC\" \\\n  --options '{\"VerifyMode\":\"POINT_IN_TIME_CONSISTENT\",\"BandwidthLimit\":50000000}'",
+            "explanation": "BandwidthLimit in bytes/sec — 50 MB/s throttle. Task role needs s3:PutObject on prefix."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — start task and monitor execution",
+            "code": "EXEC_ARN=$(aws datasync start-task-execution \\\n  --task-arn arn:aws:datasync:us-east-1:123:task/task-abc \\\n  --query 'TaskExecutionArn' --output text)\n\naws datasync describe-task-execution \\\n  --task-execution-arn \"$EXEC_ARN\" \\\n  --query '{Status:Status,BytesTransferred:BytesTransferred,FilesTransferred:FilesTransferred}'",
+            "explanation": "Poll until SUCCESS or ERROR. ERROR details in Result with specific failure cause."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — scheduled DataSync task",
+            "code": "Resources:\n  MigrationTask:\n    Type: AWS::DataSync::Task\n    Properties:\n      SourceLocationArn: !Ref NfsLocation\n      DestinationLocationArn: !Ref S3Location\n      Schedule:\n        ScheduleExpression: cron(0 2 * * ? *)\n      Options:\n        VerifyMode: ONLY_FILES_TRANSFERRED\n        OverwriteMode: ALWAYS\n        BandwidthLimit: 104857600",
+            "explanation": "Nightly 2 AM cron. 100 MB/s bandwidth. ALWAYS overwrite for incremental sync of changed files."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — check agent connectivity",
+            "code": "aws datasync describe-agent \\\n  --agent-arn arn:aws:datasync:us-east-1:123:agent/agent-abc \\\n  --query '{Name:Name,Status:Status,EndpointType:EndpointType}'",
+            "explanation": "Status must be ONLINE before task start. OFFLINE usually firewall blocking HTTPS outbound."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "DataSync vs aws s3 sync",
+          "headers": ["Aspect", "DataSync", "aws s3 sync CLI"],
+          "rows": [
+            ["Source", "NFS/SMB on-prem native", "Requires mounted path or S3 only"],
+            ["Verification", "Built-in checksum verify", "Manual spot checks"],
+            ["Schedule", "Managed cron", "Cron on EC2 you maintain"],
+            ["Throughput", "Parallel optimized", "Depends on runner"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Agent blocked by firewall — no outbound 443. Task role with s3:* on entire bucket. No bandwidth limit — production NFS melts. Skipping verification on compliance migration."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: CloudWatch BytesTransferred metric vs source size estimate. Task report JSON in CloudWatch Logs. Compare DataSync task duration to link bandwidth formula: bytes / throttle. Snowball when link < effective 100 Mbps and deadline tight."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Tool", "When", "Avoid"],
+          "rows": [
+            ["DataSync", "Ongoing NFS ↔ S3 sync", "Tiny one-off copy"],
+            ["Snowball", "Low bandwidth bulk", "Frequent incremental"],
+            ["S3 sync", "S3-to-S3 same account", "On-prem NFS native"],
+            ["Transfer Family", "Partner SFTP drops", "Internal NFS migration"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'rsync to S3 from laptop.' Strong answer: DataSync agent for verified scalable transfer with bandwidth control and scheduling."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "DataSync = agent + source location + destination location + task.",
+    "Throttle bandwidth; schedule incremental; verify checksums on compliance migrations.",
+    "Task IAM role scoped to S3 prefix; agent needs outbound HTTPS.",
+    "60s: Agent NFS to S3 task. Bandwidth limit. Incremental schedule. Verify mode. Snowball if link too slow.",
+    "Follow-up: DataSync versus S3 Batch Replication for backlog?"
+  ],
+  "commonPitfalls": [
+    "Agent firewall blocked — task never starts.",
+    "Strong answer: verify agent ONLINE and outbound 443 before cutover weekend.",
+    "Unlimited bandwidth saturating production NAS.",
+    "Task role over-permissioned on entire bucket."
+  ],
+  "relatedTopicIds": [
+    "aws-15-s3-cross-region-replication",
+    "aws-15-data-movement-security",
+    "aws-15-batch-vs-streaming"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "File upload progress",
+      "note": "Multipart S3 upload with progress callback is client-side analogy — DataSync handles parallel chunking and resume at infrastructure level.",
+      "futureTopicSlug": "typescript/aws/s3-upload"
+    },
+    {
+      "language": "javascript",
+      "concept": "rsync semantics",
+      "note": "DataSync incremental task resembles rsync delta sync — only changed files transferred on subsequent runs.",
+      "futureTopicSlug": "javascript/ops/file-sync"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "How AWS DataSync works",
+      "url": "https://docs.aws.amazon.com/datasync/latest/userguide/how-datasync-works.html"
+    },
+    {
+      "title": "Deploying DataSync agent",
+      "url": "https://docs.aws.amazon.com/datasync/latest/userguide/deploy-agents.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "datasync-migration"
+}

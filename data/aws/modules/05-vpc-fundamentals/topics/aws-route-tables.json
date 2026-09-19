@@ -1,0 +1,229 @@
+{
+  "id": "aws-05-aws-route-tables",
+  "slug": "aws-route-tables",
+  "title": "Route tables and packet walkthrough diagrams",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 4,
+  "hook": "Route tables are the routing brain of your VPC. Every subnet associates with exactly one route table; longest-prefix match picks the next hop for each packet — Internet Gateway, NAT Gateway, local, or VPC endpoint.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A route table is a set of destination CIDR blocks and targets (local, igw, nat, eni, vpc endpoint, transit gateway). The implicit local route for the VPC CIDR sends traffic within the VPC. Subnet association binds a subnet to one route table — if you do not associate explicitly, the main route table applies. Edge associations exist for gateway load balancer and VPN — foundation designs focus on public and private subnet tables."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Route table",
+              "longForm": "VPC route table",
+              "plainDefinition": "Collection of routes controlling subnet traffic exit.",
+              "example": "Private RT: 10.0.0.0/16 local, 0.0.0.0/0 → nat-xxx."
+            },
+            {
+              "term": "Longest prefix match",
+              "longForm": "Longest prefix match routing",
+              "plainDefinition": "Most specific CIDR wins when multiple routes match.",
+              "example": "10.0.10.0/24 local beats 0.0.0.0/0 default."
+            },
+            {
+              "term": "Main route table",
+              "longForm": "VPC main route table",
+              "plainDefinition": "Default table for subnets without explicit association.",
+              "example": "Accidentally leaving new subnet on main RT with IGW route."
+            },
+            {
+              "term": "Propagated routes",
+              "longForm": "Route propagation",
+              "plainDefinition": "Routes injected from VPN or Direct Connect virtual gateway.",
+              "example": "On-prem 192.168.0.0/16 propagated to VPC route tables."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Most VPC troubleshooting is wrong route table association — private instance with IGW default route, or public subnet without IGW route. Interview packet walkthroughs test whether you can trace hops and know stateful security group return path."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Subnet → route table → longest match → next hop (local, igw, nat, vpce). One subnet, one RT. Public and private never share RT in production."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Packet walkthrough: HTTPS to internet from private EC2",
+          "items": [
+            {
+              "title": "Instance sends packet",
+              "body": "Dest 203.0.113.50:443 from 10.0.10.5 — security group allows egress."
+            },
+            {
+              "title": "Subnet route lookup",
+              "body": "0.0.0.0/0 matches → NAT Gateway in public subnet."
+            },
+            {
+              "title": "NAT to IGW",
+              "body": "NAT SNAT to Elastic IP; public subnet RT sends to IGW."
+            },
+            {
+              "title": "Return path",
+              "body": "Response hits NAT; NAT maps back to 10.0.10.5 — security group stateful return allowed."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Route table decision flow",
+            "source": "flowchart TD\n  P[Packet leaves ENI] --> RT[Subnet route table]\n  RT --> M{Longest prefix match}\n  M -->|10.0.0.0/16| L[local — stay in VPC]\n  M -->|pl-xxx S3| E[VPC endpoint]\n  M -->|0.0.0.0/0 private| N[NAT Gateway]\n  M -->|0.0.0.0/0 public| G[Internet Gateway]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Show effective routes for a subnet",
+            "code": "SUBNET=subnet-0private789\nRT=$(aws ec2 describe-route-tables \\\n  --filters Name=association.subnet-id,Values=$SUBNET \\\n  --query \"RouteTables[0].RouteTableId\" --output text)\naws ec2 describe-route-table --route-table-ids $RT \\\n  --query \"RouteTables[0].Routes\" --output table",
+            "explanation": "First command finds associated RT; second lists every route including local and gateway targets."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Associate subnet with private route table",
+            "code": "PrivateSubnetRouteAssocA:\n  Type: AWS::EC2::SubnetRouteTableAssociation\n  Properties:\n    SubnetId: !Ref PrivateSubnetA\n    RouteTableId: !Ref PrivateRouteTableA",
+            "explanation": "Explicit association prevents new subnet inheriting main table with accidental IGW route."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "VPC Reachability Analyzer",
+            "code": "aws ec2 create-network-insights-path \\\n  --source i-0private123 \\\n  --destination 203.0.113.50 \\\n  --protocol tcp \\\n  --destination-port 443",
+            "explanation": "Automated path analysis validates route + SG + NACL chain — faster than manual guess in incidents."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "VPC routes vs on-prem routing table",
+          "headers": ["Aspect", "VPC route tables", "On-premises / C# backend"],
+          "rows": [
+            ["Default route", "0.0.0.0/0 → IGW or NAT", "0.0.0.0/0 → core router"],
+            ["Internal routes", "Automatic local VPC CIDR", "Static or OSPF between VLANs"],
+            ["Troubleshooting", "Reachability Analyzer, flow logs", "traceroute, router show ip route"],
+            ["Per-tier routing", "Separate RT per subnet tier", "VRF or firewall zones"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Sharing one route table between public and private subnets. Leaving subnets on main route table after adding IGW route. Cross-AZ private route pointing to NAT in different AZ (asymmetric routing issues). Forgetting S3 prefix list route when using gateway endpoint."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: VPC Flow Logs with REJECT entries + route table export in IaC drift detection; Network Manager route analyzer for complex peering. Asymmetric routing breaks stateful firewalls — ensure return path uses same NAT. Main route table trap: new subnet auto-inherits — use explicit association in Terraform/CloudFormation. Transit Gateway route tables add another layer in hub-spoke — foundation VPC still starts with public/private RT pair per AZ."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Cost / risk"],
+          "rows": [
+            ["RT per AZ private", "AZ-isolated NAT failure domain", "More RT resources to manage"],
+            ["Shared private RT", "Simpler IaC", "Wrong NAT target across AZs"],
+            ["Gateway endpoint routes", "No NAT for S3 prefix list", "Only S3/DynamoDB gateway type"],
+            ["Main RT for labs only", "Quick default VPC experiments", "Production foot-gun"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Cannot walk a packet from private EC2 to HTTPS API through NAT. Strong answer: cite subnet RT, routes, SG egress, NAT, IGW — and note stateful return."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Each subnet associates with one route table; longest-prefix match selects next hop.",
+    "Local VPC CIDR route is implicit; public uses IGW default route; private uses NAT default route.",
+    "Separate route tables per tier and per AZ for production HA.",
+    "60s: Packet → subnet RT → match → local/igw/nat/vpce. One subnet one RT. Walk outbound private path through NAT.",
+    "Follow-up: how do propagated VPN routes interact with local routes?"
+  ],
+  "commonPitfalls": [
+    "Saying subnet name determines routing gets you rejected — route table association does.",
+    "Strong answer: list routes on associated RT for each subnet in diagram.",
+    "Private subnet on main RT after IGW added to main — accidental public routing.",
+    "NAT in AZ-a referenced by private RT in AZ-b — latency and failure coupling."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-vpc-cidr-subnets",
+    "aws-05-aws-nat-gateway",
+    "aws-05-aws-internet-gateway",
+    "aws-05-aws-multi-az-vpc-patterns"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Connection timeouts debugging",
+      "note": "Node ETIMEDOUT to external API often traces to missing NAT route — same as C# HttpClient timeout when app server VLAN lacks default gateway to proxy.",
+      "futureTopicSlug": "aws/vpc/connectivity-debug"
+    },
+    {
+      "language": "typescript",
+      "concept": "IaC route table drift",
+      "note": "Terraform aws_route_table_association must match TypeScript CDK stack — manual console RT change breaks deploy parity like manual router change on-prem not in runbook.",
+      "futureTopicSlug": "aws/iac/route-tables"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Route tables",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html"
+    },
+    {
+      "title": "Reachability Analyzer",
+      "url": "https://docs.aws.amazon.com/vpc/latest/reachability/what-is-reachability-analyzer.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "vpc-troubleshoot"
+}

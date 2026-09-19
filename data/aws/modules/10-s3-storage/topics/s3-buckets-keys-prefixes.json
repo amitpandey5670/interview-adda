@@ -1,0 +1,277 @@
+{
+  "id": "aws-10-s3-buckets-keys-prefixes",
+  "slug": "s3-buckets-keys-prefixes",
+  "title": "S3 buckets, object keys, and prefixes",
+  "moduleId": "aws-10-s3-storage",
+  "order": 1,
+  "hook": "An S3 bucket is a globally unique container; object keys are flat strings where prefixes like logs/2026/ organize data without real folders.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon S3 stores objects in buckets within an AWS Region. Bucket names are globally unique across all AWS accounts. Each object is identified by a key — a UTF-8 string that can include slashes to simulate folder hierarchy. Prefix is the substring before the delimiter for ListObjectsV2 filtering. There is no atomic rename — copy then delete."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Bucket",
+              "longForm": "S3 bucket",
+              "plainDefinition": "Regional container with globally unique name holding objects.",
+              "example": "my-company-data-prod-ap-south-1."
+            },
+            {
+              "term": "Object key",
+              "longForm": "S3 object key",
+              "plainDefinition": "Unique string identifier for object within bucket.",
+              "example": "tenants/acme/invoices/2026-01.pdf."
+            },
+            {
+              "term": "Prefix",
+              "longForm": "S3 key prefix",
+              "plainDefinition": "Leading portion of key used for list filters and lifecycle.",
+              "example": "tenants/acme/ lists all acme objects."
+            },
+            {
+              "term": "Delimiter",
+              "longForm": "ListObjects delimiter",
+              "plainDefinition": "Character (usually /) grouping common prefixes in list response.",
+              "example": "Delimiter / returns CommonPrefixes like tenants/acme/."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Key layout affects lifecycle rules, IAM condition keys, and query performance. Multi-tenant SaaS often embeds tenantId in prefix. Wrong mental model of folders causes access and listing cost issues."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: flat keys, prefix convention, ListObjects with delimiter for console tree view. Design keys for lifecycle and IAM s3:prefix conditions."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Design key namespace",
+          "items": [
+            {
+              "title": "Choose bucket boundary",
+              "body": "Per env or per tenant isolation — separate buckets for hard boundaries."
+            },
+            {
+              "title": "Define key pattern",
+              "body": "tenantId/env/category/date/fileId.ext for lifecycle and IAM."
+            },
+            {
+              "title": "Upload object",
+              "body": "PutObject with key, optional metadata, storage class."
+            },
+            {
+              "title": "List by prefix",
+              "body": "ListObjectsV2 with Prefix and Delimiter — avoid full bucket scan."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Flat keys with prefix layout",
+            "source": "flowchart TB\n  B[Bucket prod-data]\n  B --> K1[tenants/t1/reports/jan.csv]\n  B --> K2[tenants/t2/reports/jan.csv]\n  B --> K3[system/config/app.json]\n  P[Prefix tenants/t1/] -.-> K1"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create bucket and upload object",
+            "code": "aws s3 mb s3://my-app-data-prod-123456789012-ap-south-1\naws s3 cp ./report.csv s3://my-app-data-prod-123456789012-ap-south-1/tenants/acme/reports/2026/report.csv",
+            "explanation": "Bucket name must be globally unique. Key includes full logical path."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List objects by prefix",
+            "code": "aws s3api list-objects-v2 \\\n  --bucket my-app-data-prod-123456789012-ap-south-1 \\\n  --prefix tenants/acme/ \\\n  --delimiter / \\\n  --query '{Keys:Contents[].Key,Prefixes:CommonPrefixes[].Prefix}'",
+            "explanation": "Delimiter groups pseudo-folders. Avoid listing entire bucket in hot paths."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation S3 bucket",
+            "code": "DataBucket:\n  Type: AWS::S3::Bucket\n  Properties:\n    BucketName: !Sub \"${AWS::AccountId}-app-data-${AWS::Region}\"\n    PublicAccessBlockConfiguration:\n      BlockPublicAcls: true\n      BlockPublicPolicy: true\n      IgnorePublicAcls: true\n      RestrictPublicBuckets: true",
+            "explanation": "Block public access by default. Bucket name often includes account and region."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "IAM condition on prefix",
+            "code": "{\n  \"Effect\": \"Allow\",\n  \"Action\": [\"s3:GetObject\", \"s3:PutObject\"],\n  \"Resource\": \"arn:aws:s3:::my-bucket/tenants/${aws:PrincipalTag/tenantId}/*\"\n}",
+            "explanation": "Restrict principals to tenant prefix using session tags or IAM paths."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Namespace",
+              "Flat keys with prefix convention",
+              "Filesystem directories with inodes"
+            ],
+            [
+              "Listing",
+              "ListObjectsV2 paginated API",
+              "readdir — cheap locally, costly at scale in S3"
+            ],
+            [
+              "Rename",
+              "CopyObject + DeleteObject",
+              "fs.rename atomic on same volume"
+            ],
+            [
+              "Glob",
+              "No native glob — prefix filter only",
+              "glob npm package on local FS"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Treating console folders as real directories for permissions. Listing entire bucket in a loop — expensive and slow. Special characters in keys without URL encoding."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "S3 Express One Zone for low-latency high-QPS within AZ — different bucket type. How to prove it in production: S3 Storage Lens top prefixes by request count, and CloudWatch NumberOfObjects per prefix via inventory."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Prefix per tenant",
+              "IAM and lifecycle scoping",
+              "Noisy neighbor LIST cost"
+            ],
+            [
+              "Separate buckets",
+              "Hard isolation",
+              "Operational overhead"
+            ],
+            [
+              "Hash prefix shard",
+              "Avoid hot partition on prefix",
+              "Key readability tradeoff"
+            ],
+            [
+              "S3 Inventory",
+              "Audit object metadata",
+              "Daily CSV delivery lag"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying S3 has folders like POSIX directories gets rejected. Strong answer: flat keys, prefix design, ListObjects with delimiter, IAM on prefix."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Bucket names are globally unique; keys are flat strings.",
+    "Use prefix layout for tenant, env, and lifecycle — not real folders.",
+    "ListObjectsV2 with prefix/delimiter — never scan whole bucket in app hot path.",
+    "60s: Flat keys. Prefix tenant/env/date. List with prefix. Separate buckets for hard isolation.",
+    "Follow-up: how do you secure multi-tenant keys?"
+  ],
+  "commonPitfalls": [
+    "Believing folders enforce access — weak; IAM and bucket policy enforce access.",
+    "Strong answer: prefix in key + IAM condition + optional bucket per tenant.",
+    "Full bucket ListObjects in polling loop — cost and throttling.",
+    "Unencoded spaces and special chars breaking CloudFront origin paths."
+  ],
+  "relatedTopicIds": [
+    "aws-10-s3-durability-consistency",
+    "aws-10-s3-security-policies",
+    "aws-11-lambda-triggers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "path.join vs S3 key",
+      "note": "Use string template for S3 keys — path.join uses OS separators. Keys always use forward slash.",
+      "futureTopicSlug": "aws/s3/key-design"
+    },
+    {
+      "language": "typescript",
+      "concept": "@aws-sdk/client-s3 ListObjectsV2",
+      "note": "Paginate with ContinuationToken — like async iterator over large arrays, do not assume single response.",
+      "futureTopicSlug": "aws/s3/listing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon S3 objects",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/upload-objects.html"
+    },
+    {
+      "title": "Listing objects",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/ListingKeysUsingAPIs.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "saas-tenant-routing"
+}

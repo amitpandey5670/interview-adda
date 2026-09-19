@@ -1,0 +1,267 @@
+{
+  "id": "aws-18-saas-reference-architecture",
+  "slug": "saas-reference-architecture",
+  "title": "SaaS reference architecture (control plane and data plane)",
+  "moduleId": "aws-18-saas-and-interview",
+  "order": 6,
+  "hook": "SaaS reference architecture splits control plane (onboarding, billing, tenant management) from data plane (tenant-facing application logic). The control plane provisions and configures tenant resources; the data plane serves end-user traffic.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Control plane: tenant signup, tier assignment, provisioning Step Functions, billing integration, admin API. Data plane: multi-tenant application serving customer users — APIs, UI, background jobs. AWS patterns: control plane in management account or shared services; data plane pooled ECS/Lambda with tenant context; silo resources vended by control plane workflows. SaaS Lens and AWS SaaS Factory reference architectures document this split."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Control plane",
+              "longForm": "SaaS control plane",
+              "plainDefinition": "Manages tenants, config, provisioning, billing",
+              "example": "Signup triggers Step Functions"
+            },
+            {
+              "term": "Data plane",
+              "longForm": "SaaS data plane",
+              "plainDefinition": "Serves end-user traffic per tenant",
+              "example": "Orders API with tenant context"
+            },
+            {
+              "term": "Provisioning",
+              "longForm": "Tenant provisioning",
+              "plainDefinition": "Async workflow creating tenant resources",
+              "example": "Create schema, Cognito pool, usage plan"
+            },
+            {
+              "term": "Onboarding",
+              "longForm": "Tenant onboarding",
+              "plainDefinition": "Signup to first successful API call",
+              "example": "< 5 min self-serve target"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Senior architects draw two boxes: control plane and data plane. Interviewers ask how onboarding a new tenant works end-to-end. Confusing the two leads to provisioning logic in request hot path."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: control plane manages tenants; data plane serves users; provisioning is async workflow not sync API call."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Tenant signs up",
+              "body": "Control plane API creates tenant record, assigns tier, enqueues provisioning."
+            },
+            {
+              "title": "Provision resources",
+              "body": "Step Functions: Cognito app client, schema/DB, usage plan, DNS record."
+            },
+            {
+              "title": "Activate tenant",
+              "body": "Status ACTIVE — data plane accepts traffic for tenant_id."
+            },
+            {
+              "title": "Serve users",
+              "body": "Data plane routes requests with tenant context; control plane not in hot path."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Control vs data plane",
+            "source": "flowchart TB\n  CP[Control plane\\nsignup billing admin] -->|provisions| DP[Data plane\\nuser APIs]\n  USER[End user] --> DP\n  ADMIN[Tenant admin] --> CP"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Step Functions tenant provisioning",
+            "code": "ProvisionTenant:\n  Type: AWS::StepFunctions::StateMachine\n  Properties:\n    Definition:\n      StartAt: CreateTenantRecord\n      States:\n        CreateTenantRecord:\n          Type: Task\n          Resource: arn:aws:lambda:...:create-tenant\n          Next: ProvisionResources\n        ProvisionResources:\n          Type: Parallel\n          Branches:\n            - StartAt: CreateSchema\n            - StartAt: CreateCognitoClient\n          Next: ActivateTenant\n        ActivateTenant:\n          Type: Task\n          Resource: arn:aws:lambda:...:activate-tenant\n          End: true",
+            "explanation": "Async provisioning — signup API returns fast, workflow completes in background."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Control plane signup API",
+            "code": "async function signup(dto: SignupDto) {\n  const tenant = await db.tenants.create({ name: dto.name, tier: 'free', status: 'PROVISIONING' });\n  await sfn.startExecution({ stateMachineArn: PROVISION_ARN, input: JSON.stringify({ tenantId: tenant.id }) });\n  return { tenantId: tenant.id, status: 'PROVISIONING' };\n}",
+            "explanation": "Never block signup on full provisioning — return status and poll."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "Data plane guards tenant status",
+            "code": "async function handleOrder(req: TenantRequest) {\n  const tenant = await cache.getTenant(req.tenantId);\n  if (tenant.status !== 'ACTIVE') throw new ServiceUnavailableError('Tenant not ready');\n  return orderService.create(req.tenantId, req.body);\n}",
+            "explanation": "Data plane rejects traffic until control plane marks tenant ACTIVE."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "EventBridge tenant lifecycle events",
+            "code": "TenantCreatedRule:\n  Type: AWS::Events::Rule\n  Properties:\n    EventPattern:\n      source: [saas.controlplane]\n      detail-type: [TenantActivated]\n    Targets:\n      - Arn: !GetAtt WelcomeEmailLambda.Arn\n        Id: WelcomeEmail",
+            "explanation": "Decouple control plane events from data plane side effects."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Split",
+              "Control vs data plane",
+              "Admin API vs user API in same Express app"
+            ],
+            [
+              "Provision",
+              "Async Step Functions",
+              "Sync signup blocking 30s"
+            ],
+            [
+              "Events",
+              "EventBridge tenant lifecycle",
+              "In-process EventEmitter"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Provisioning in synchronous signup request — timeout and poor UX. Control plane logic in every data plane request path. No tenant status gate — traffic hits half-provisioned tenant."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: p99 signup-to-ACTIVE < 5 min; control plane error rate separate from data plane SLO; provisioning workflow idempotent on retry."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Separate accounts",
+              "Strong CP/DP isolation",
+              "Cross-account complexity"
+            ],
+            [
+              "Same account separate services",
+              "Simpler ops",
+              "Weaker blast radius separation"
+            ],
+            [
+              "Cell-based architecture",
+              "Scale data plane horizontally",
+              "Complex routing"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Monolith mixing signup admin and user API with no plane separation — rejected at senior level. Strong answer: control plane provisions async; data plane serves with tenant gate."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Control plane = tenant lifecycle; data plane = end-user traffic.",
+    "Provision async via Step Functions — never block signup.",
+    "Data plane checks tenant ACTIVE before serving.",
+    "60s: CP handles signup, billing, provisioning workflow. DP serves users with tenant context. EventBridge for lifecycle. SaaS Lens reference architecture.",
+    "Follow-up: how offboard tenant and delete data?"
+  ],
+  "commonPitfalls": [
+    "Sync provisioning on signup — timeouts and failures block user.",
+    "Strong answer: async workflow, PROVISIONING status, poll until ACTIVE.",
+    "No idempotent provisioning — retry creates duplicate resources.",
+    "Control plane in data plane hot path — coupling and scale issues."
+  ],
+  "relatedTopicIds": [
+    "aws-18-tenancy-models-silo-pool-bridge",
+    "aws-18-tenant-routing-blast-radius",
+    "aws-18-data-partitioning-strategies"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Admin vs user routes",
+      "note": "Separate Express routers for /admin (control) and /api (data) mirror plane split.",
+      "futureTopicSlug": "javascript/saas/architecture"
+    },
+    {
+      "language": "typescript",
+      "concept": "Domain events",
+      "note": "TenantActivated event decouples provisioning completion from welcome email — EventBridge pattern locally.",
+      "futureTopicSlug": "typescript/architecture/events"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Lens — AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html"
+    },
+    {
+      "title": "SaaS control plane and data plane",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-control-plane-and-data-plane.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "saas-tenant-routing"
+}

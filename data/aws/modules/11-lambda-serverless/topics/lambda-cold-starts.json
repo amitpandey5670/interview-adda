@@ -1,0 +1,277 @@
+{
+  "id": "aws-11-lambda-cold-starts",
+  "slug": "lambda-cold-starts",
+  "title": "Lambda cold starts and provisioned concurrency",
+  "moduleId": "aws-11-lambda-serverless",
+  "order": 2,
+  "hook": "A cold start creates a new execution environment — initialization latency matters for interactive APIs; provisioned concurrency keeps environments warm.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Cold starts occur on first invoke or when Lambda scales concurrent executions beyond warm pool. Init includes runtime bootstrap and loading handler code. Provisioned concurrency pre-creates initialized environments. VPC-attached functions historically added ENI setup latency — improved with Hyperplane. Java and .NET typically longer init than Node.js and Python."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Cold start",
+              "longForm": "Lambda cold start",
+              "plainDefinition": "New execution environment creation and initialization delay.",
+              "example": "First request after deploy spikes latency."
+            },
+            {
+              "term": "Provisioned concurrency",
+              "longForm": "Lambda provisioned concurrency",
+              "plainDefinition": "Pre-warmed execution environments ready to invoke.",
+              "example": "PC=10 on prod alias for API."
+            },
+            {
+              "term": "InitDuration",
+              "longForm": "CloudWatch InitDuration",
+              "plainDefinition": "Metric for initialization time on cold invoke.",
+              "example": "InitDuration 800ms of 1200ms total."
+            },
+            {
+              "term": "SnapStart",
+              "longForm": "Lambda SnapStart for Java",
+              "plainDefinition": "Cached snapshot of initialized Java runtime.",
+              "example": "Reduces Java cold start significantly."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "P99 latency SLAs fail if cold starts dominate traffic spikes. Provisioned concurrency has hourly cost even without traffic. Right-sizing package and avoiding unnecessary VPC attachment reduces init."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: cold = init + handler; measure InitDuration; provisioned concurrency for steady low-latency; shrink package and avoid VPC if possible."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Reduce cold start impact",
+          "items": [
+            {
+              "title": "Measure",
+              "body": "CloudWatch InitDuration and duration P99 on new version."
+            },
+            {
+              "title": "Optimize package",
+              "body": "Tree-shake deps, Lambda layers for shared libs, avoid fat bundles."
+            },
+            {
+              "title": "Avoid VPC if possible",
+              "body": "Public Lambda for AWS API calls; VPC only for private RDS."
+            },
+            {
+              "title": "Provision concurrency",
+              "body": "Set on alias for prod; balance cost vs latency SLA."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Cold vs warm invoke",
+            "source": "flowchart TB\n  Req[Request] --> HasWarm{Warm env available?}\n  HasWarm -->|yes| Handler[Handler only\\nlow latency]\n  HasWarm -->|no| Init[Init runtime + code\\nInitDuration]\n  Init --> Handler\n  PC[Provisioned concurrency] --> HasWarm"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Put provisioned concurrency",
+            "code": "aws lambda put-provisioned-concurrency-config \\\n  --function-name ApiHandler \\\n  --qualifier prod \\\n  --provisioned-concurrent-executions 20",
+            "explanation": "Apply to published alias — not $LATEST. Bills hourly per PC unit."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Alias with provisioned concurrency",
+            "code": "ProdAlias:\n  Type: AWS::Lambda::Alias\n  Properties:\n    FunctionName: !Ref ApiHandler\n    FunctionVersion: !GetAtt ApiHandlerVersion.Version\n    Name: prod\n    ProvisionedConcurrencyConfig:\n      ProvisionedConcurrentExecutions: 10",
+            "explanation": "Blue/green: shift traffic between versions with weighted alias."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Publish version and alias",
+            "code": "aws lambda publish-version --function-name ApiHandler\naws lambda create-alias \\\n  --function-name ApiHandler \\\n  --name prod \\\n  --function-version 5",
+            "explanation": "Provisioned concurrency requires published version or alias."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CloudWatch InitDuration query",
+            "code": "aws cloudwatch get-metric-statistics \\\n  --namespace AWS/Lambda \\\n  --metric-name InitDuration \\\n  --dimensions Name=FunctionName,Value=ApiHandler \\\n  --start-time 2026-09-14T00:00:00Z \\\n  --end-time 2026-09-14T23:59:59Z \\\n  --period 3600 \\\n  --statistics Average,Maximum",
+            "explanation": "Correlate deploy times with init spikes."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Latency tail",
+              "Cold start init spike",
+              "EC2 always warm after boot"
+            ],
+            [
+              "Cost",
+              "Pay per invoke + PC hourly",
+              "EC2 hourly always on"
+            ],
+            [
+              "Scale out",
+              "New env per concurrent spike",
+              "ASG launch minutes"
+            ],
+            [
+              "Mitigation",
+              "PC, smaller package, SnapStart",
+              "Warm pool on ASG"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Provisioned concurrency on $LATEST — not supported. Enabling VPC for S3 access only — adds init without benefit. Ignoring InitDuration blaming handler code alone."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lambda SnapStart for Java and upcoming patterns reduce init. Graviton2 arm64 often faster/cheaper. How to prove it in production: X-Ray cold trace flag, InitDuration alarm on new deploys, load test after publish before full traffic shift."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "No PC",
+              "Lowest cost dev/staging",
+              "P99 spikes on traffic"
+            ],
+            [
+              "Partial PC",
+              "Warm baseline for API",
+              "Hourly cost 24/7"
+            ],
+            [
+              "Full PC match peak",
+              "Stable P99",
+              "Expensive if peak rare"
+            ],
+            [
+              "Split VPC functions",
+              "Only DB callers in VPC",
+              "Architecture complexity"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Blaming all latency on handler without InitDuration gets rejected. Strong answer: measure init, PC on alias, package diet, VPC only when needed."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Cold starts add InitDuration before handler runs.",
+    "Provisioned concurrency on published alias pre-warms environments.",
+    "Shrink deployment package and limit VPC to reduce init.",
+    "60s: InitDuration metric. PC on prod alias. Small package. VPC only for private resources. SnapStart for Java.",
+    "Follow-up: does PC scale automatically with traffic?"
+  ],
+  "commonPitfalls": [
+    "PC on $LATEST — invalid configuration.",
+    "Strong answer: publish version, alias prod, PC on alias.",
+    "VPC for all functions including S3-only — unnecessary cold penalty.",
+    "Fat node_modules in deployment zip slowing init."
+  ],
+  "relatedTopicIds": [
+    "aws-11-lambda-execution-environment",
+    "aws-11-lambda-in-vpc",
+    "aws-11-lambda-vs-ec2-fargate"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Dynamic import lazy load",
+      "note": "await import() heavy modules inside handler defers init cost on warm paths — trade first cold vs steady state.",
+      "futureTopicSlug": "aws/lambda/bundle-size"
+    },
+    {
+      "language": "typescript",
+      "concept": "esbuild bundle for Lambda",
+      "note": "Single tree-shaken dist/index.js reduces cold vs full node_modules — like webpack prod bundle for server.",
+      "futureTopicSlug": "aws/lambda/esbuild"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Understanding cold starts",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/runtimes-custom.html"
+    },
+    {
+      "title": "Provisioned concurrency",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/provisioned-concurrency.html"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "high-concurrency"
+}

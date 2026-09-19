@@ -1,0 +1,277 @@
+{
+  "id": "aws-11-lambda-execution-environment",
+  "slug": "lambda-execution-environment",
+  "title": "Lambda execution environment and lifecycle",
+  "moduleId": "aws-11-lambda-serverless",
+  "order": 1,
+  "hook": "Each Lambda invocation runs in an ephemeral execution environment — reuse warm sandboxes for performance but never depend on in-memory state for correctness.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS Lambda creates an execution environment — a Firecracker microVM sandbox running your runtime and handler. After invoke completes, AWS may freeze the environment for reuse. Initialization code outside the handler runs once per environment. /tmp provides 512 MB to 10 GB ephemeral disk. Memory setting scales CPU proportionally."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Execution environment",
+              "longForm": "Lambda execution environment",
+              "plainDefinition": "Sandbox running one runtime instance until recycled.",
+              "example": "Warm pool reuses env for next invoke."
+            },
+            {
+              "term": "/tmp",
+              "longForm": "Lambda temporary storage",
+              "plainDefinition": "Writable scratch space 512MB-10GB based on memory config.",
+              "example": "Download CSV to /tmp for processing."
+            },
+            {
+              "term": "Init phase",
+              "longForm": "Lambda initialization",
+              "plainDefinition": "Code outside handler runs on cold start before first invoke.",
+              "example": "const client = new S3Client({}) outside handler."
+            },
+            {
+              "term": "Memory",
+              "longForm": "Lambda memory configuration",
+              "plainDefinition": "128 MB to 10 GB — also allocates proportional CPU.",
+              "example": "1769 MB ≈ 1 vCPU equivalent."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Global variables and open connections persist on warm invokes — useful for SDK client reuse, dangerous for tenant data leakage. /tmp is not durable across all invocations. Timeout and memory directly affect bill and CPU."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: stateless handler, init outside handler for clients, /tmp scratch only, memory tunes CPU and cost."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Handler lifecycle",
+          "items": [
+            {
+              "title": "Init",
+              "body": "Runtime loads, top-level code runs — SDK clients, env validation."
+            },
+            {
+              "title": "Invoke",
+              "body": "Handler receives event, processes, returns sync or async result."
+            },
+            {
+              "title": "Freeze",
+              "body": "Environment frozen with memory state possibly preserved."
+            },
+            {
+              "title": "Recycle",
+              "body": "AWS discards environment unpredictably — design stateless."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Execution environment reuse",
+            "source": "flowchart LR\n  Cold[Cold start\\ninit + handler] --> Freeze[Environment frozen]\n  Freeze --> Warm[Warm invoke\\nhandler only]\n  Warm --> Freeze\n  Freeze --> Recycle[Recycled\\nstate lost]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Lambda function CloudFormation",
+            "code": "ProcessFn:\n  Type: AWS::Lambda::Function\n  Properties:\n    Runtime: nodejs20.x\n    Handler: index.handler\n    MemorySize: 1024\n    Timeout: 30\n    EphemeralStorage:\n      Size: 1024\n    Environment:\n      Variables:\n        TABLE_NAME: !Ref OrdersTable\n    Role: !GetAtt LambdaRole.Arn",
+            "explanation": "Memory and timeout are primary tuning knobs. EphemeralStorage expands /tmp."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "javascript",
+            "label": "Init outside handler (Node.js)",
+            "code": "import { DynamoDBClient } from \"@aws-sdk/client-dynamodb\";\nimport { DynamoDBDocumentClient, PutCommand } from \"@aws-sdk/lib-dynamodb\";\n\nconst client = DynamoDBDocumentClient.from(new DynamoDBClient({}));\n\nexport const handler = async (event) => {\n  await client.send(new PutCommand({ TableName: process.env.TABLE_NAME, Item: event.detail }));\n  return { statusCode: 200 };\n};",
+            "explanation": "Client created once per environment — reused on warm invokes."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Update function configuration",
+            "code": "aws lambda update-function-configuration \\\n  --function-name ProcessOrders \\\n  --memory-size 1769 \\\n  --timeout 60 \\\n  --ephemeral-storage Size=2048",
+            "explanation": "Power tuning: profile duration vs memory cost in Lambda Power Tuning tool."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Invoke and read log tail",
+            "code": "aws lambda invoke --function-name ProcessOrders \\\n  --payload file://event.json out.json\naws logs tail /aws/lambda/ProcessOrders --since 5m",
+            "explanation": "REPORT line shows Duration, Billed Duration, Memory Size, Max Memory Used."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Process model",
+              "Ephemeral sandbox per concurrent execution",
+              "Long-running Node process on EC2"
+            ],
+            [
+              "State",
+              "May persist warm — not guaranteed",
+              "In-memory cache reliable until restart"
+            ],
+            [
+              "Disk",
+              "/tmp only within environment",
+              "Full filesystem on EC2 EBS"
+            ],
+            [
+              "Scale",
+              "AWS manages concurrency",
+              "You manage ASG or pm2 cluster"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Storing user session in global variable — leaks across invocations on same environment. Writing audit trail only to /tmp. Huge deployment package slowing init."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Lambda extensions run alongside function for observability agents. SnapStart for Java reduces init. How to prove it in production: CloudWatch Max Memory Used vs configured memory, InitDuration on cold starts, X-Ray subsegments for init vs handler."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Low memory",
+              "Cheap per ms",
+              "CPU throttled — slower duration"
+            ],
+            [
+              "High memory",
+              "More CPU — may reduce total cost",
+              "Over-provision waste if flat duration"
+            ],
+            [
+              "Large /tmp",
+              "Big file transform",
+              "Ephemeral — not shared across envs"
+            ],
+            [
+              "Arm64 Graviton2",
+              "Lower cost same perf for many runtimes",
+              "Native deps must be arm built"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Relying on global state for correctness gets rejected. Strong answer: stateless handler, external store, init reuse for clients only."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Execution environments are ephemeral — design handlers stateless.",
+    "Initialize SDK clients outside handler for warm performance.",
+    "/tmp is scratch only — not durable storage.",
+    "60s: Stateless handler. Init outside handler. /tmp ephemeral. Memory scales CPU. Never trust warm globals for tenant data.",
+    "Follow-up: when does AWS recycle an environment?"
+  ],
+  "commonPitfalls": [
+    "Global variable for per-user auth context — rejected (cross-tenant leak risk).",
+    "Strong answer: pass identity in event; store session in DynamoDB.",
+    "Assuming /tmp persists forever across all invokes.",
+    "512MB default /tmp for large file processing without raising EphemeralStorage."
+  ],
+  "relatedTopicIds": [
+    "aws-11-lambda-cold-starts",
+    "aws-11-lambda-concurrency-dlq",
+    "aws-09-ec2-instances-amis"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Module scope singleton",
+      "note": "const db = connect() at module load mirrors Lambda init — same pattern on EC2 but lifecycle differs on recycle.",
+      "futureTopicSlug": "aws/lambda/init-pattern"
+    },
+    {
+      "language": "typescript",
+      "concept": "handler typing",
+      "note": "APIGatewayProxyHandler types event/context — strict handler signature like Express RequestHandler but stateless.",
+      "futureTopicSlug": "aws/lambda/typescript"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Lambda execution environment",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtime-environment.html"
+    },
+    {
+      "title": "Function configuration",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/configuration-function-common.html"
+    }
+  ],
+  "animationHint": "stack-heap",
+  "scenarioTag": "auth-token"
+}

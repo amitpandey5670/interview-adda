@@ -1,0 +1,87 @@
+{
+  "moduleId": "aws-15-data-movement",
+  "title": "Data movement interview drills",
+  "items": [
+    {
+      "question": "Migrate 50 TB from on-premises NFS to S3 before a datacenter lease ends in 3 weeks. Design the transfer.",
+      "answer": "Deploy AWS DataSync agent VM on-prem with network path to NFS export. Create NFS location, S3 location (bucket + prefix), task with bandwidth throttle to not saturate production LAN. Initial full transfer then incremental deltas until cutover. Verify with task report checksums. Schedule during off-peak; increase bandwidth week 3. Alternative for one-time: Snowball if bandwidth < 100 Mbps makes 3 weeks impossible. Post-migration: S3 lifecycle and validation spot-checks. IAM task role scoped to destination prefix only.",
+      "followUps": [
+        "How do you throttle DataSync without stopping production NFS?",
+        "When is Snowball faster than DataSync?"
+      ],
+      "sixtySeconds": "DataSync agent NFS to S3 task. Throttle bandwidth. Incremental until cutover. Verify checksums. Snowball if link too slow. IAM scoped to prefix."
+    },
+    {
+      "question": "S3 CRR is enabled but objects uploaded last month are not in the DR bucket. Why?",
+      "answer": "CRR only replicates objects created after the replication rule — existing objects need S3 Batch Replication or one-time DataSync copy. Also verify: versioning enabled on both buckets, replication rule status Enabled, IAM role for replication exists, KMS key policy allows replicate if SSE-KMS. Replication status on object metadata shows FAILED or REPLICA. RTC not enabled means delay is normal async. Strong answer: check object Replication status field before blaming rule config.",
+      "followUps": [
+        "Does CRR replicate delete markers?",
+        "Two-way replication pitfalls?"
+      ],
+      "sixtySeconds": "CRR only new objects after rule. Batch Replication for backlog. Versioning both buckets. Check object replication status FAILED. KMS key policy."
+    },
+    {
+      "question": "Real-time fraud detection needs transaction events in AWS within 1 second. Batch nightly ETL or streaming?",
+      "answer": "Streaming: Kinesis Data Streams or MSK ingest events, Lambda or Flink consumer scores in sub-second. Batch Glue nightly misses fraud window. Tradeoff: streaming ops complexity (shards, consumers, ordering). Architecture: API → Kinesis → Lambda → DynamoDB fraud score → alert. For audit archive: Firehose to S3 parquet hourly. Batch still runs for reporting on lake data. Interview: match latency requirement to tool — 1 second rules out batch.",
+      "followUps": [
+        "Kinesis versus MSK for this case?",
+        "How do you handle duplicate events in stream?"
+      ],
+      "sixtySeconds": "One second equals streaming Kinesis or MSK. Lambda consumer real-time score. Batch nightly too slow for fraud. Firehose to S3 for archive. Dupes idempotent consumer."
+    },
+    {
+      "question": "DataSync task fails with access denied to S3. Debug checklist.",
+      "answer": "Task execution role needs s3:PutObject, ListBucket on destination prefix, kms:Decrypt/Encrypt if SSE-KMS. Bucket policy must not deny role. Agent activation — check agent is online in console. Source NFS export permissions for agent IP. VPC endpoint if bucket private — agent needs route. CloudWatch Logs for task execution ID specific error. Cross-account: destination bucket policy must trust DataSync role from source account.",
+      "followUps": [
+        "Does DataSync use VPC endpoints?",
+        "Agent activation token expiry?"
+      ],
+      "sixtySeconds": "Task role S3 Put List KMS. Bucket policy allow role. Agent online. NFS export perms. VPC endpoint route. Task execution logs. Cross-account bucket policy trust."
+    },
+    {
+      "question": "Compliance requires encryption in transit and at rest for all migration traffic. What do you enable?",
+      "answer": "In transit: DataSync uses TLS to AWS; NFS source should use Kerberos or isolated VLAN; S3 HTTPS only bucket policy aws:SecureTransport. At rest: destination SSE-KMS with customer managed key, key policy allows DataSync role and replication role. CloudTrail data events log S3 object-level API. VPC endpoints keep traffic off public internet from private subnets. Document key rotation and who can decrypt.",
+      "followUps": [
+        "SSE-S3 versus SSE-KMS for compliance?",
+        "How to enforce TLS-only S3 access?"
+      ],
+      "sixtySeconds": "TLS DataSync to AWS. SSE-KMS CMK destination. Bucket policy SecureTransport deny HTTP. VPC endpoints. CloudTrail data events. Key policy least privilege."
+    },
+    {
+      "question": "Compare DataSync, S3 Batch Operations, and aws s3 sync for a 5 TB one-time copy between buckets.",
+      "answer": "Same-region bucket copy: S3 Batch Operations or sync CLI — no agent, parallel, cheap. Cross-region: Batch Replication job or DataSync S3-to-S3 location (managed parallel). DataSync adds verification and bandwidth control. aws s3 sync simple but operator laptop bottleneck — run from EC2. For ongoing DR: CRR rule not one-time sync. Pick DataSync when verification and scheduling matter; Batch for millions of objects manifest-driven.",
+      "followUps": [
+        "S3 Batch Operations manifest format?",
+        "DataSync S3-to-S3 versus CRR?"
+      ],
+      "sixtySeconds": "One-time same region Batch or sync from EC2. Cross-region DataSync S3 location or Batch Replication. CRR for ongoing not one-time. DataSync adds verify and throttle."
+    },
+    {
+      "question": "Replication Time Control (RTC) — when is the extra cost justified?",
+      "answer": "RTC guarantees replication within 15 minutes with CloudWatch metric S3 Replication Time. Justify when RPO requirement is minutes not hours for DR failover — regulated workloads, cross-region active-passive. Without RTC, replication is best-effort async — can lag hours under load. Cost per GB replicated higher. If RPO is 24 hours, standard CRR suffices. Prove with replication lag metric before buying RTC.",
+      "followUps": [
+        "What metric shows replication lag?",
+        "Failover drill with RTC?"
+      ],
+      "sixtySeconds": "RTC for 15 min RPO SLA. Worth it regulated DR minutes matter. Standard CRR best-effort hours lag possible. S3 Replication Time metric. 24h RPO skip RTC."
+    },
+    {
+      "question": "Design secure data movement from partner SFTP drops to your data lake.",
+      "answer": "AWS Transfer Family SFTP → S3 landing bucket with SSE-KMS, bucket policy denies insecure transport. EventBridge on Object Created triggers Glue crawler or Lambda validation. Separate prefix per partner, IAM scoped per partner role. Macie scan for PII. Lifecycle to Glacier after processing. Audit: CloudTrail data events, S3 access logs. No public bucket. Tradeoff: Transfer Family cost per hour versus self-managed EC2 SFTP.",
+      "followUps": [
+        "How do you isolate partners in one bucket?",
+        "Transfer Family versus S3 presigned PUT?"
+      ],
+      "sixtySeconds": "Transfer Family SFTP to S3 landing KMS. Prefix per partner IAM scope. EventBridge trigger validation. Macie PII. CloudTrail audit. Deny insecure transport."
+    },
+    {
+      "question": "Glue ETL job runs 6 hours; business wants hourly freshness. Options?",
+      "answer": "Shrink job: incremental processing with bookmark, partition by ingest date, process only new partitions. Or move hot path to streaming Kinesis → micro-batch Lambda/Flink every minute, Glue for cold aggregate hourly. Step Functions orchestrate parallel Glue workers on partition subsets. Tradeoff: streaming cost and complexity vs acceptable 6-hour staleness for analytics. Interview: ask actual SLA — hourly dashboard vs real-time fraud differ.",
+      "followUps": [
+        "What is Glue job bookmark?",
+        "Step Functions Distributed Map over partitions?"
+      ],
+      "sixtySeconds": "Incremental Glue bookmark partitions. Or streaming for hot path Glue for cold hourly. Parallel Glue per partition Step Functions. Ask real SLA before over-engineering."
+    }
+  ]
+}

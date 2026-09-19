@@ -1,0 +1,238 @@
+{
+  "id": "aws-08-cloudfront-distributions",
+  "slug": "cloudfront-distributions",
+  "title": "CloudFront distributions, origins, and cache behaviors",
+  "moduleId": "aws-08-edge-and-cdn",
+  "order": 2,
+  "hook": "A CloudFront distribution is the configuration object that ties your domain name to one or more origins and the rules that decide which origin handles each URL path.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An Amazon CloudFront distribution has a unique domain (d111111abcdef8.cloudfront.net or your alternate domain name), one or more origins (where content lives), and an ordered list of cache behaviors. Each behavior matches a path pattern (for example /api/*), selects an origin, and defines TTL, compression, allowed HTTP methods, and which headers/query strings/cookies participate in caching. The default behavior (path pattern *) catches everything not matched above — order matters: most specific patterns first."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Distribution",
+              "longForm": "CloudFront distribution",
+              "plainDefinition": "The deployable CDN config: domain, TLS cert, origins, behaviors, WAF attachment.",
+              "example": "One distribution for app.example.com serving SPA + API."
+            },
+            {
+              "term": "Alternate domain name",
+              "longForm": "Alternate Domain Name (CNAME)",
+              "plainDefinition": "Custom hostname aliased to the distribution, requires ACM certificate in us-east-1.",
+              "example": "app.example.com CNAME → d111111abcdef8.cloudfront.net"
+            },
+            {
+              "term": "Cache behavior",
+              "longForm": "cache behavior",
+              "plainDefinition": "Path pattern + origin + caching and forwarding rules.",
+              "example": "/assets/* → S3 origin with CachingOptimized policy."
+            },
+            {
+              "term": "Origin group",
+              "longForm": "origin group",
+              "plainDefinition": "Primary and failover origins for high availability on the same behavior.",
+              "example": "S3 primary, second S3 bucket failover on 5xx."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Misconfigured behaviors are the root cause of most CloudFront production incidents: API traffic cached like static files, wrong origin because Host header was not forwarded, or SPA routes returning S3 AccessDenied instead of index.html. Senior engineers design behaviors as a routing table — static long TTL, API zero TTL, default shell for client routing — and attach AWS WAF at the distribution for edge security."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Draw three behaviors: /assets/* → S3, /api/* → ALB, default * → S3 index.html. Mention custom error responses for 403/404 → 200 /index.html."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request routing inside a distribution",
+          "items": [
+            {
+              "title": "TLS terminates at edge",
+              "body": "Viewer connects to nearest PoP with your ACM certificate (must be in us-east-1 for CloudFront)."
+            },
+            {
+              "title": "Match path to behavior",
+              "body": "CloudFront evaluates behaviors top to bottom; first matching pattern wins."
+            },
+            {
+              "title": "Apply cache policy",
+              "body": "Cache policy defines TTL bounds and what goes into the cache key (managed or custom)."
+            },
+            {
+              "title": "Forward to origin on miss",
+              "body": "Origin request policy controls which headers, cookies, and query strings reach ALB or S3."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Behavior routing",
+            "source": "flowchart TD\n  R[Incoming request] --> B1{/api/* ?}\n  B1 -->|yes| ALB[ALB origin\\nTTL 0]\n  B1 -->|no| B2{/assets/* ?}\n  B2 -->|yes| S3A[S3 origin\\nlong TTL]\n  B2 -->|no| DEF[Default behavior\\nS3 index.html]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — list distributions and get config",
+            "code": "aws cloudfront list-distributions \\\n  --query 'DistributionList.Items[*].[Id,DomainName,Status]' \\\n  --output table\n\naws cloudfront get-distribution-config \\\n  --id E1234567890ABC \\\n  --output json > dist-config.json",
+            "explanation": "get-distribution-config returns ETag required for updates. Inspect Origins and CacheBehaviors.Items ordering — behaviors are evaluated in array order."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — multi-origin distribution with behaviors",
+            "code": "Resources:\n  WebDistribution:\n    Type: AWS::CloudFront::Distribution\n    Properties:\n      DistributionConfig:\n        Enabled: true\n        Aliases:\n          - app.example.com\n        ViewerCertificate:\n          AcmCertificateArn: !Ref AppCert\n          SslSupportMethod: sni-only\n          MinimumProtocolVersion: TLSv1.2_2021\n        Origins:\n          - Id: S3Static\n            DomainName: !GetAtt StaticBucket.RegionalDomainName\n            OriginAccessControlId: !GetAtt StaticOAC.Id\n          - Id: ApiAlb\n            DomainName: !GetAtt AppAlb.DNSName\n            CustomOriginConfig:\n              HTTPSPort: 443\n              OriginProtocolPolicy: https-only\n        CacheBehaviors:\n          - PathPattern: '/api/*'\n            TargetOriginId: ApiAlb\n            ViewerProtocolPolicy: https-only\n            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]\n            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled\n            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac  # AllViewer\n        DefaultCacheBehavior:\n          TargetOriginId: S3Static\n          ViewerProtocolPolicy: redirect-to-https\n          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized\n        CustomErrorResponses:\n          - ErrorCode: 403\n            ResponseCode: 200\n            ResponsePagePath: /index.html\n            ErrorCachingMinTTL: 10\n          - ErrorCode: 404\n            ResponseCode: 200\n            ResponsePagePath: /index.html\n            ErrorCachingMinTTL: 10",
+            "explanation": "/api/* uses CachingDisabled and AllViewer so ALB sees Host and Authorization. Default serves SPA from S3. Custom errors map S3 missing keys to index.html for React Router."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — attach WAF Web ACL to distribution",
+            "code": "aws wafv2 associate-web-acl \\\n  --web-acl-arn arn:aws:wafv2:us-east-1:123456789012:global/webacl/AppAcl/abc-123 \\\n  --resource-arn arn:aws:cloudfront::123456789012:distribution/E1234567890ABC",
+            "explanation": "WAF for CloudFront must be created in us-east-1 (global scope). Blocks bots and geo traffic before origin."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — origin group failover",
+            "code": "OriginGroups:\n  - Id: S3FailoverGroup\n    FailoverCriteria:\n      StatusCodes:\n        StatusCodes: [500, 502, 503, 504]\n        Quantity: 4\n    Members:\n      - OriginId: S3Primary\n      - OriginId: S3Secondary\nDefaultCacheBehavior:\n  TargetOriginId: S3FailoverGroup\n  # ... cache policy etc.",
+            "explanation": "Origin group tries secondary S3 bucket when primary returns 5xx. Useful for static DR; APIs usually use Route 53 health checks instead."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CloudFront behaviors vs reverse proxy config",
+          "headers": ["Aspect", "CloudFront cache behaviors", "Express / nginx reverse proxy"],
+          "rows": [
+            ["Path routing", "Declarative path patterns per behavior", "location /api { proxy_pass } blocks"],
+            ["Deploy", "Distribution update propagates globally (~minutes)", "Reload nginx on each server"],
+            ["TLS", "ACM cert at edge, free renewal", "You manage certs on each node"],
+            ["SPA fallback", "CustomErrorResponses 403/404 → index.html", "try_files $uri /index.html in nginx"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Putting default * behavior before /api/* — order is wrong so API never matches. Forgetting ACM certificate in us-east-1 for custom domains. Using S3 REST endpoint as origin without OAC while bucket is private. Not forwarding Host to ALB — ALB listener rules never match."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Managed cache and origin request policies replaced legacy forwarded-values — prefer AWS managed IDs (CachingOptimized, CachingDisabled, AllViewer) unless you need a custom cache key. Continuous deployment: use CloudFormation or Terraform with ETag on update-distribution; drift from console edits causes surprise. How to prove it in production: enable standard logging, sample x-host-header and sc-status; test each path pattern with curl -H 'Host: app.example.com'. Origin connection attempts and 502s often mean wrong origin domain or SSL protocol mismatch."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Choice", "Benefit", "Risk"],
+          "rows": [
+            ["Single distribution SPA+API", "One cert, one WAF", "Behavior misconfig affects all paths"],
+            ["Split distributions", "Blast radius isolation", "Two certs, DNS complexity"],
+            ["Managed cache policies", "AWS-tuned defaults", "Custom auth keys need custom policy"],
+            ["Origin group failover", "Static DR without DNS flip", "Stale content on secondary bucket"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Describing a distribution as 'just DNS to S3' without behaviors, origins, or TLS. Strong answer: ordered path behaviors, separate cache policies for static vs API, custom errors for SPA, WAF at viewer."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "A distribution maps URLs to origins via ordered cache behaviors; the default * behavior is the fallback.",
+    "ACM certificates for CloudFront custom domains must live in us-east-1; behaviors need distinct cache policies for static vs API.",
+    "Production tip: enable access logs and alarm on 5xx ratio; test /api/* with Authorization forwarded.",
+    "60s: Distribution = domain + origins + behaviors. Specific paths first. API TTL 0 + AllViewer. SPA custom errors. WAF at edge.",
+    "Follow-up: when would you split into two distributions instead of one?"
+  ],
+  "commonPitfalls": [
+    "Wrong behavior order — saying '/api is cached' because default behavior caught it first gets you rejected.",
+    "Strong answer: draw behavior table with path, origin, cache policy, and forwarded headers.",
+    "Custom domain without us-east-1 ACM certificate.",
+    "ALB origin returns 502 because OriginProtocolPolicy is http-only but ALB only listens on 443."
+  ],
+  "relatedTopicIds": [
+    "aws-08-cdn-fundamentals",
+    "aws-08-cloudfront-caching",
+    "aws-08-cloudfront-s3",
+    "aws-08-cloudfront-api-alb"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Express static + API mount",
+      "note": "app.use('/api', apiRouter) plus express.static mirrors CloudFront /api/* and default behaviors. CloudFront adds global edge; Express runs in one region.",
+      "futureTopicSlug": "nodejs/express/middleware"
+    },
+    {
+      "language": "typescript",
+      "concept": "Angular prerender asset paths",
+      "note": "Angular build output puts hashed files under /browser/ or assets/. CloudFront /assets/* behavior must match your deploy folder structure or deep links 404.",
+      "futureTopicSlug": "angular/deployment/static-hosting"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Cache behavior settings",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/distribution-web-values-specify.html"
+    },
+    {
+      "title": "Use managed cache policies",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "cloudfront-origin"
+}

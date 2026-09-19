@@ -1,0 +1,191 @@
+{
+  "id": "aws-04-ip-cidr-subnets",
+  "slug": "ip-cidr-subnets",
+  "title": "IP addresses, CIDR, and subnets (address planning)",
+  "moduleId": "aws-04-networking-primer",
+  "order": 1,
+  "hook": "Every Virtual Private Cloud (VPC) needs an Internet Protocol (IP) address range. Classless Inter-Domain Routing (CIDR) notation like 10.0.0.0/16 defines how many addresses you get and how subnets split that space.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "An IP address identifies a host on a network. IPv4 uses 32 bits (e.g., 10.0.1.25). CIDR suffix /16 means the first 16 bits are the network prefix — 10.0.0.0/16 yields 65,536 addresses. A VPC gets one primary CIDR; subnets are contiguous subdivisions within it, each mapped to one Availability Zone. Private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) are routable inside VPC but not on the public internet without NAT."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CIDR",
+              "longForm": "Classless Inter-Domain Routing",
+              "plainDefinition": "Notation for IP ranges — address/prefix-length.",
+              "example": "10.0.0.0/24 = 256 addresses (251 usable after AWS reserves 5)."
+            },
+            {
+              "term": "Subnet",
+              "longForm": "VPC subnet",
+              "plainDefinition": "A segment of VPC CIDR in one Availability Zone with its own route table.",
+              "example": "10.0.1.0/24 in us-east-1a for public web tier."
+            },
+            {
+              "term": "AZ",
+              "longForm": "Availability Zone",
+              "plainDefinition": "Isolated data center within a Region; subnets are AZ-scoped.",
+              "example": "ALB spans subnets in two AZs for high availability."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Poor CIDR planning causes painful migrations — overlapping ranges block VPC peering, exhausted subnets block new services. Interviews ask you to size a three-tier VPC and explain why AWS reserves five IPs per subnet. Plan room for future subnets, transit gateway attachments, and on-premises non-overlapping ranges."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "/16 VPC, /24 per tier per AZ is a common starting pattern. Never overlap with corporate network ranges used in VPN."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "VPC address layout",
+          "items": [
+            {
+              "title": "Choose VPC CIDR",
+              "body": "10.0.0.0/16 — 65k addresses for growth."
+            },
+            {
+              "title": "Public subnets per AZ",
+              "body": "10.0.0.0/24, 10.0.1.0/24 — route to Internet Gateway."
+            },
+            {
+              "title": "Private subnets per AZ",
+              "body": "10.0.10.0/24, 10.0.11.0/24 — route to NAT Gateway for egress."
+            },
+            {
+              "title": "Database subnets",
+              "body": "10.0.20.0/24 — no internet route, only app tier access."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "CIDR split in a VPC",
+            "source": "flowchart TB\n  VPC[\"10.0.0.0/16 VPC\"]\n  VPC --> PUB_A[\"10.0.0.0/24 public AZ-a\"]\n  VPC --> PUB_B[\"10.0.1.0/24 public AZ-b\"]\n  VPC --> PRIV_A[\"10.0.10.0/24 private AZ-a\"]\n  VPC --> PRIV_B[\"10.0.11.0/24 private AZ-b\"]\n  VPC --> DB[\"10.0.20.0/24 database\"]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: VPC with public and private subnets",
+            "code": "Resources:\n  AppVpc:\n    Type: AWS::EC2::VPC\n    Properties:\n      CidrBlock: 10.0.0.0/16\n      EnableDnsHostnames: true\n  PublicSubnetA:\n    Type: AWS::EC2::Subnet\n    Properties:\n      VpcId: !Ref AppVpc\n      CidrBlock: 10.0.0.0/24\n      AvailabilityZone: !Select [0, !GetAZs '']\n      MapPublicIpOnLaunch: true",
+            "explanation": "VPC gets /16. Each subnet is /24 in a specific AZ. MapPublicIpOnLaunch for public tier."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: create VPC and describe subnets",
+            "code": "aws ec2 create-vpc --cidr-block 10.0.0.0/16 --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=app-vpc}]'\n\naws ec2 describe-subnets \\\n  --filters Name=vpc-id,Values=vpc-0abc123 \\\n  --query 'Subnets[].{CIDR:CidrBlock,AZ:AvailabilityZone}' --output table",
+            "explanation": "Verify subnet CIDR and AZ mapping after deploy — common troubleshooting step for connectivity issues."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: add secondary CIDR when primary is exhausted",
+            "code": "aws ec2 associate-vpc-cidr-block \\\n  --vpc-id vpc-0abc123 \\\n  --cidr-block 10.1.0.0/16",
+            "explanation": "When you run out of subnet space, associate additional CIDR blocks — plan early to avoid emergency expansion."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare subnet sizing",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CIDR prefix cheat sheet",
+          "headers": ["CIDR", "Addresses", "Typical use"],
+          "rows": [
+            ["/16", "65,536", "Whole VPC"],
+            ["/24", "256 (251 usable)", "Subnet per tier per AZ"],
+            ["/28", "16 (11 usable)", "Small management subnet — tight"],
+            ["/32", "1", "Host route, not a subnet"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Overlapping VPC CIDR with on-premises VPN range — breaks routing. /28 subnets for application tiers that need many Elastic Network Interfaces (ENIs). Forgetting AWS reserves first four and last IP in every subnet."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "CIDR defines IP ranges; VPC gets primary CIDR, subnets subdivide per AZ.",
+    "Plan non-overlapping ranges before VPC peering or VPN to on-premises.",
+    "/16 VPC with /24 subnets per tier per AZ is a solid default pattern.",
+    "60s: CIDR = network prefix + host bits. Subnets are AZ-scoped. AWS reserves 5 IPs per subnet. Avoid overlap with corp network. Secondary CIDR if you exhaust space.",
+    "Follow-up: how many usable IPs in a /24 subnet on AWS?"
+  ],
+  "commonPitfalls": [
+    "Saying a /24 has 256 usable IPs — AWS reserves 5, so 251 usable.",
+    "Strong answer: know reserved addresses and plan /24 minimum for most tiers.",
+    "VPC CIDR overlapping corporate 10.0.0.0/8 used in Direct Connect.",
+    "Single-AZ subnet for production ALB — need subnets in at least two AZs."
+  ],
+  "relatedTopicIds": [
+    "aws-04-public-vs-private-networking",
+    "aws-04-nat-routing-gateways",
+    "aws-04-osi-layers-aws-services",
+    "aws-01-aws-service-map"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Private IP in container networking",
+      "note": "ECS tasks get ENI IPs from subnet CIDR — your Node app binds to private IP, not public. Outbound internet requires NAT in the subnet route table.",
+      "futureTopicSlug": "aws/networking/ecs-eni"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "VPC CIDR blocks",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-cidr-blocks.html"
+    },
+    {
+      "title": "Subnet sizing",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/subnet-sizing.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

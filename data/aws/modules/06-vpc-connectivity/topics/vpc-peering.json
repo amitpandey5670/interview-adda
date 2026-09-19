@@ -1,0 +1,262 @@
+{
+  "id": "aws-06-vpc-peering",
+  "slug": "vpc-peering",
+  "title": "VPC peering (transitive routing limits)",
+  "moduleId": "aws-06-vpc-connectivity",
+  "order": 2,
+  "hook": "VPC peering connects two Virtual Private Clouds (VPCs) at Layer 3 so private IP addresses can talk directly. It is not transitive: if VPC A peers with B and B peers with C, A cannot reach C through B.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A VPC peering connection links two VPCs so instances with private IPs can communicate as if on one extended network. AWS handles the backbone; you manage route tables, security groups, and Network Access Control Lists (NACLs). Peering works cross-account and cross-Region (with DNS considerations)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Peering connection",
+              "longForm": "VPC peering connection",
+              "plainDefinition": "Bidirectional Layer 3 link between exactly two VPCs.",
+              "example": "pcx-abc between prod-vpc and shared-services-vpc."
+            },
+            {
+              "term": "Transitivity",
+              "longForm": "Non-transitive routing",
+              "plainDefinition": "Peered VPCs do not advertise each other's routes to third VPCs.",
+              "example": "A↔B and B↔C does not give A↔C."
+            },
+            {
+              "term": "CIDR overlap",
+              "longForm": "Overlapping CIDR blocks",
+              "plainDefinition": "Peering requires distinct, non-overlapping IPv4/IPv6 ranges.",
+              "example": "10.0.0.0/16 cannot peer with 10.0.0.0/16."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Peering is the simplest private link between two VPCs — shared services, tooling, or legacy split stacks. Interviewers test whether you know when peering breaks down (many VPCs, transitive needs, overlapping CIDR from acquisitions)."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Scale limit",
+          "body": "Full mesh peering among N VPCs needs N*(N-1)/2 connections — Transit Gateway replaces this pattern."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Peering lifecycle",
+          "items": [
+            {
+              "title": "Create request",
+              "body": "Requester specifies peer VPC ID and account if cross-account."
+            },
+            {
+              "title": "Accept",
+              "body": "Accepter accepts; status becomes active."
+            },
+            {
+              "title": "Add routes",
+              "body": "Each side adds routes to peer CIDR (or specific subnets) pointing to pcx- id."
+            },
+            {
+              "title": "Open SG/NACL",
+              "body": "Allow traffic on both sides — peering only provides reachability, not permission."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Non-transitive peering",
+            "source": "flowchart LR\n  A[VPC A 10.1.0.0/16] <-->|pcx-1| B[VPC B 10.2.0.0/16]\n  B <-->|pcx-2| C[VPC C 10.3.0.0/16]\n  A -.->|no route| C"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create peering",
+            "code": "aws ec2 create-vpc-peering-connection \\\n  --vpc-id vpc-requester \\\n  --peer-vpc-id vpc-accepter \\\n  --peer-region us-east-1",
+            "explanation": "Cross-Region peering requires peer-region. Accepter must accept separately."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — accept and route",
+            "code": "aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id pcx-abc\naws ec2 create-route --route-table-id rtb-a --destination-cidr-block 10.2.0.0/16 --vpc-peering-connection-id pcx-abc",
+            "explanation": "Routes are per route table. Both directions need explicit routes for two-way traffic."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — peering + routes",
+            "code": "Peering:\n  Type: AWS::EC2::VPCPeeringConnection\n  Properties:\n    VpcId: !Ref VpcA\n    PeerVpcId: !Ref VpcB\nRouteToB:\n  Type: AWS::EC2::Route\n  Properties:\n    RouteTableId: !Ref VpcARouteTable\n    DestinationCidrBlock: 10.2.0.0/16\n    VpcPeeringConnectionId: !Ref Peering",
+            "explanation": "CloudFormation cannot accept cross-account peering in one stack — often split stacks or custom resource."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — verify peering options",
+            "code": "aws ec2 describe-vpc-peering-connections --vpc-peering-connection-ids pcx-abc --query VpcPeeringConnections[0].{Status:Status.Code,Requester:RequesterVpcInfo.CidrBlock,Accepter:AccepterVpcInfo.CidrBlock}",
+            "explanation": "Confirm active status and CIDR blocks before debugging SG rules."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Private connectivity mental model",
+          "headers": [
+            "Aspect",
+            "VPC peering",
+            "App-level (Node/TS)"
+          ],
+          "rows": [
+            [
+              "Scope",
+              "Layer 3 between VPCs",
+              "HTTP/gRPC between private IPs or DNS names"
+            ],
+            [
+              "Transitive",
+              "Never",
+              "Service mesh may route through sidecars — different layer"
+            ],
+            [
+              "Discovery",
+              "Route tables + DNS",
+              "Consul/Eureka or hard-coded internal ALB DNS"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls",
+          "body": "Hub VPC pattern expecting transitive routes. Missing accepter routes. Referencing peer SG without enabling cross-VPC SG reference."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Peering is non-transitive by design — AWS avoids becoming your dynamic routing protocol. Cross-Region peering adds latency and separate DNS resolution options (enableDnsHostnames/enableDnsSupport on both). How to prove it in production: traceroute shows pcx hop; Flow Logs confirm SYN without reply implicates missing return route or SG."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Choice",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Peering",
+              "Simple two-VPC private link",
+              "N-squared connections at scale"
+            ],
+            [
+              "TGW",
+              "Transitive hub",
+              "Hourly + data processing charges"
+            ],
+            [
+              "PrivateLink",
+              "Consumer/provider service model",
+              "Not full VPC mesh"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Claiming peering is transitive through a shared VPC. Strong: only direct peer CIDRs route; third VPC needs its own peering or TGW attachment."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "VPC peering is one-to-one, non-transitive, and requires non-overlapping CIDR blocks.",
+    "Routes must exist on both sides; security groups can reference peer VPC groups in same Region/account.",
+    "Use Transit Gateway when you need hub-and-spoke beyond two VPCs — peering does not scale.",
+    "60s: Peering = private L3 between two VPCs. Not transitive. No overlapping CIDR. Update route tables both ways. SG rules still required. For many VPCs use TGW.",
+    "Follow-up: can you peer VPCs in different Regions and how does DNS resolution work?"
+  ],
+  "commonPitfalls": [
+    "Expecting transitive routing through a hub VPC gets you rejected — peering is always pairwise.",
+    "Strong answer: each peering is its own edge; routes are explicit per connection; use TGW for transitive hub.",
+    "Overlapping CIDR blocks — peering request fails or routing blackholes.",
+    "Forgetting return routes on the accepter side — asymmetric routing drops replies."
+  ],
+  "relatedTopicIds": [
+    "aws-06-transit-gateway",
+    "aws-06-vpc-endpoints",
+    "aws-06-hybrid-scenario",
+    "aws-07-network-acls"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Internal API base URLs",
+      "note": "Node services call peer VPC IPs via private DNS or ALB — peering is invisible at HTTP layer but required for packets to flow.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Cross-VPC TypeScript microservices",
+      "note": "Typed clients targeting internal ALBs still need route tables and SG rules on both sides of the peering connection.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "VPC peering connections",
+      "url": "https://docs.aws.amazon.com/vpc/latest/peering/what-is-vpc-peering.html"
+    },
+    {
+      "title": "VPC peering routing",
+      "url": "https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-routing.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

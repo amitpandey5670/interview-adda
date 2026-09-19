@@ -1,0 +1,229 @@
+{
+  "id": "aws-05-aws-vpc-dns",
+  "slug": "aws-vpc-dns",
+  "title": "VPC DNS hostnames and resolver behavior",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 5,
+  "hook": "AmazonProvidedDNS resolves hostnames inside your VPC — including AWS service endpoints and EC2 public DNS names when enabled. The resolver lives at the VPC network address plus two, for example 10.0.0.2 for a 10.0.0.0/16 VPC.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every VPC has enableDnsSupport (default true) and enableDnsHostnames (default true for default VPC, false for custom unless set). With DNS support, instances use AmazonProvidedDNS at base of VPC CIDR + 2. AWS resolves public hostnames for EC2 with public IPs when hostnames enabled, and private DNS names for instances. Route 53 private hosted zones associate with VPC for custom internal names like api.internal.example.com."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "AmazonProvidedDNS",
+              "longForm": "Amazon provided DNS resolver",
+              "plainDefinition": "AWS-managed DNS at VPC CIDR base + 2 address.",
+              "example": "10.0.0.2 for VPC 10.0.0.0/16."
+            },
+            {
+              "term": "enableDnsSupport",
+              "longForm": "Enable DNS support",
+              "plainDefinition": "Allows VPC to use AWS DNS resolution.",
+              "example": "Must be true for RDS endpoint hostname resolution."
+            },
+            {
+              "term": "enableDnsHostnames",
+              "longForm": "Enable DNS hostnames",
+              "plainDefinition": "Assigns public DNS hostnames to instances with public IPs.",
+              "example": "ec2-203-0-113-10.ap-south-1.compute.amazonaws.com."
+            },
+            {
+              "term": "Private hosted zone",
+              "longForm": "Route 53 private hosted zone",
+              "plainDefinition": "DNS zone visible only inside associated VPCs.",
+              "example": "db.internal resolves to RDS private IP."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Applications reference RDS and ElastiCache by DNS endpoint — broken VPC DNS means connection failures despite correct security groups. Hybrid setups need Route 53 Resolver rules to forward on-prem names. Interviewers ask how a private EC2 resolves an S3 VPC endpoint DNS name."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: DNS at VPC+2, enableDnsSupport for AWS endpoints, private hosted zones for custom internal names, Resolver for hybrid."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Name resolution inside VPC",
+          "items": [
+            {
+              "title": "Instance queries VPC+2",
+              "body": "DHCP option set assigns AmazonProvidedDNS to instances."
+            },
+            {
+              "title": "AWS service names",
+              "body": "Resolver returns private IPs for RDS, ELB, and interface endpoint names."
+            },
+            {
+              "title": "Private zone",
+              "body": "Associated Route 53 private zone answers custom internal records."
+            },
+            {
+              "title": "Hybrid forward",
+              "body": "Resolver inbound/outbound endpoints forward corp.example.com to on-prem DNS."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "VPC DNS resolution",
+            "source": "flowchart LR\n  EC2[EC2 instance] -->|query| DNS[VPC+2 AmazonProvidedDNS]\n  DNS --> RDS[RDS endpoint private IP]\n  DNS --> PHZ[Route 53 private zone]\n  DNS --> FWD[Resolver forward to on-prem]\n  PHZ --> APP[api.internal → 10.0.10.50]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Enable VPC DNS attributes",
+            "code": "AppVpc:\n  Type: AWS::EC2::VPC\n  Properties:\n    CidrBlock: 10.0.0.0/16\n    EnableDnsSupport: true\n    EnableDnsHostnames: true\nInternalZone:\n  Type: AWS::Route53::HostedZone\n  Properties:\n    Name: internal.example.com\n    VPCs:\n      - VPCId: !Ref AppVpc\n        VPCRegion: !Ref AWS::Region\nApiRecord:\n  Type: AWS::Route53::RecordSet\n  Properties:\n    HostedZoneId: !Ref InternalZone\n    Name: api.internal.example.com\n    Type: A\n    TTL: \"60\"\n    ResourceRecords:\n      - 10.0.10.50",
+            "explanation": "Private zone only resolves inside associated VPC. C# app uses https://api.internal.example.com with cert from ACM private CA or internal PKI."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Verify DNS settings on VPC",
+            "code": "aws ec2 describe-vpc-attribute --vpc-id vpc-0abc123 --attribute enableDnsSupport\naws ec2 describe-vpc-attribute --vpc-id vpc-0abc123 --attribute enableDnsHostnames",
+            "explanation": "Both should be true for standard app VPC. False enableDnsSupport breaks AWS endpoint resolution."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Test resolution from instance",
+            "code": "dig +short mydb.abc123.ap-south-1.rds.amazonaws.com\nnslookup api.internal.example.com 10.0.0.2",
+            "explanation": "First resolves RDS to private IP. Second confirms private zone via VPC resolver."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "VPC DNS vs Active Directory DNS",
+          "headers": ["Aspect", "AmazonProvidedDNS + Route 53", "On-premises / C# backend"],
+          "rows": [
+            ["Resolver address", "VPC CIDR + 2 (automatic)", "AD DNS servers you configure"],
+            ["Service discovery", "RDS/ELB AWS-generated names", "SRV records or hardcoded SQL hostname"],
+            ["Internal apps", "Route 53 private hosted zone", "Internal AD zone corp.local"],
+            ["ASP.NET Core", "Connection string uses RDS DNS endpoint", "Server=sql.corp.local; same pattern"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "enableDnsSupport false on custom VPC. Private hosted zone not associated with VPC. Custom DHCP option set pointing to wrong DNS without forwarders. Hardcoding RDS IP instead of endpoint — fails on failover."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: query logging on Route 53 Resolver; dig from bastion via SSM; verify split-horizon — same name public vs private zone. Interface VPC endpoints create private DNS names — enablePrivateDnsName on endpoint or apps must use correct suffix. Hybrid: Resolver rules FORWARD corp.example.com to on-prem IP; INBOUND endpoint lets on-prem resolve AWS private zones."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Cost / risk"],
+          "rows": [
+            ["AWS default DNS", "Zero ops, resolves service endpoints", "Less control than full custom DNS"],
+            ["Private hosted zone", "Friendly internal names", "Zone association per VPC/Region"],
+            ["Custom DHCP DNS", "Point all queries to on-prem", "Single point of failure if link down"],
+            ["Hardcoded IPs in app", "Avoid DNS dependency", "Breaks on RDS failover — rejected pattern"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying DNS is 'just Route 53' without VPC resolver at +2. Strong answer: AmazonProvidedDNS for AWS names, private zones for custom, Resolver for hybrid, always use RDS endpoint hostname in connection strings."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "AmazonProvidedDNS at VPC network address + 2 resolves AWS service endpoints inside the VPC.",
+    "enableDnsSupport and enableDnsHostnames must be true for standard EC2 and RDS hostname behavior.",
+    "Route 53 private hosted zones provide custom internal names associated with VPC.",
+    "60s: DNS at VPC+2. RDS endpoint hostname not IP. Private zone for internal apps. Resolver for hybrid forward.",
+    "Follow-up: how does private DNS work for interface VPC endpoints?"
+  ],
+  "commonPitfalls": [
+    "Hardcoding database IP gets you rejected — use RDS DNS endpoint for failover.",
+    "Strong answer: VPC+2 resolver, enableDns flags, private zone association.",
+    "Private hosted zone in wrong Region association — silent resolution failure.",
+    "Disabling enableDnsSupport and wondering why ELB hostname does not resolve."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-vpc-cidr-subnets",
+    "aws-05-aws-route-tables",
+    "aws-05-aws-multi-az-vpc-patterns",
+    "aws-02-aws-global-traffic-routing"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "MongoDB/Redis connection strings",
+      "note": "Node apps use ElastiCache configuration endpoint hostname — DNS failure looks like ETIMEDOUT same as C# StackExchange.Redis pointing at wrong static IP.",
+      "futureTopicSlug": "aws/elasticache/dns-endpoints"
+    },
+    {
+      "language": "typescript",
+      "concept": "Service mesh internal DNS",
+      "note": "TypeScript microservices in EKS use CoreDNS plus optional private zones — analogous to C# services registering in Consul or AD DNS on-prem.",
+      "futureTopicSlug": "aws/eks/service-discovery"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "DNS attributes for your VPC",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/vpc-dns.html"
+    },
+    {
+      "title": "Route 53 private hosted zones",
+      "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zones-private.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "vpc-troubleshoot"
+}

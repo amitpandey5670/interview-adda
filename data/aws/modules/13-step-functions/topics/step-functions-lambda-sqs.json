@@ -1,0 +1,237 @@
+{
+  "id": "aws-13-step-functions-lambda-sqs",
+  "slug": "step-functions-lambda-sqs",
+  "title": "Step Functions with Lambda and SQS (orchestrated workers)",
+  "moduleId": "aws-13-step-functions",
+  "order": 4,
+  "hook": "Step Functions can invoke Lambda synchronously in a Task state, push work to SQS for async workers, or pause with waitForTaskToken until an SQS consumer reports back — combining orchestration with queue-based scale.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Sync Lambda Task: Resource arn:aws:states:::lambda:invoke waits for response. SQS sendMessage Task dispatches to worker queue without waiting. waitForTaskToken pattern embeds $$.Task.Token in SQS message; worker calls SendTaskSuccess when done — Step Functions resumes. Combines durable orchestration with horizontally scaled consumers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "waitForTaskToken",
+              "longForm": "callback with task token",
+              "plainDefinition": "Task pauses until SendTaskSuccess/Failure with token.",
+              "example": "Human approval queue message includes task token."
+            },
+            {
+              "term": "Activity",
+              "longForm": "Step Functions Activity",
+              "plainDefinition": "Legacy worker poll model — prefer Lambda or task token.",
+              "example": "On-prem worker polls GetActivityTask."
+            },
+            {
+              "term": "SendTaskSuccess",
+              "longForm": "Step Functions SendTaskSuccess API",
+              "plainDefinition": "Resumes paused execution with output JSON.",
+              "example": "Worker passes approval decision to state machine."
+            },
+            {
+              "term": "Integration pattern",
+              "longForm": "service integration pattern",
+              "plainDefinition": "ASL Resource ARN suffix defining sync/async/wait behavior.",
+              "example": "sqs:sendMessage.waitForTaskToken"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Sync Lambda for every step chains cold starts and 15-minute limits. SQS workers handle bursty heavy work while Step Functions tracks overall saga state. Token timeout without heartbeat fails execution — tune HeartbeatSeconds for long approvals."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: sync Lambda for quick steps; SQS + task token for long or human work; worker calls SendTaskSuccess with token from message."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "SQS callback pattern",
+          "items": [
+            {
+              "title": "Task with waitForTaskToken",
+              "body": "Step Functions sends SQS message including task token."
+            },
+            {
+              "title": "Worker consumes",
+              "body": "Lambda on queue parses token and performs work."
+            },
+            {
+              "title": "Report result",
+              "body": "SendTaskSuccess or SendTaskFailure with token."
+            },
+            {
+              "title": "Orchestration continues",
+              "body": "Next state receives worker output."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Task token with SQS worker",
+            "source": "sequenceDiagram\n  participant SF as Step Functions\n  participant Q as SQS\n  participant W as Worker Lambda\n  SF->>Q: sendMessage + taskToken\n  SF-->>SF: pause execution\n  Q->>W: poll message\n  W->>SF: SendTaskSuccess(token)\n  SF->>SF: resume next state"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — SQS waitForTaskToken Task",
+            "code": "\"WaitForApproval\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::sqs:sendMessage.waitForTaskToken\",\n  \"Parameters\": {\n    \"QueueUrl\": \"https://sqs.us-east-1.amazonaws.com/123/approvals\",\n    \"MessageBody\": {\n      \"orderId.$\": \"$.orderId\",\n      \"taskToken.$\": \"$$.Task.Token\"\n    }\n  },\n  \"HeartbeatSeconds\": 3600,\n  \"Next\": \"ProcessApproval\"\n}",
+            "explanation": "$$.Task.Token injected by Step Functions. HeartbeatSeconds for long human waits."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — worker completes task token",
+            "code": "import { SFNClient, SendTaskSuccessCommand } from '@aws-sdk/client-sfn';\nimport type { SQSHandler } from 'aws-lambda';\n\nconst sfn = new SFNClient({});\n\nexport const handler: SQSHandler = async (event) => {\n  for (const record of event.Records) {\n    const { taskToken, orderId, approved } = JSON.parse(record.body);\n    await sfn.send(new SendTaskSuccessCommand({\n      taskToken,\n      output: JSON.stringify({ orderId, approved }),\n    }));\n  }\n};",
+            "explanation": "Worker must call SendTaskSuccess or execution times out. Idempotent if message redelivered."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — sync Lambda Task for quick validation",
+            "code": "\"ValidateOrder\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::lambda:invoke\",\n  \"OutputPath\": \"$.Payload\",\n  \"Parameters\": {\n    \"FunctionName\": \"validate-order\",\n    \"Payload.$\": \"$\"\n  },\n  \"Next\": \"WaitForApproval\"\n}",
+            "explanation": "OutputPath $.Payload unwraps Lambda response for next state."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — fire-and-forget SQS without wait",
+            "code": "\"NotifyWarehouse\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::sqs:sendMessage\",\n  \"Parameters\": {\n    \"QueueUrl\": \"https://sqs.us-east-1.amazonaws.com/123/warehouse\",\n    \"MessageBody.$\": \"$\"\n  },\n  \"Next\": \"OrderComplete\"\n}",
+            "explanation": "No waitForTaskToken — orchestration does not wait for warehouse consumer. Use when notification is one-way."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Orchestration integration options",
+          "headers": ["Pattern", "Waits for worker?", "Best for"],
+          "rows": [
+            ["lambda:invoke sync", "Yes", "Sub-minute logic"],
+            ["sqs:sendMessage", "No", "Fire-and-forget notify"],
+            ["sqs waitForTaskToken", "Yes", "Human or long worker"],
+            ["SQS + Lambda only", "N/A", "No central saga state"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Forgetting SendTaskSuccess — execution hangs until timeout. Token in logs — security leak. Sync Lambda chain for 20-minute total work — hits limits. Duplicate SQS delivery calling SendTaskSuccess twice — second call fails harmlessly if handled."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: ExecutionsTimedOut metric correlates with missing SendTaskSuccess. Log taskToken hash not full token. Compare cost: N sync Lambda Tasks vs one token wait + batch worker. EventBridge Pipes SQS to Step Functions for alternative entry."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Design", "Pros", "Cons"],
+          "rows": [
+            ["All sync Lambda", "Simple mental model", "Cold starts, 15-min cap"],
+            ["SQS task token", "Scale workers, human wait", "Token lifecycle ops"],
+            ["Choreography only", "No Step Functions cost", "Lost central audit"],
+            ["Activity worker", "On-prem poll", "Legacy — prefer token"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'Step Functions replaces SQS.' Strong answer: Step Functions orchestrates; SQS scales workers; combine with task token for long-running steps."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Sync Lambda Task for quick steps; SQS sendMessage for fire-and-forget; waitForTaskToken for async completion.",
+    "Worker calls SendTaskSuccess with token from message body.",
+    "HeartbeatSeconds prevents timeout on long approvals.",
+    "60s: Token in SQS message. Worker SendTaskSuccess. Sync Lambda for fast steps. SQS scales heavy work.",
+    "Follow-up: how handle duplicate SQS delivery with task token?"
+  ],
+  "commonPitfalls": [
+    "Missing SendTaskSuccess — execution times out hours later.",
+    "Strong answer: worker idempotency + log token completion status.",
+    "Sync Lambda chain for entire saga — latency and limit issues.",
+    "Logging full task token — security exposure."
+  ],
+  "relatedTopicIds": [
+    "aws-13-step-functions-states",
+    "aws-13-step-functions-saga",
+    "aws-12-sqs-lambda-consumer"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Promise with external resolver",
+      "note": "waitForTaskToken is like storing resolve() in a message — worker calls resolve(output) via SendTaskSuccess API.",
+      "futureTopicSlug": "typescript/async/deferred-promises"
+    },
+    {
+      "language": "javascript",
+      "concept": "Job queue with completion callback",
+      "note": "BullMQ job completion event resembles SendTaskSuccess — Step Functions is the parent workflow awaiting child job.",
+      "futureTopicSlug": "javascript/backend/job-queues"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Callback with task token",
+      "url": "https://docs.aws.amazon.com/step-functions/latest/dg/connect-to-resource.html#connect-wait-token"
+    },
+    {
+      "title": "SQS integration",
+      "url": "https://docs.aws.amazon.com/step-functions/latest/dg/connect-sqs.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "step-functions-saga"
+}

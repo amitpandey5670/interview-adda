@@ -1,0 +1,191 @@
+{
+  "id": "aws-03-aws-account-boundary",
+  "slug": "aws-account-boundary",
+  "title": "AWS account boundary (hard isolation unit)",
+  "moduleId": "aws-03-accounts-identity-tenancy",
+  "order": 1,
+  "hook": "An AWS account is the strongest default isolation boundary in AWS. Resources, billing, service quotas, and most security policies are scoped to a single 12-digit account ID.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Every AWS account is a separate container with its own Identity and Access Management (IAM) namespace, default service quotas, billing records, and resource ARN prefix (arn:aws:service:region:account-id:resource). You cannot share a VPC across accounts without explicit peering or AWS Resource Access Manager (RAM). Multi-account strategies use separate accounts for dev, staging, production, security tooling, and log archive to limit blast radius."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Account ID",
+              "longForm": "AWS account identifier",
+              "plainDefinition": "A unique 12-digit number identifying your AWS account in ARNs and cross-account trust.",
+              "example": "arn:aws:s3:::bucket — account 123456789012 owns the bucket."
+            },
+            {
+              "term": "Root user",
+              "longForm": "AWS account root user",
+              "plainDefinition": "The email owner of the account with unrestricted access — avoid daily use.",
+              "example": "Enable MFA on root; use IAM users/roles for operations."
+            },
+            {
+              "term": "Blast radius",
+              "longForm": "Security blast radius",
+              "plainDefinition": "How much damage one mistake or breach can cause.",
+              "example": "Separate prod account limits dev misconfiguration impact."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers test whether you understand accounts as security and billing cells, not just login credentials. A compromised access key in a shared account endangers every environment. Landing zone patterns provision dedicated accounts per workload or environment under AWS Organizations."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "Interview one-liner",
+          "body": "Account = hard boundary for IAM, billing, and quotas. Split environments across accounts before relying on tags alone."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Multi-account landing zone",
+          "items": [
+            {
+              "title": "Management account",
+              "body": "AWS Organizations root; consolidated billing; SCP attachment point."
+            },
+            {
+              "title": "Workload accounts",
+              "body": "Separate prod, staging, dev with distinct IAM and quotas."
+            },
+            {
+              "title": "Security account",
+              "body": "Central CloudTrail, GuardDuty, Security Hub aggregation."
+            },
+            {
+              "title": "Cross-account access",
+              "body": "IAM roles with trust policies — never long-lived keys in every account."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Account isolation model",
+            "source": "flowchart TB\n  ORG[Organizations management account]\n  ORG --> DEV[Dev account]\n  ORG --> STG[Staging account]\n  ORG --> PRD[Prod account]\n  ORG --> SEC[Security / log archive]\n  DEV -.->|no default sharing| PRD"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: get caller identity and list accounts",
+            "code": "aws sts get-caller-identity\n# Account, Arn, UserId\n\naws organizations list-accounts \\\n  --query 'Accounts[].{Name:Name,Id:Id,Status:Status}' --output table",
+            "explanation": "get-caller-identity confirms which account your credentials target. list-accounts shows the org structure."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: cross-account role trust",
+            "code": "Resources:\n  CrossAccountDeployRole:\n    Type: AWS::IAM::Role\n    Properties:\n      RoleName: cicd-deploy-prod\n      AssumeRolePolicyDocument:\n        Version: '2012-10-17'\n        Statement:\n          - Effect: Allow\n            Principal:\n              AWS: arn:aws:iam::111111111111:role/cicd-runner\n            Action: sts:AssumeRole\n            Condition:\n              StringEquals:\n                sts:ExternalId: unique-deploy-secret",
+            "explanation": "Prod account trusts CI account role with ExternalId condition — cross-account without duplicating users."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: assume role into another account",
+            "code": "aws sts assume-role \\\n  --role-arn arn:aws:iam::222222222222:role/ReadOnlyAudit \\\n  --role-session-name audit-session \\\n  --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]'",
+            "explanation": "Temporary credentials scoped to the target account role — preferred over static keys per account."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare isolation strategies",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Account vs other boundaries",
+          "headers": ["Boundary", "Isolation strength", "Cost overhead"],
+          "rows": [
+            ["Separate AWS accounts", "Strongest default", "More accounts to manage"],
+            ["Separate VPCs same account", "Network isolation only", "Lower overhead"],
+            ["Tags (Environment=prod)", "No security isolation", "Minimal"],
+            ["IAM permission boundaries", "Policy cap within account", "Same account blast radius"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Running prod and dev in one account with only tag separation. Using root access keys for automation. Creating cross-account roles without ExternalId or condition keys."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "An AWS account is a hard isolation unit for IAM, billing, quotas, and ARNs.",
+    "Multi-account landing zones limit blast radius — split prod from non-prod at account level.",
+    "Cross-account access uses IAM role trust with temporary credentials, not duplicated long-lived keys.",
+    "60s: Account = security and billing cell. Org management account for consolidated billing and SCPs. Prod/dev in separate accounts. AssumeRole for cross-account with ExternalId.",
+    "Follow-up: how does AWS Control Tower automate landing zone setup?"
+  ],
+  "commonPitfalls": [
+    "Relying on tags alone for prod/dev separation — tags do not stop IAM mistakes in the same account.",
+    "Strong answer: separate accounts for environments; tags for cost attribution within accounts.",
+    "Storing root access keys in CI pipelines.",
+    "Trust policies with Principal: '*' and no conditions on cross-account roles."
+  ],
+  "relatedTopicIds": [
+    "aws-03-organizations-and-scps",
+    "aws-03-iam-fundamentals",
+    "aws-03-tags-and-environments",
+    "aws-01-billing-and-resources"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Multi-account SDK configuration",
+      "note": "Node apps using @aws-sdk/client-sts assume-role into target accounts per request. Hardcode account IDs in config, not in application code scattered across repos.",
+      "futureTopicSlug": "aws/identity/cross-account-sdk"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS account",
+      "url": "https://docs.aws.amazon.com/accounts/latest/reference/accounts-welcome.html"
+    },
+    {
+      "title": "Organizing Your AWS Environment",
+      "url": "https://docs.aws.amazon.com/whitepapers/latest/organizing-your-aws-environment/organizing-your-aws-environment.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "saas-tenant-routing"
+}

@@ -1,0 +1,191 @@
+{
+  "id": "aws-03-organizations-and-scps",
+  "slug": "organizations-and-scps",
+  "title": "Organizations and Service Control Policies (SCPs)",
+  "moduleId": "aws-03-accounts-identity-tenancy",
+  "order": 2,
+  "hook": "AWS Organizations groups accounts under one bill and governance model. Service Control Policies (SCPs) set maximum permissions — they cannot grant access, only deny it across member accounts.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "AWS Organizations is a free service that manages multiple AWS accounts. Organizational Units (OUs) nest accounts (e.g., Workloads > Production). Service Control Policies (SCPs) attach to OUs or accounts and filter what IAM principals can do — even if an IAM policy allows an action, an SCP deny blocks it. SCPs do not affect the management account root user or service-linked roles in the same way — design guardrails knowing those exceptions."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "OU",
+              "longForm": "Organizational Unit",
+              "plainDefinition": "A container for accounts within Organizations, often mirroring teams or environments.",
+              "example": "OU Production holds prod workload accounts."
+            },
+            {
+              "term": "SCP",
+              "longForm": "Service Control Policy",
+              "plainDefinition": "Organization-level permission guardrail that sets the maximum permissions for accounts.",
+              "example": "Deny ec2:RunInstances except approved instance types."
+            },
+            {
+              "term": "Consolidated billing",
+              "longForm": "AWS Organizations consolidated billing",
+              "plainDefinition": "Single payment method and volume discounts across all member accounts.",
+              "example": "One invoice for 15 workload accounts."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Enterprise AWS interviews expect you to explain SCPs as guardrails, not replacements for IAM. A developer IAM policy might allow s3:* but an SCP can deny s3:DeleteBucket on production OUs. SCPs are how security teams prevent region sprawl, unapproved instance types, or disabling CloudTrail."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "SCPs filter permissions downward — they never grant. IAM grants within the SCP ceiling."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "SCP evaluation flow",
+          "items": [
+            {
+              "title": "Principal requests action",
+              "body": "IAM user or role in member account calls an API."
+            },
+            {
+              "title": "IAM policy evaluated",
+              "body": "Identity policy must allow the action."
+            },
+            {
+              "title": "SCP evaluated",
+              "body": "Every attached SCP must allow — any explicit deny wins."
+            },
+            {
+              "title": "Resource policy (if any)",
+              "body": "S3 bucket policy or KMS key policy may add another layer."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Organizations hierarchy",
+            "source": "flowchart TB\n  ROOT[Management account]\n  ROOT --> SEC_OU[Security OU]\n  ROOT --> WL_OU[Workloads OU]\n  WL_OU --> PROD_OU[Production OU]\n  WL_OU --> NONPROD_OU[Non-prod OU]\n  PROD_OU --> ACC1[Prod app account]\n  SCP_DENY[SCP: deny unapproved regions] -.-> PROD_OU"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: create OU and attach SCP",
+            "code": "aws organizations create-organizational-unit \\\n  --parent-id r-abcd \\\n  --name Production\n\naws organizations attach-policy \\\n  --policy-id p-FullAWSAccess \\\n  --target-id ou-abcd-12345678",
+            "explanation": "OUs group accounts. Attach SCPs to OU — all child accounts inherit the guardrail."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation: SCP deny leaving approved Regions",
+            "code": "Resources:\n  RegionGuardrailScp:\n    Type: AWS::Organizations::Policy\n    Properties:\n      Name: DenyUnapprovedRegions\n      Type: SERVICE_CONTROL_POLICY\n      Content:\n        Version: '2012-10-17'\n        Statement:\n          - Effect: Deny\n            Action: '*'\n            Resource: '*'\n            Condition:\n              StringNotEquals:\n                aws:RequestedRegion:\n                  - us-east-1\n                  - eu-west-1\n      TargetIds:\n        - ou-abcd-12345678",
+            "explanation": "SCP denies all actions outside approved Regions — applies to every principal in targeted OUs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI: list effective policies for account",
+            "code": "aws organizations list-policies-for-target \\\n  --target-id 123456789012 \\\n  --filter SERVICE_CONTROL_POLICY\n\naws organizations describe-effective-policy \\\n  --policy-type SERVICE_CONTROL_POLICY \\\n  --target-id 123456789012",
+            "explanation": "Debug 'access denied' by checking whether an SCP blocks the action before blaming IAM."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare SCP vs IAM",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SCP versus IAM policy",
+          "headers": ["Aspect", "IAM policy", "SCP"],
+          "rows": [
+            ["Can grant access", "Yes", "No — only filter/deny"],
+            ["Scope", "User, group, role", "Account or OU in Organizations"],
+            ["Affects root user", "Yes (identity policies)", "Limited — know exceptions"],
+            ["Typical use", "Least privilege per role", "Org-wide guardrails"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Using SCPs as the only permission mechanism — still need IAM least privilege. Attaching deny-all SCP without exception for break-glass roles. Forgetting SCPs do not grant — removing FullAWSAccess without replacing with allow statements locks accounts."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Organizations groups accounts with consolidated billing and OU hierarchy.",
+    "SCPs set maximum permissions — deny filters apply even when IAM allows.",
+    "Debug access denied: check SCP before rewriting IAM policies.",
+    "60s: Org = multi-account governance. SCP = guardrail not grant. IAM works within SCP ceiling. Use OUs for prod vs non-prod policies.",
+    "Follow-up: what is the difference between SCP and permission boundary?"
+  ],
+  "commonPitfalls": [
+    "Saying SCPs grant permissions — that gets you rejected because SCPs only filter; IAM must still allow.",
+    "Strong answer: SCP is org ceiling; IAM is identity grant; both must allow for success.",
+    "Removing default FullAWSAccess SCP without understanding implicit deny impact.",
+    "Applying region-lock SCP without exception path for global services like IAM or CloudFront."
+  ],
+  "relatedTopicIds": [
+    "aws-03-aws-account-boundary",
+    "aws-03-iam-fundamentals",
+    "aws-01-billing-and-resources",
+    "aws-01-shared-responsibility-model"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Deploy pipeline region errors",
+      "note": "A Node CDK deploy to ap-south-1 fails with explicit deny when SCP locks Regions — the error looks like IAM but the fix is org policy, not role policy.",
+      "futureTopicSlug": "aws/organizations/scp-troubleshooting"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Service control policies",
+      "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html"
+    },
+    {
+      "title": "AWS Organizations",
+      "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_introduction.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

@@ -1,0 +1,236 @@
+{
+  "id": "aws-15-batch-vs-streaming",
+  "slug": "batch-vs-streaming",
+  "title": "Batch versus streaming data movement",
+  "moduleId": "aws-15-data-movement",
+  "order": 3,
+  "hook": "Batch pipelines move data in scheduled chunks — nightly ETL, hourly aggregates. Streaming moves events continuously — fraud alerts, live dashboards. Picking the wrong model wastes money or misses the latency window.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Batch: AWS Glue, Amazon EMR, Step Functions scheduled workflows process data lake files on cron. Streaming: Amazon Kinesis Data Streams, Amazon MSK, Kinesis Data Firehose ingest events in real time. Lambda consumers process stream records. Hybrid: Firehose batches to S3 for lake while Lambda handles hot path alerts."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Batch ETL",
+              "longForm": "batch extract-transform-load",
+              "plainDefinition": "Periodic processing of accumulated data files.",
+              "example": "Glue job at 3 AM on yesterday's S3 partition."
+            },
+            {
+              "term": "Stream",
+              "longForm": "data stream",
+              "plainDefinition": "Ordered sequence of records ingested continuously.",
+              "example": "Kinesis shard receiving click events."
+            },
+            {
+              "term": "Shard",
+              "longForm": "Kinesis shard",
+              "plainDefinition": "Throughput unit — 1 MB/sec ingest, 2 MB/sec egress per shard.",
+              "example": "8 shards for 8 MB/sec peak ingest."
+            },
+            {
+              "term": "Micro-batch",
+              "longForm": "micro-batch processing",
+              "plainDefinition": "Very small batch windows approximating streaming.",
+              "example": "Lambda triggered every 60 seconds on small S3 drops."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interview scenario: fraud needs sub-second — batch nightly fails. Daily sales report does not need Kinesis ops burden. Over-engineering streaming for monthly compliance export burns budget. Senior answer starts with latency SLA and data volume."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: ask latency SLA first. Minutes+ → batch/Glue. Sub-minute → Kinesis/MSK. Hybrid Firehose to S3 + stream consumer for alerts."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Decision framework",
+          "items": [
+            {
+              "title": "Define latency SLA",
+              "body": "Real-time, near-real-time (minutes), or daily?"
+            },
+            {
+              "title": "Estimate volume",
+              "body": "Events/sec drives Kinesis shard count."
+            },
+            {
+              "title": "Choose pattern",
+              "body": "Batch lake vs stream hot path vs hybrid."
+            },
+            {
+              "title": "Plan idempotency",
+              "body": "Streams deliver at-least-once — same as SQS."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Hybrid architecture",
+            "source": "flowchart TB\n  API[API] --> KIN[Kinesis stream]\n  KIN --> L[Lambda fraud alert\\nseconds]\n  KIN --> FH[Firehose]\n  FH --> S3[(S3 data lake)]\n  S3 --> GLUE[Glue nightly report\\nhours]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — Kinesis producer",
+            "code": "import { KinesisClient, PutRecordCommand } from '@aws-sdk/client-kinesis';\n\nconst kinesis = new KinesisClient({});\n\nawait kinesis.send(new PutRecordCommand({\n  StreamName: 'transactions',\n  PartitionKey: customerId,\n  Data: Buffer.from(JSON.stringify({ amount, merchant, ts: Date.now() })),\n}));",
+            "explanation": "PartitionKey routes same customer to same shard for ordering per key."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Glue scheduled crawler and job",
+            "code": "Resources:\n  EtlTrigger:\n    Type: AWS::Glue::Trigger\n    Properties:\n      Type: SCHEDULED\n      Schedule: cron(0 3 * * ? *)\n      Actions:\n        - JobName: !Ref DailySalesEtl\n      StartOnCreation: true\n  DailySalesEtl:\n    Type: AWS::Glue::Job\n    Properties:\n      Name: daily-sales-etl\n      Role: !GetAtt GlueRole.Arn\n      Command:\n        Name: glueetl\n        ScriptLocation: s3://glue-scripts/sales_etl.py",
+            "explanation": "3 AM daily batch on data lake — appropriate for reporting SLA measured in hours."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Firehose to S3 with Lambda transform",
+            "code": "  DeliveryStream:\n    Type: AWS::KinesisFirehose::DeliveryStream\n    Properties:\n      DeliveryStreamName: transactions-to-s3\n      ExtendedS3DestinationConfiguration:\n        BucketARN: !GetAtt DataLakeBucket.Arn\n        Prefix: transactions/!{timestamp:yyyy/MM/dd}/\n        ProcessingConfiguration:\n          Enabled: true\n          Processors:\n            - Type: Lambda\n              Parameters:\n                - ParameterName: LambdaArn\n                  ParameterValue: !GetAtt EnrichRecord.Arn",
+            "explanation": "Firehose batches stream to S3 partitions — bridge between streaming ingest and batch analytics."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — scale Kinesis shards before traffic spike",
+            "code": "aws kinesis update-shard-count \\\n  --stream-name transactions \\\n  --target-shard-count 16 \\\n  --scaling-type UNIFORM_SCALING",
+            "explanation": "Each shard caps ingest — scale before Black Friday not during incident."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Batch vs streaming tradeoffs",
+          "headers": ["Aspect", "Batch (Glue)", "Streaming (Kinesis)"],
+          "rows": [
+            ["Latency", "Minutes to hours", "Sub-second to seconds"],
+            ["Ops complexity", "Lower", "Shards, consumers, lag alarms"],
+            ["Cost model", "DPU-hours per job", "Shard-hours always on"],
+            ["Ordering", "File partitions", "Per partition key in shard"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Kinesis for monthly report. Glue only for fraud alerts. Under-provisioned shards — throttling. No idempotent stream consumer — duplicate fraud blocks or misses."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: Kinesis IncomingRecords vs WriteProvisionedThroughputExceeded. Glue job duration trend — incremental bookmark reduces batch window. Cost: Kinesis shard-month vs Glue DPU — calculate at expected volume before architecture review."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["SLA", "Pattern", "AWS services"],
+          "rows": [
+            ["< 1 second", "Stream + Lambda", "Kinesis, Lambda"],
+            ["1–15 minutes", "Micro-batch or Firehose", "Firehose, EventBridge schedule"],
+            ["Daily", "Batch ETL", "Glue, EMR, Step Functions"],
+            ["Hybrid", "Stream hot + batch cold", "Kinesis + Firehose + Glue"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'always use Kafka.' Strong answer: latency SLA drives choice; hybrid is common; batch for lake analytics, stream for operational alerts."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Start with latency SLA — sub-minute needs streaming; daily reports suit batch.",
+    "Kinesis shard count sets throughput ceiling — scale proactively.",
+    "Hybrid: stream for alerts, Firehose to S3, Glue for nightly aggregates.",
+    "60s: Fraud equals Kinesis Lambda. Daily report equals Glue cron. Hybrid common. Shards for throughput. Idempotent consumers.",
+    "Follow-up: Kinesis versus MSK when?"
+  ],
+  "commonPitfalls": [
+    "Glue nightly for real-time fraud — misses SLA rejection.",
+    "Strong answer: Kinesis consumer with sub-second Lambda scoring.",
+    "Insufficient Kinesis shards during spike — ProvisionedThroughputExceeded.",
+    "Stream consumer without idempotency — duplicate processing."
+  ],
+  "relatedTopicIds": [
+    "aws-15-datasync-agents-tasks",
+    "aws-15-s3-cross-region-replication",
+    "aws-12-sqs-idempotency"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "RxJS versus cron batch",
+      "note": "Observable stream of events maps to Kinesis consumer; cron scheduled job maps to Glue trigger — same latency tradeoff in application code.",
+      "futureTopicSlug": "typescript/async/rxjs"
+    },
+    {
+      "language": "javascript",
+      "concept": "Node cron ETL scripts",
+      "note": "node-cron pulling API data hourly is batch — migrating to Kinesis when SLA tightens is common evolution path.",
+      "futureTopicSlug": "javascript/backend/scheduled-jobs"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon Kinesis Data Streams",
+      "url": "https://docs.aws.amazon.com/streams/latest/dev/introduction.html"
+    },
+    {
+      "title": "AWS Glue scheduling",
+      "url": "https://docs.aws.amazon.com/glue/latest/dg/monitor-data-warehouse-schedule.html"
+    }
+  ],
+  "animationHint": "timeline"
+}

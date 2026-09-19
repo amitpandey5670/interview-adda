@@ -1,0 +1,267 @@
+{
+  "id": "aws-17-centralized-logging-baseline",
+  "slug": "centralized-logging-baseline",
+  "title": "Centralized logging baseline (audit and operations)",
+  "moduleId": "aws-17-cloud-foundation",
+  "order": 5,
+  "hook": "Centralized logging aggregates CloudTrail, VPC Flow Logs, and application logs into a dedicated log-archive account. Security teams query one place; workload accounts cannot delete their audit trail.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Landing zone baseline deploys organization CloudTrail to S3 in log-archive account with SSE-KMS. VPC Flow Logs, Config snapshots, and Security Hub findings replicate centrally. SCPs prevent member accounts from disabling CloudTrail. Amazon OpenSearch or Athena queries the archive. Lifecycle policies manage retention and cost."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CloudTrail",
+              "longForm": "AWS CloudTrail",
+              "plainDefinition": "API audit log of account activity",
+              "example": "Who deleted sg-abc at 3am"
+            },
+            {
+              "term": "Log archive",
+              "longForm": "Log archive account",
+              "plainDefinition": "Central security account for immutable logs",
+              "example": "S3 bucket with Object Lock"
+            },
+            {
+              "term": "Flow Logs",
+              "longForm": "VPC Flow Logs",
+              "plainDefinition": "Network traffic metadata per ENI",
+              "example": "REJECT on port 5432 from unknown IP"
+            },
+            {
+              "term": "Object Lock",
+              "longForm": "S3 Object Lock",
+              "plainDefinition": "WORM storage — logs cannot be deleted early",
+              "example": "Compliance mode retention 7 years"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Incident response without centralized logs is guesswork. Interviewers ask \"how do you detect who deleted prod RDS?\" Answer: org CloudTrail in immutable log-archive with SCP protection."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: org CloudTrail to log-archive S3, SCP prevents disable, Flow Logs + Config centralized, Athena/OpenSearch query."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Enable org CloudTrail",
+              "body": "All regions, log file validation, KMS encryption, S3 in log-archive."
+            },
+            {
+              "title": "SCP protect logging",
+              "body": "Deny cloudtrail:StopLogging and s3:DeleteObject on archive bucket."
+            },
+            {
+              "title": "Aggregate Flow Logs and Config",
+              "body": "StackSet deploys to all accounts; central Kinesis Firehose optional."
+            },
+            {
+              "title": "Query and retain",
+              "body": "Athena for ad-hoc; OpenSearch for SIEM; lifecycle to Glacier."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Log aggregation",
+            "source": "flowchart LR\n  ACC1[Workload account] -->|CloudTrail| S3[Log archive S3]\n  ACC2[Workload account] -->|Flow Logs| S3\n  S3 --> ATH[Athena / OpenSearch]\n  SCP[SCP protect] -.-> S3"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Org CloudTrail",
+            "code": "OrgTrail:\n  Type: AWS::CloudTrail::Trail\n  Properties:\n    IsOrganizationTrail: true\n    IsMultiRegionTrail: true\n    EnableLogFileValidation: true\n    S3BucketName: org-cloudtrail-archive\n    KMSKeyId: !Ref TrailKey",
+            "explanation": "Single trail for all org accounts — landing zone baseline."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "SCP protect trail",
+            "code": "{\n  \"Effect\": \"Deny\",\n  \"Action\": [\"cloudtrail:StopLogging\",\"cloudtrail:DeleteTrail\",\"s3:DeleteObject\"],\n  \"Resource\": \"*\"\n}",
+            "explanation": "Member accounts cannot disable audit or delete archive objects."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "sql",
+            "label": "Athena — who deleted ENI",
+            "code": "SELECT eventtime, useridentity.arn, eventsource, eventname\nFROM cloudtrail_db.org_trail\nWHERE eventname = 'DeleteNetworkInterface'\n  AND date = current_date\nORDER BY eventtime DESC;",
+            "explanation": "Incident response query — proves centralized logging value."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "S3 Object Lock",
+            "code": "ArchiveBucket:\n  Type: AWS::S3::Bucket\n  Properties:\n    ObjectLockEnabled: true\n    LifecycleConfiguration:\n      Rules:\n        - Id: glacier-after-90d\n          Status: Enabled\n          Transitions:\n            - StorageClass: GLACIER\n              TransitionInDays: 90",
+            "explanation": "Immutable retention for compliance; lifecycle controls cost."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Audit",
+              "Org CloudTrail central S3",
+              "App audit log table per service"
+            ],
+            [
+              "Query",
+              "Athena SQL on parquet",
+              "ELK stack self-hosted"
+            ],
+            [
+              "Protection",
+              "SCP + Object Lock",
+              "DB user cannot DELETE audit rows"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "CloudTrail only in management account, not org-wide. Logs in same account as workload — attacker deletes trail. No log file validation enabled."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: 100% accounts in org trail; SCP simulator confirms trail protection; mean time to answer \"who did X\" < 15 min via Athena."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Central S3 + Athena",
+              "Low cost query",
+              "Slower than OpenSearch SIEM"
+            ],
+            [
+              "OpenSearch SIEM",
+              "Real-time detection",
+              "Higher ops cost"
+            ],
+            [
+              "Kinesis Firehose streaming",
+              "Near real-time",
+              "Pipeline complexity"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Per-account CloudTrail with no central aggregation — rejected. Strong answer: org trail, log-archive account, SCP, Object Lock."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Org CloudTrail to log-archive S3 — baseline for all landing zones.",
+    "SCP prevents disabling trail or deleting archive.",
+    "Athena/OpenSearch for incident queries.",
+    "60s: Org trail all regions, central S3 with KMS and Object Lock, SCP protect, Flow Logs aggregate, Athena for IR.",
+    "Follow-up: how long retain CloudTrail for SOC2?"
+  ],
+  "commonPitfalls": [
+    "Workload account owns its only CloudTrail — attacker deletes it.",
+    "Strong answer: org trail, immutable archive, SCP deny stop/delete.",
+    "No log file validation — tampering undetected.",
+    "Infinite retention without lifecycle — cost explosion."
+  ],
+  "relatedTopicIds": [
+    "aws-17-landing-zone-concept",
+    "aws-17-account-vending-guardrails",
+    "aws-17-identity-foundation-sso"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Structured audit logs",
+      "note": "pino JSON logs with userId/action mirror CloudTrail fields for app-layer audit.",
+      "futureTopicSlug": "javascript/cloud/observability"
+    },
+    {
+      "language": "typescript",
+      "concept": "Audit middleware",
+      "note": "Express middleware logging mutations complements CloudTrail for app-level actions.",
+      "futureTopicSlug": "typescript/cloud/observability"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Cloud Foundation",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/welcome.html"
+    },
+    {
+      "title": "Logging and monitoring in landing zones",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/logging-and-monitoring.html"
+    }
+  ],
+  "animationHint": "timeline",
+  "scenarioTag": "vpc-troubleshoot"
+}

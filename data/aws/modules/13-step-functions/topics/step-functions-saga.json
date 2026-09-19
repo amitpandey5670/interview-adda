@@ -1,0 +1,237 @@
+{
+  "id": "aws-13-step-functions-saga",
+  "slug": "step-functions-saga",
+  "title": "Saga patterns with Step Functions (compensation and rollback)",
+  "moduleId": "aws-13-step-functions",
+  "order": 3,
+  "hook": "A saga coordinates a distributed transaction as a sequence of local steps with compensating actions on failure. AWS Step Functions Catch blocks route to rollback Tasks — the pattern behind order, payment, and inventory workflows in senior system design interviews.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Choreography saga: each service listens and reacts — no central coordinator. Orchestration saga: Step Functions state machine calls each service in order and runs compensators (refund, release inventory) when a later step fails. Compensators must be idempotent — they may run more than once on retry."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Saga",
+              "longForm": "saga transaction pattern",
+              "plainDefinition": "Sequence of local transactions with compensating undo steps.",
+              "example": "Reserve → Charge → Ship; on ship fail → Refund → Release."
+            },
+            {
+              "term": "Compensator",
+              "longForm": "compensating transaction",
+              "plainDefinition": "Semantic undo of a completed forward step.",
+              "example": "refundPayment(orderId) after charge succeeded."
+            },
+            {
+              "term": "Orchestration",
+              "longForm": "orchestration-based saga",
+              "plainDefinition": "Central coordinator drives steps and compensation.",
+              "example": "Step Functions state machine owns flow."
+            },
+            {
+              "term": "Choreography",
+              "longForm": "choreography-based saga",
+              "plainDefinition": "Services react to events without central brain.",
+              "example": "SNS events trigger each compensator independently."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Two-phase commit across microservices does not scale on AWS. Sagas accept eventual consistency with explicit rollback. Interview gold: distinguish retryable Lambda.ServiceException (Retry block) from business failure ShipFailed (Catch to compensator). Missing idempotent refund causes double refund on compensator retry."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: forward steps sequential; Catch routes to compensators in reverse order; compensators idempotent; Step Functions Standard for audit."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Orchestrated saga flow",
+          "items": [
+            {
+              "title": "Reserve inventory",
+              "body": "Forward Task — record reservationId in state output."
+            },
+            {
+              "title": "Charge payment",
+              "body": "Forward Task — record chargeId."
+            },
+            {
+              "title": "Ship order fails",
+              "body": "Catch on Ship Task routes to compensation chain."
+            },
+            {
+              "title": "Compensate",
+              "body": "Refund then Release — each compensator idempotent by orderId."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Saga compensation path",
+            "source": "flowchart TD\n  R[Reserve] --> C[Charge]\n  C --> S[Ship]\n  S -->|success| OK([Complete])\n  S -->|fail Catch| RF[Refund]\n  RF --> RL[Release inventory]\n  RL --> FAIL([Fail with alert])"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — saga with Catch to compensators",
+            "code": "\"ShipOrder\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::lambda:invoke\",\n  \"Parameters\": {\n    \"FunctionName\": \"ship-order\",\n    \"Payload.$\": \"$\"\n  },\n  \"Catch\": [{\n    \"ErrorEquals\": [\"ShipFailed\", \"States.TaskFailed\"],\n    \"ResultPath\": \"$.shipError\",\n    \"Next\": \"RefundPayment\"\n  }],\n  \"Next\": \"OrderComplete\"\n},\n\"RefundPayment\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::lambda:invoke\",\n  \"Parameters\": {\n    \"FunctionName\": \"refund-payment\",\n    \"Payload\": { \"orderId.$\": \"$.orderId\", \"chargeId.$\": \"$.chargeId\" }\n  },\n  \"Next\": \"ReleaseInventory\"\n}",
+            "explanation": "Catch preserves orderId/chargeId in state for compensators. Separate error types for business vs infra."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — idempotent compensator Lambda",
+            "code": "export async function refundPayment(event: { orderId: string; chargeId: string }) {\n  const key = `refund:${event.orderId}`;\n  if (await alreadyRefunded(key)) return { status: 'skipped' };\n  await paymentApi.refund(event.chargeId, { idempotencyKey: key });\n  await markRefunded(key);\n  return { status: 'refunded' };\n}",
+            "explanation": "Compensator retry from Step Functions Retry must not double-refund."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "ASL — Retry only transient on forward step",
+            "code": "\"ChargePayment\": {\n  \"Type\": \"Task\",\n  \"Resource\": \"arn:aws:states:::lambda:invoke\",\n  \"Retry\": [{\n    \"ErrorEquals\": [\"Lambda.ServiceException\", \"States.Timeout\"],\n    \"IntervalSeconds\": 2,\n    \"MaxAttempts\": 4,\n    \"BackoffRate\": 2\n  }],\n  \"Catch\": [{\n    \"ErrorEquals\": [\"PaymentDeclined\"],\n    \"Next\": \"ReleaseInventory\"\n  }],\n  \"Next\": \"ShipOrder\"\n}",
+            "explanation": "PaymentDeclined is business failure — release reservation, not infinite Retry."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — find failed saga executions",
+            "code": "aws stepfunctions list-executions \\\n  --state-machine-arn arn:aws:states:us-east-1:123:stateMachine:order-saga \\\n  --status-filter FAILED \\\n  --max-results 10",
+            "explanation": "Drill into execution history to verify compensators ran in correct order."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Orchestration vs choreography saga",
+          "headers": ["Aspect", "Step Functions orchestration", "SNS choreography"],
+          "rows": [
+            ["Visibility", "Single execution graph", "Distributed across logs"],
+            ["Ordering", "Explicit in ASL", "Event ordering risk"],
+            ["Compensation", "Catch → compensator Tasks", "Each service subscribes to fail event"],
+            ["Complexity", "Central ASL grows", "Harder to trace end-to-end"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Retry on PaymentDeclined — infinite loop. Compensator without idempotency — double refund. Catch States.ALL masking bugs. Choreography when audit requires single execution record."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: integration test inject ShipFailed — verify Refund and Release in history. Alarm on compensator Fail state. Pair with aws-12-sqs-idempotency patterns for worker-side dedup. Saga vs 2PC: sagas accept temporary inconsistency visible to users — document UX."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "When", "Risk"],
+          "rows": [
+            ["Orchestrated saga", "Clear steps, audit needed", "ASL complexity"],
+            ["Choreography", "Loosely coupled teams", "Hard debug"],
+            ["Sync Tasks", "Immediate consistency per step", "Latency chain"],
+            ["SQS worker saga", "Long-running steps", "Manual token callback"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'rollback is just DELETE FROM orders.' Strong answer: semantic compensators (refund API, release reservation) that are idempotent and may leave audit records."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Saga = forward steps + compensating undo on failure; orchestration via Step Functions Catch blocks.",
+    "Retry transient errors only; business failures route to compensators.",
+    "Compensators must be idempotent — Step Functions may retry them.",
+    "60s: Reserve charge ship. Ship fail Catch to refund release. Idempotent compensators. Standard for audit.",
+    "Follow-up: choreography saga with EventBridge versus orchestration?"
+  ],
+  "commonPitfalls": [
+    "Retry on business decline — infinite charge attempts.",
+    "Strong answer: Catch PaymentDeclined → ReleaseInventory without Retry.",
+    "Non-idempotent refund compensator.",
+    "Using Express for saga needing multi-day human approval."
+  ],
+  "relatedTopicIds": [
+    "aws-13-step-functions-states",
+    "aws-12-sqs-idempotency",
+    "aws-13-step-functions-lambda-sqs"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "try/finally rollback",
+      "note": "Local try/catch with undo callbacks is in-process saga — Step Functions persists compensation path across failures and restarts.",
+      "futureTopicSlug": "typescript/architecture/error-handling"
+    },
+    {
+      "language": "javascript",
+      "concept": "Database transactions vs saga",
+      "note": "Single Postgres transaction is ACID in one DB — saga spans services where 2PC is impractical; matches microservices interview narrative.",
+      "futureTopicSlug": "javascript/backend/distributed-transactions"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Handling errors in Step Functions",
+      "url": "https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html"
+    },
+    {
+      "title": "Saga pattern on AWS",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/modernization-data-persistence/saga-pattern.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "step-functions-saga"
+}

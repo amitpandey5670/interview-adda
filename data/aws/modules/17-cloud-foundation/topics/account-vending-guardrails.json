@@ -1,0 +1,267 @@
+{
+  "id": "aws-17-account-vending-guardrails",
+  "slug": "account-vending-guardrails",
+  "title": "Account vending and guardrails (SCPs and policies)",
+  "moduleId": "aws-17-cloud-foundation",
+  "order": 2,
+  "hook": "Account vending automatically creates new AWS accounts with baseline security and networking applied. Guardrails — especially Service Control Policies (SCPs) — set maximum permissions for entire organizational units.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Account Factory (Control Tower) or custom Step Functions workflow creates accounts, assigns to OU, and triggers StackSets for logging, Config, IAM baseline. SCPs are organization policies attached to OUs/accounts that filter IAM permissions — they do not grant access, only deny. Preventive guardrails block actions; detective guardrails (Config) detect drift."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "SCP",
+              "longForm": "Service Control Policy",
+              "plainDefinition": "Org policy filtering max permissions",
+              "example": "Deny leaving region us-east-1"
+            },
+            {
+              "term": "Account Factory",
+              "longForm": "Control Tower Account Factory",
+              "plainDefinition": "Self-service governed account creation",
+              "example": "New team clicks provision account"
+            },
+            {
+              "term": "Preventive",
+              "longForm": "Preventive guardrail",
+              "plainDefinition": "Blocks non-compliant API calls",
+              "example": "SCP deny root login"
+            },
+            {
+              "term": "Detective",
+              "longForm": "Detective guardrail",
+              "plainDefinition": "Detects non-compliance after fact",
+              "example": "Config rule on encryption"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers ask \"how do you stop a developer from opening S3 to the world org-wide?\" SCP deny on public buckets. Account vending ensures every account starts compliant, not retrofitted."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: SCPs are permission guardrails on OUs; vending automates compliant account creation."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Define SCP policies",
+              "body": "Deny risky actions: unapproved regions, disable CloudTrail, public S3 ACLs."
+            },
+            {
+              "title": "Attach to OUs",
+              "body": "Sandbox gets stricter limits than Production OU."
+            },
+            {
+              "title": "Vend account",
+              "body": "Account Factory creates account, applies baseline stacks."
+            },
+            {
+              "title": "Validate enrollment",
+              "body": "Control Tower dashboard shows control status per account."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "SCP evaluation",
+            "source": "flowchart LR\n  API[API call] --> SCP[SCP allow?]\n  SCP -->|deny| BLOCK[Blocked]\n  SCP -->|allow| IAM[IAM policy]\n  IAM --> EXEC[Execute]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "SCP deny unapproved regions",
+            "code": "{\n  \"Effect\": \"Deny\",\n  \"Action\": \"*\",\n  \"Resource\": \"*\",\n  \"Condition\": {\n    \"StringNotEquals\": {\n      \"aws:RequestedRegion\": [\"us-east-1\",\"eu-west-1\"]\n    }\n  }\n}",
+            "explanation": "Data residency guardrail — common enterprise SCP."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "SCP protect CloudTrail",
+            "code": "{\n  \"Effect\": \"Deny\",\n  \"Action\": [\"cloudtrail:StopLogging\",\"cloudtrail:DeleteTrail\"],\n  \"Resource\": \"*\"\n}",
+            "explanation": "Preventive guardrail — audit trail cannot be disabled."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create SCP and attach",
+            "code": "aws organizations create-policy \\\n  --name DenyPublicS3 --type SERVICE_CONTROL_POLICY \\\n  --content file://deny-public-s3.json\naws organizations attach-policy \\\n  --policy-id p-abc --target-id ou-xyz",
+            "explanation": "Attach SCP to OU — applies to all accounts underneath."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Provision Account Factory account",
+            "code": "aws servicecatalog provision-product \\\n  --product-id prod-abc \\\n  --provisioning-artifact-id pa-xyz \\\n  --provisioned-product-name team-payments-dev",
+            "explanation": "Self-service account vending with baseline stacks."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Guardrail",
+              "SCP org-wide deny",
+              "npm audit block in CI"
+            ],
+            [
+              "Vending",
+              "Account Factory",
+              "terraform workspace per team"
+            ],
+            [
+              "Drift",
+              "Config detective rules",
+              "lint-staged pre-commit"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "SCP that blocks Control Tower management actions — breaks landing zone. SCP thinking it grants permissions. No break-glass exception process."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: SCP simulator tests before attach; 100% account enrollment in Control Tower; Config compliance % per OU; time-to-vend new account < 1 hour."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Strict SCPs",
+              "Strong security posture",
+              "Can block emergency fixes"
+            ],
+            [
+              "Loose SCPs + Config",
+              "Flexibility",
+              "Relies on remediation speed"
+            ],
+            [
+              "Break-glass OU",
+              "Emergency access",
+              "Must monitor heavily"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Confusing SCP with IAM policy — rejected. Strong answer: SCP filters max permissions; IAM grants within that boundary."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "SCPs set permission ceiling for OUs — deny only, never grant.",
+    "Account vending applies baselines at creation — not retrofit.",
+    "Preventive (SCP) + detective (Config) guardrails complement each other.",
+    "60s: SCP on OU denies risky APIs org-wide. Account Factory vends compliant accounts. Test SCPs in simulator. Break-glass OU for emergencies.",
+    "Follow-up: what happens when SCP and IAM both allow an action?"
+  ],
+  "commonPitfalls": [
+    "SCP grants permissions — wrong; SCP only denies/filters.",
+    "Strong answer: IAM grants within SCP ceiling; explicit deny in SCP wins.",
+    "SCP blocks Control Tower — landing zone breaks.",
+    "No break-glass process for SCP-blocked emergencies."
+  ],
+  "relatedTopicIds": [
+    "aws-17-landing-zone-concept",
+    "aws-17-identity-foundation-sso",
+    "aws-17-centralized-logging-baseline"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Policy as code",
+      "note": "SCP JSON mirrors OPA/authorization middleware — deny rules at org boundary.",
+      "futureTopicSlug": "javascript/cloud/iam"
+    },
+    {
+      "language": "typescript",
+      "concept": "Type-level constraints",
+      "note": "SCP ceiling like TypeScript strict mode — limits what code can do at compile boundary.",
+      "futureTopicSlug": "typescript/fundamentals/types"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Cloud Foundation",
+      "url": "https://docs.aws.amazon.com/prescriptive-guidance/latest/migration-aws-environment/welcome.html"
+    },
+    {
+      "title": "Service control policies",
+      "url": "https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "auth-token"
+}

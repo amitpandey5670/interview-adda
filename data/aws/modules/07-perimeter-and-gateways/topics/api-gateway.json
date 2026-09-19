@@ -1,0 +1,198 @@
+{
+  "id": "aws-07-api-gateway",
+  "slug": "api-gateway",
+  "title": "API Gateway (HTTP versus REST versus WebSocket)",
+  "moduleId": "aws-07-perimeter-and-gateways",
+  "order": 4,
+  "hook": "Amazon API Gateway fronts your APIs with throttling, authentication, and integration to Lambda, HTTP backends, or AWS services. HTTP APIs are cheaper and faster for most REST use cases; REST APIs offer older feature depth; WebSocket APIs maintain persistent bidirectional connections.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "HTTP API (v2) is the default choice for Lambda and HTTP proxy integrations — lower cost and latency. REST API (v1) supports API keys, request validation, AWS WAF, usage plans, and more integration types — needed when those features matter. WebSocket API manages connect, message, and disconnect routes for real-time apps. All three terminate TLS at the edge and integrate with Amazon Cognito or Lambda authorizers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "HTTP API", "longForm": "API Gateway HTTP API", "plainDefinition": "Lightweight API Gateway flavor for common REST and Lambda patterns.", "example": "POST /orders → Lambda proxy integration." },
+            { "term": "REST API", "longForm": "API Gateway REST API", "plainDefinition": "Full-featured API Gateway with usage plans, API keys, and request validators.", "example": "Partner API with per-key throttling." },
+            { "term": "WebSocket API", "longForm": "API Gateway WebSocket API", "plainDefinition": "Managed WebSocket with $connect, $default, $disconnect routes.", "example": "Live dashboard pushing stock ticks." },
+            { "term": "Integration", "longForm": "API Gateway integration", "plainDefinition": "Backend target — Lambda, HTTP URL, mock, AWS service.", "example": "HTTP proxy to internal ALB URL." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "API Gateway is the serverless edge — pay per request, built-in throttling, no EC2 to patch. Choosing HTTP vs REST affects cost and features. WebSocket vs Socket.io on ALB is a common comparison. Interviewers ask about Lambda proxy integration, authorizers, and when to put CloudFront in front."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Default pick",
+          "body": "Start HTTP API unless you need REST-only features: usage plans, request validation, or certain legacy integration types."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Request through API Gateway",
+          "items": [
+            { "title": "Client HTTPS request", "body": "Hits execute-api endpoint or custom domain." },
+            { "title": "Authorizer (optional)", "body": "JWT/Cognito/Lambda authorizer validates before integration." },
+            { "title": "Integration invoke", "body": "Lambda proxy passes full event; HTTP integration forwards to backend URL." },
+            { "title": "Response mapping", "body": "HTTP API returns integration response; REST can map templates." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "API Gateway flavors",
+            "source": "flowchart LR\n  C[Client] --> HTTP[HTTP API v2]\n  C --> REST[REST API v1]\n  C --> WS[WebSocket API]\n  HTTP --> L[Lambda]\n  REST --> L\n  REST --> ALB[HTTP to ALB]\n  WS --> L2[Lambda routes]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — HTTP API to Lambda",
+            "code": "HttpApi:\n  Type: AWS::ApiGatewayV2::Api\n  Properties:\n    Name: orders-api\n    ProtocolType: HTTP\n\nIntegration:\n  Type: AWS::ApiGatewayV2::Integration\n  Properties:\n    ApiId: !Ref HttpApi\n    IntegrationType: AWS_PROXY\n    IntegrationUri: !GetAtt OrderFunction.Arn\n    PayloadFormatVersion: \"2.0\"\n\nRoute:\n  Type: AWS::ApiGatewayV2::Route\n  Properties:\n    ApiId: !Ref HttpApi\n    RouteKey: POST /orders\n    Target: !Sub integrations/${Integration}",
+            "explanation": "HTTP API uses ApiGatewayV2 resources with simpler model than REST v1."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — REST API usage plan",
+            "code": "UsagePlan:\n  Type: AWS::ApiGateway::UsagePlan\n  Properties:\n    UsagePlanName: partner-tier\n    Throttle:\n      RateLimit: 100\n      BurstLimit: 200\n    ApiStages:\n      - ApiId: !Ref RestApi\n        Stage: prod",
+            "explanation": "Usage plans and API keys are REST API v1 features — not on HTTP API."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — WebSocket connect route",
+            "code": "aws apigatewayv2 create-route \\\n  --api-id abc123 \\\n  --route-key '$connect' \\\n  --target integrations/xyz",
+            "explanation": "WebSocket APIs route by connection lifecycle events plus custom route keys."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — test HTTP API",
+            "code": "curl -s -X POST \"https://abc123.execute-api.us-east-1.amazonaws.com/orders\" \\\n  -H \"Authorization: Bearer $JWT\" \\\n  -d '{\"sku\":\"ABC\"}'",
+            "explanation": "Integration timeout and Lambda cold start appear as 503/504 at the edge."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "API Gateway vs Express",
+          "headers": ["Aspect", "API Gateway", "Express / NestJS on EC2 or ECS"],
+          "rows": [
+            ["Scaling", "Automatic per request", "You manage ASG/ECS tasks"],
+            ["WebSocket", "WebSocket API managed", "socket.io on ALB with sticky sessions"],
+            ["Cost model", "Per million requests", "Always-on instance cost even at zero traffic"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "REST API for simple Lambda when HTTP API suffices — higher cost. HTTP API when you need usage plans/API keys. 29-second Lambda timeout with 30s API Gateway max for non-async. Missing CORS on HTTP API routes."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "HTTP API supports JWT authorizers natively; REST supports more mapping templates and caching (deprecated patterns). Private integrations reach VPC Link to NLB/ALB inside VPC. How to prove it in production: API Gateway execution logs; 429 from throttling; X-Ray traces from API Gateway to Lambda; compare p99 HTTP API vs REST for same Lambda."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Flavor", "Win", "Cost / risk"],
+          "rows": [
+            ["HTTP API", "Cost and latency for Lambda BFF", "Missing some REST-only features"],
+            ["REST API", "Usage plans, WAF (regional), validation", "Higher cost and complexity"],
+            ["WebSocket API", "Managed WS scale-out", "Connection state in DynamoDB often needed"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying HTTP and REST APIs are the same. Strong answer: HTTP API v2 for most serverless REST; REST v1 when usage plans/API keys/validators required; WebSocket for persistent connections."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "HTTP API (v2): default for Lambda/HTTP — lower cost and latency.",
+    "REST API (v1): usage plans, API keys, request validation, broader legacy integrations.",
+    "WebSocket API: $connect/$disconnect routes for bidirectional real-time.",
+    "60s: HTTP for most REST. REST when usage plans/API keys needed. WebSocket for live connections. VPC Link for private ALB/NLB backends.",
+    "Follow-up: how does VPC Link differ from public HTTP integration?"
+  ],
+  "commonPitfalls": [
+    "Choosing REST API for every project — rejected when HTTP API meets requirements at lower cost.",
+    "Strong answer: match API type to feature needs; HTTP API is default in 2024+ greenfield.",
+    "Lambda in VPC without NAT/endpoints — API Gateway invokes OK but Lambda cannot reach RDS.",
+    "WebSocket API without DynamoDB for connection IDs — broadcast fails across instances."
+  ],
+  "relatedTopicIds": [
+    "aws-07-alb-nlb-gwlb",
+    "aws-07-waf-shield",
+    "aws-07-full-request-path",
+    "aws-07-security-groups"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Lambda proxy event shape",
+      "note": "API Gateway HTTP API v2 event differs from REST v1 — Node handlers checking event.requestContext.http.path must match deployed API type.",
+      "futureTopicSlug": "javascript/cloud/aws-lambda"
+    },
+    {
+      "language": "typescript",
+      "concept": "Typed API Gateway handlers",
+      "note": "API Gateway v2 types from @types/aws-lambda differ from v1 APIGatewayProxyEvent — TypeScript projects break when migrating HTTP to REST or vice versa.",
+      "futureTopicSlug": "typescript/cloud/aws-lambda"
+    }
+  ],
+  "officialSources": [
+    { "title": "HTTP APIs", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api.html" },
+    { "title": "WebSocket APIs", "url": "https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api.html" }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "high-concurrency"
+}

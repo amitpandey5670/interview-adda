@@ -1,0 +1,237 @@
+{
+  "id": "aws-12-sns-eventbridge-sqs",
+  "slug": "sns-eventbridge-sqs",
+  "title": "SNS and EventBridge fan-out to SQS",
+  "moduleId": "aws-12-sqs-messaging",
+  "order": 4,
+  "hook": "One domain event often needs multiple independent consumers. Amazon Simple Notification Service (SNS) and Amazon EventBridge fan a single publish to many Amazon Simple Queue Service (SQS) queues — each consumer scales and fails independently.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "SNS topic subscribers include SQS queues — SNS wraps the payload in its envelope JSON. EventBridge rules match events on a bus and target SQS with optional input transformation and dead-letter configuration. SQS buffers each downstream pipeline from spikes in the publisher. Queue policies must allow the publishing service principal."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Fan-out",
+              "longForm": "publish-subscribe fan-out",
+              "plainDefinition": "One message copied to many subscribers.",
+              "example": "order.placed → inventory + email + analytics queues."
+            },
+            {
+              "term": "Filter policy",
+              "longForm": "SNS subscription filter policy",
+              "plainDefinition": "JSON policy on SNS subscription limiting which messages reach a queue.",
+              "example": "Only events where eventType is order.placed."
+            },
+            {
+              "term": "Event bus",
+              "longForm": "EventBridge custom event bus",
+              "plainDefinition": "Router for events with schema and rules.",
+              "example": "company-orders bus with rules per consumer."
+            },
+            {
+              "term": "Raw message delivery",
+              "longForm": "SNS raw message delivery",
+              "plainDefinition": "SQS receives body without SNS metadata wrapper when enabled.",
+              "example": "Lambda parses JSON directly without unwrapping Message field."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Fan-out decouples teams: analytics slowdown does not block inventory. Missing queue policy is the top deploy failure — SNS cannot deliver without sqs:SendMessage permission. EventBridge adds content-based filtering and schema registry; SNS is simpler for pure multicast."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: SNS for simple fan-out; EventBridge for routing rules and cross-account. Always set queue policy with source ARN condition."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "SNS to SQS fan-out",
+          "items": [
+            {
+              "title": "Create topic and queues",
+              "body": "One queue per consumer service with DLQ."
+            },
+            {
+              "title": "Subscribe queues",
+              "body": "SNS subscription protocol sqs with optional filter policy."
+            },
+            {
+              "title": "Queue policy",
+              "body": "Allow sns.amazonaws.com with ArnEquals on source topic."
+            },
+            {
+              "title": "Consumer polls",
+              "body": "Each Lambda/ECS worker drains its queue independently."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "EventBridge fan-out",
+            "source": "flowchart LR\n  API[Order API] --> EB[EventBridge bus]\n  EB -->|rule inventory| Q1[(inventory-queue)]\n  EB -->|rule email| Q2[(email-queue)]\n  EB -->|rule analytics| Q3[(analytics-queue)]\n  Q1 --> L1[Lambda]\n  Q2 --> L2[Lambda]\n  Q3 --> L3[Lambda]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — SNS topic with SQS subscription and policy",
+            "code": "Resources:\n  OrderTopic:\n    Type: AWS::SNS::Topic\n  InventoryQueue:\n    Type: AWS::SQS::Queue\n    Properties:\n      QueueName: inventory-updates\n  InventoryQueuePolicy:\n    Type: AWS::SQS::QueuePolicy\n    Properties:\n      Queues: [!Ref InventoryQueue]\n      PolicyDocument:\n        Statement:\n          - Effect: Allow\n            Principal: { Service: sns.amazonaws.com }\n            Action: sqs:SendMessage\n            Resource: !GetAtt InventoryQueue.Arn\n            Condition:\n              ArnEquals:\n                aws:SourceArn: !Ref OrderTopic\n  InventorySub:\n    Type: AWS::SNS::Subscription\n    Properties:\n      Protocol: sqs\n      TopicArn: !Ref OrderTopic\n      Endpoint: !GetAtt InventoryQueue.Arn\n      RawMessageDelivery: true",
+            "explanation": "Queue policy is mandatory. RawMessageDelivery skips SNS wrapper for simpler Lambda parsing."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — EventBridge rule targeting SQS",
+            "code": "  OrderPlacedRule:\n    Type: AWS::Events::Rule\n    Properties:\n      EventBusName: company-orders\n      EventPattern:\n        source: [orders.api]\n        detail-type: [OrderPlaced]\n      Targets:\n        - Arn: !GetAtt AnalyticsQueue.Arn\n          Id: analytics\n          DeadLetterConfig:\n            Arn: !GetAtt RuleDLQ.Arn",
+            "explanation": "Rule DLQ catches delivery failures to SQS — separate from consumer DLQ."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — publish to EventBridge",
+            "code": "import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';\n\nconst eb = new EventBridgeClient({});\n\nawait eb.send(new PutEventsCommand({\n  Entries: [{\n    Source: 'orders.api',\n    DetailType: 'OrderPlaced',\n    Detail: JSON.stringify({ orderId, customerId, total }),\n    EventBusName: 'company-orders',\n  }],\n}));",
+            "explanation": "Detail is a JSON string. Rules match on source and detail-type; content filters use detail field paths."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "TypeScript — unwrap SNS envelope from SQS body",
+            "code": "function parseSqsBody(body: string, rawDelivery: boolean): unknown {\n  if (rawDelivery) return JSON.parse(body);\n  const envelope = JSON.parse(body) as { Message: string };\n  return JSON.parse(envelope.Message);\n}",
+            "explanation": "Without raw delivery, SNS nests payload in Message string inside SQS body — common parse bug."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "SNS versus EventBridge for fan-out",
+          "headers": ["Aspect", "SNS → SQS", "EventBridge → SQS"],
+          "rows": [
+            ["Filtering", "Subscription filter policy", "Rich event pattern on detail JSON"],
+            ["Schema", "Informal JSON", "Schema registry optional"],
+            ["Cross-account", "Topic policy", "Bus policy + rule"],
+            ["Replay", "No native replay", "Archive and replay (paid feature)"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Missing SQS queue policy — silent subscription failure. Parsing SQS body without unwrapping SNS Message. No DLQ on EventBridge rule target. Same queue subscribed twice causing duplicate processing without idempotency."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: CloudWatch NumberOfMessagesSent on topic versus each queue — mismatch means filter policy or delivery failure. EventBridge FailedInvocations metric on rule. Enable SNS delivery status logging to S3 for audit."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Best for", "Avoid when"],
+          "rows": [
+            ["SNS fan-out", "Simple multicast, mobile push mix", "Complex content routing"],
+            ["EventBridge", "Domain events, SaaS integrations", "Ultra-low-latency only"],
+            ["SQS per consumer", "Independent scale and DLQ", "Single shared queue for all"],
+            ["FIFO fan-out", "Ordered downstream per group", "High global throughput"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'just publish to SQS from API three times.' Strong answer: single publish to bus/topic, queue policy, independent consumers, idempotent handlers per queue."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "SNS and EventBridge fan one event to many SQS queues — each consumer scales independently.",
+    "Queue policy must allow sns.amazonaws.com or events.amazonaws.com with source ARN condition.",
+    "Raw message delivery or unwrap SNS Message field — parse bugs are common in Lambda.",
+    "60s: Fan-out via SNS or EventBridge to per-service SQS. Queue policy required. Idempotent each consumer.",
+    "Follow-up: EventBridge archive and replay versus SNS?"
+  ],
+  "commonPitfalls": [
+    "Missing queue policy — top SNS-to-SQS deploy failure.",
+    "Strong answer: QueuePolicy with ArnEquals aws:SourceArn on topic or rule.",
+    "Forgetting SNS envelope when raw delivery disabled.",
+    "No rule DLQ — delivery failures invisible until messages silently drop."
+  ],
+  "relatedTopicIds": [
+    "aws-12-sqs-standard-vs-fifo",
+    "aws-12-sqs-lambda-consumer",
+    "aws-12-sqs-idempotency"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "typescript",
+      "concept": "Event emitter fan-out",
+      "note": "Node EventEmitter.emit to multiple listeners is in-process fan-out — SNS/EventBridge add durability and cross-service boundaries like C# MediatR notifications with out-of-process handlers.",
+      "futureTopicSlug": "csharp-13-async-await"
+    },
+    {
+      "language": "javascript",
+      "concept": "Domain events in modular monolith",
+      "note": "Publishing OrderPlaced to EventBridge replaces in-memory event bus when extracting microservices — same event shape, different transport.",
+      "futureTopicSlug": "typescript/architecture/domain-events"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SNS to SQS subscription",
+      "url": "https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html"
+    },
+    {
+      "title": "EventBridge targets including SQS",
+      "url": "https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-targets.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "sqs-consumer"
+}

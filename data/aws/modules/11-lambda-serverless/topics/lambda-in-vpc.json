@@ -1,0 +1,277 @@
+{
+  "id": "aws-11-lambda-in-vpc",
+  "slug": "lambda-in-vpc",
+  "title": "Lambda in a VPC (ENIs, endpoints, cold start)",
+  "moduleId": "aws-11-lambda-serverless",
+  "order": 3,
+  "hook": "Lambda functions in a VPC get Elastic Network Interfaces in your subnets to reach private resources like RDS — but AWS API calls need NAT Gateway or VPC endpoints.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Configure Lambda with subnet IDs and security group IDs to attach Hyperplane ENIs in your Virtual Private Cloud (VPC). The function can then reach private IP resources such as Amazon RDS or ElastiCache. Without NAT Gateway or interface/gateway VPC endpoints, calls to public AWS APIs (S3, DynamoDB) fail or need endpoints. Subnet IP capacity must cover peak concurrent ENIs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Hyperplane ENI",
+              "longForm": "Lambda Hyperplane ENI",
+              "plainDefinition": "Shared network infrastructure for Lambda VPC connectivity.",
+              "example": "Faster scale than per-function ENI classic model."
+            },
+            {
+              "term": "Gateway endpoint",
+              "longForm": "S3 VPC gateway endpoint",
+              "plainDefinition": "Route table entry for S3 without NAT — no hourly charge.",
+              "example": "Private subnet route to com.amazonaws.region.s3."
+            },
+            {
+              "term": "Interface endpoint",
+              "longForm": "VPC interface endpoint",
+              "plainDefinition": "PrivateLink ENI for AWS API — hourly and data charge.",
+              "example": "com.amazonaws.region.dynamodb interface endpoint."
+            },
+            {
+              "term": "Security group",
+              "longForm": "Lambda VPC security group",
+              "plainDefinition": "Controls traffic to/from function ENIs in subnet.",
+              "example": "Outbound 5432 to RDS SG, egress 443 to endpoints."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Classic interview trap: Lambda in private subnet cannot reach S3 — add gateway endpoint or NAT. /28 subnet exhausts under burst concurrency. Split architecture: VPC functions for DB, non-VPC for S3/API."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: VPC Lambda for private RDS only. S3 gateway endpoint free. Size subnets for concurrency. Hyperplane reduced ENI cold start vs old model."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "VPC Lambda setup",
+          "items": [
+            {
+              "title": "Pick subnets",
+              "body": "Private subnets in multiple AZs with enough free IPs for peak concurrency."
+            },
+            {
+              "title": "Security groups",
+              "body": "Lambda SG egress to RDS SG port; endpoint SG allows 443 from Lambda SG."
+            },
+            {
+              "title": "Endpoints or NAT",
+              "body": "S3/DynamoDB gateway endpoints; other APIs via interface endpoints or NAT."
+            },
+            {
+              "title": "Test path",
+              "body": "RDS connect from Lambda; S3 access via endpoint route table association."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Lambda VPC connectivity",
+            "source": "flowchart TB\n  L[Lambda in VPC] --> ENI[Hyperplane ENI\\nprivate subnet]\n  ENI --> RDS[(RDS private)]\n  ENI --> EP[S3 gateway endpoint]\n  ENI --> IF[DynamoDB interface endpoint]\n  ENI -.->|without endpoint| NAT[NAT Gateway to internet APIs]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Lambda VPC config",
+            "code": "VpcLambda:\n  Type: AWS::Lambda::Function\n  Properties:\n    VpcConfig:\n      SecurityGroupIds:\n        - !Ref LambdaSecurityGroup\n      SubnetIds:\n        - !Ref PrivateSubnetA\n        - !Ref PrivateSubnetB\n    Runtime: nodejs20.x\n    Handler: index.handler",
+            "explanation": "Subnets must be private with route to endpoints or NAT for AWS API access."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "S3 gateway endpoint",
+            "code": "S3Endpoint:\n  Type: AWS::EC2::VPCEndpoint\n  Properties:\n    ServiceName: !Sub com.amazonaws.${AWS::Region}.s3\n    VpcId: !Ref AppVpc\n    RouteTableIds:\n      - !Ref PrivateRouteTableA\n      - !Ref PrivateRouteTableB\n    VpcEndpointType: Gateway",
+            "explanation": "Associate gateway endpoint with route tables used by Lambda subnets."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Update function VPC config",
+            "code": "aws lambda update-function-configuration \\\n  --function-name DbWriter \\\n  --vpc-config SubnetIds=subnet-a,subnet-b,SecurityGroupIds=sg-lambda",
+            "explanation": "Change triggers ENI replumb — expect brief connectivity blip."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Check subnet available IPs",
+            "code": "aws ec2 describe-subnets --subnet-ids subnet-a \\\n  --query 'Subnets[0].{Available:AvailableIpAddressCount,Cidr:CidrBlock}'",
+            "explanation": "Plan /24 or larger per AZ for high concurrency VPC Lambda."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Private DB access",
+              "VPC Lambda ENI in subnet",
+              "EC2 in same subnet — same SG pattern"
+            ],
+            [
+              "S3 access",
+              "Gateway endpoint or NAT",
+              "EC2 private subnet same endpoints"
+            ],
+            [
+              "Cold start",
+              "VPC adds init historically",
+              "EC2 always running — no cold"
+            ],
+            [
+              "IP planning",
+              "ENI per concurrent scale",
+              "One ENI per EC2 instance"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Lambda in VPC without S3 endpoint or NAT — AccessDenied or timeout to S3. /28 subnet with 100 concurrent Lambda. Same SG for Lambda and RDS without egress rules on RDS SG referencing Lambda SG."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "RDS Proxy reduces connection storm from Lambda scale-out. How to prove it in production: Lambda ENI count in subnet via describe-network-interfaces, failed S3 calls in VPC without endpoint, cold InitDuration delta VPC vs non-VPC."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "VPC + NAT",
+              "All internet APIs work",
+              "NAT cost and single-AZ risk if one NAT"
+            ],
+            [
+              "VPC + endpoints",
+              "Lower cost for AWS APIs",
+              "Interface endpoint hourly fees add up"
+            ],
+            [
+              "Split functions",
+              "Non-VPC for S3, VPC for RDS",
+              "Two functions to maintain"
+            ],
+            [
+              "RDS Proxy",
+              "Connection pooling to RDS",
+              "Extra service cost"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "VPC Lambda without endpoint path to S3 gets rejected. Strong answer: gateway endpoint for S3, interface for DynamoDB, or split functions."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "VPC Lambda needs subnets, SGs, and IP capacity for scale.",
+    "Use S3 gateway endpoint — free — instead of NAT for S3 access.",
+    "Interface endpoints or NAT required for other AWS APIs from private subnet.",
+    "60s: VPC for RDS private IP. S3 gateway endpoint. Size subnet IPs. Split non-VPC for public API Lambdas.",
+    "Follow-up: how many IPs does Lambda use per concurrency?"
+  ],
+  "commonPitfalls": [
+    "No NAT/endpoints in private subnet Lambda — weak answer.",
+    "Strong answer: S3 gateway endpoint on route table; interface endpoints for other services.",
+    "/28 subnet for high concurrency VPC Lambda.",
+    "Opening RDS 0.0.0.0/0 instead of Lambda SG reference."
+  ],
+  "relatedTopicIds": [
+    "aws-09-eni-vpc-attachment",
+    "aws-09-ec2-networking-troubleshoot",
+    "aws-11-lambda-cold-starts"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "pg Pool in Lambda VPC",
+      "note": "Reuse Pool outside handler but RDS max_connections limits scale — use RDS Proxy like connection pool middleware.",
+      "futureTopicSlug": "aws/lambda/rds-proxy"
+    },
+    {
+      "language": "typescript",
+      "concept": "Dual Lambda architecture",
+      "note": "API Lambda public + worker Lambda VPC mirrors microservice split — typed event between via SQS.",
+      "futureTopicSlug": "aws/lambda/split-vpc"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Configuring Lambda VPC",
+      "url": "https://docs.aws.amazon.com/lambda/latest/dg/configuration-vpc.html"
+    },
+    {
+      "title": "Gateway endpoints",
+      "url": "https://docs.aws.amazon.com/vpc/latest/privatelink/vpc-endpoints-s3.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "lambda-vpc"
+}

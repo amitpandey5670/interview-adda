@@ -1,0 +1,267 @@
+{
+  "id": "aws-18-vpc-per-tenant-vs-pool",
+  "slug": "vpc-per-tenant-vs-pool",
+  "title": "VPC per tenant versus pooled VPC",
+  "moduleId": "aws-18-saas-and-interview",
+  "order": 2,
+  "hook": "Network isolation for SaaS ranges from one shared Virtual Private Cloud (VPC) with security group rules to a dedicated VPC (or AWS account) per tenant. The choice drives cost, compliance, and operational complexity.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Pooled VPC: all tenants share VPC, subnets, and compute; isolation is application-layer (tenant_id) plus security groups. VPC-per-tenant: each enterprise customer gets dedicated VPC, often in their own account via account vending. Hybrid: pooled app tier, dedicated data VPC connected via PrivateLink. SaaS Lens recommends pool for most, silo VPC for regulated enterprise."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Pooled VPC",
+              "longForm": "Shared VPC model",
+              "plainDefinition": "One VPC hosts all tenant workloads",
+              "example": "ECS cluster multi-tenant"
+            },
+            {
+              "term": "VPC per tenant",
+              "longForm": "Dedicated VPC per tenant",
+              "plainDefinition": "Network boundary per customer",
+              "example": "Enterprise Acme VPC 10.50.0.0/16"
+            },
+            {
+              "term": "Account per tenant",
+              "longForm": "Silo AWS account",
+              "plainDefinition": "Strongest isolation — separate account",
+              "example": "Regulated tenant own account"
+            },
+            {
+              "term": "PrivateLink",
+              "longForm": "AWS PrivateLink",
+              "plainDefinition": "Private connectivity between VPCs/services",
+              "example": "Silo DB VPC exposes endpoint"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Healthcare and finance tenants demand network isolation proofs. Interviewers ask when VPC-per-tenant is worth 10x operational cost. Answer: compliance requirement or contractual isolation — not default."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: pooled VPC default for scale; VPC-per-tenant or account-per-tenant for enterprise compliance."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Assess compliance needs",
+              "body": "SOC2 pooled OK; some contracts require network isolation."
+            },
+            {
+              "title": "Design pooled baseline",
+              "body": "Shared VPC, namespace isolation, SG segmentation per service tier."
+            },
+            {
+              "title": "Provision silo VPC on demand",
+              "body": "Step Functions + CloudFormation vend VPC/account for enterprise signup."
+            },
+            {
+              "title": "Connect via TGW or PrivateLink",
+              "body": "Hub-spoke or PrivateLink endpoint for silo data access from pooled app."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "VPC isolation levels",
+            "source": "flowchart LR\n  POOL[Pooled VPC\\nall tenants] --> HYBRID[Hybrid\\npooled app]\n  HYBRID -->|PrivateLink| SILO[Silo VPC\\ntenant DB]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Pooled VPC baseline",
+            "code": "SharedVpc:\n  Type: AWS::EC2::VPC\n  Properties:\n    CidrBlock: 10.0.0.0/16\n    Tags:\n      - Key: saas-model\n        Value: pooled",
+            "explanation": "Single VPC for multi-tenant compute — default SaaS pattern."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Per-tenant VPC stack",
+            "code": "TenantVpc:\n  Type: AWS::EC2::VPC\n  Properties:\n    CidrBlock: !Ref TenantCidr\n    Tags:\n      - Key: tenant-id\n        Value: !Ref TenantId",
+            "explanation": "Vended on enterprise contract — IPAM allocates CIDR."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "PrivateLink endpoint connection",
+            "code": "aws ec2 create-vpc-endpoint-connection-notification \\\n  --connection-notification-arn arn:aws:sns:us-east-1:123:notify \\\n  --service-id vpce-svc-tenantdb",
+            "explanation": "Pooled app reaches silo tenant DB without public internet."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Step Functions vend tenant account",
+            "code": "ProvisionTenant:\n  Type: AWS::StepFunctions::StateMachine\n  Properties:\n    Definition:\n      StartAt: CreateAccount\n      States:\n        CreateAccount:\n          Type: Task\n          Resource: arn:aws:states:::aws-sdk:organizations:createAccount\n          Next: DeployBaseline",
+            "explanation": "Automate silo account + VPC provisioning on enterprise signup."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Network",
+              "Pooled VPC + app isolation",
+              "VPC per customer like Heroku private spaces"
+            ],
+            [
+              "Ops",
+              "One VPC to patch",
+              "N VPCs to maintain"
+            ],
+            [
+              "Compliance",
+              "App-layer isolation",
+              "Network boundary audit ready"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "VPC-per-tenant for 10k small customers — ops nightmare. Pooled VPC with no SG segmentation between services. CIDR overlap when vending tenant VPCs without IPAM."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: enterprise onboarding provisions silo VPC in < 4 hours automated; pooled tier has zero cross-tenant network paths in penetration test."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Pooled VPC",
+              "Lowest network ops cost",
+              "Weakest network isolation"
+            ],
+            [
+              "Account per tenant",
+              "Strongest boundary",
+              "Highest ops per customer"
+            ],
+            [
+              "Hybrid PrivateLink",
+              "Balance isolation and scale",
+              "Connection management complexity"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "VPC per tenant for all customers by default — rejected as cost-prohibitive. Strong answer: pooled default, silo for enterprise/regulatory, automated vending."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Pooled VPC = shared network, app-layer tenant isolation.",
+    "VPC/account per tenant for enterprise compliance — automate provisioning.",
+    "Hybrid: pooled app + PrivateLink to silo data VPC.",
+    "60s: Default pooled VPC for scale. Enterprise gets vended VPC or account. IPAM for CIDR. PrivateLink connects hybrid. SaaS Lens guidance.",
+    "Follow-up: account-per-tenant vs VPC-per-tenant?"
+  ],
+  "commonPitfalls": [
+    "VPC per tenant for everyone — unsustainable ops at scale.",
+    "Strong answer: tiered network isolation aligned to contract and compliance.",
+    "CIDR overlap without IPAM.",
+    "No automation for silo provisioning — manual 2-week onboarding."
+  ],
+  "relatedTopicIds": [
+    "aws-18-tenancy-models-silo-pool-bridge",
+    "aws-18-tenant-routing-blast-radius",
+    "aws-18-saas-reference-architecture"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Shared hosting",
+      "note": "Pooled VPC like shared Node process — isolation is logical unless separate instances.",
+      "futureTopicSlug": "javascript/saas/hosting"
+    },
+    {
+      "language": "typescript",
+      "concept": "Environment separation",
+      "note": "Dedicated VPC like separate deployment env — stronger boundary than namespace alone.",
+      "futureTopicSlug": "typescript/saas/deployment"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Lens — AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html"
+    },
+    {
+      "title": "Tenant isolation",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/tenant-isolation.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "saas-tenant-routing"
+}

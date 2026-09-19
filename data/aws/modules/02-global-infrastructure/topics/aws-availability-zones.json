@@ -1,0 +1,202 @@
+{
+  "id": "aws-02-aws-availability-zones",
+  "slug": "aws-availability-zones",
+  "title": "Availability Zones: physical isolation within a Region",
+  "moduleId": "aws-02-global-infrastructure",
+  "order": 2,
+  "hook": "Availability Zones (AZs) are separate data centers within one Region, connected by low-latency networking. Spreading production tiers across at least two AZs survives the loss of a single building or power domain.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Each Availability Zone is one or more discrete data centers with independent power, cooling, and networking. AZ names like ap-south-1a and ap-south-1b are labels within a Region — they are not guaranteed to map the same physical layout in another Region. High availability designs place redundant capacity in multiple AZs: Application Load Balancer targets in two subnets, RDS Multi-AZ standby in another AZ, Auto Scaling groups balanced across AZs."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "AZ",
+              "longForm": "Availability Zone",
+              "plainDefinition": "Isolated data center group inside a Region.",
+              "example": "ap-south-1a and ap-south-1b host redundant app tiers."
+            },
+            {
+              "term": "Multi-AZ",
+              "longForm": "Multi-Availability Zone deployment",
+              "plainDefinition": "Resources replicated or standby across AZs for fault tolerance.",
+              "example": "RDS Multi-AZ synchronous standby in another AZ."
+            },
+            {
+              "term": "AZ ID",
+              "longForm": "Availability Zone ID",
+              "plainDefinition": "Stable identifier for an AZ across accounts (use-az1).",
+              "example": "Map consistent AZ IDs when pairing DR accounts."
+            },
+            {
+              "term": "Cross-AZ traffic",
+              "longForm": "Inter-AZ network traffic",
+              "plainDefinition": "Data transfer between AZs in the same Region — billed per GB.",
+              "example": "Replica traffic between app tiers in different AZs."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Single-AZ deployments fail when one data center has an outage — a real event, not a theoretical edge case. Interviewers expect you to name which tiers are multi-AZ and which are intentionally single-AZ with tradeoffs."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: AZ failure is a design input. Stateless app tier across AZs; stateful tier uses Multi-AZ or cross-AZ replication with eyes open on latency and cost."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Building AZ-aware workloads",
+          "items": [
+            {
+              "title": "Subnet per AZ",
+              "body": "Create one subnet per AZ in your VPC. Never stretch one subnet across AZs."
+            },
+            {
+              "title": "Spread compute",
+              "body": "Auto Scaling or Elastic Container Service (ECS)/Elastic Kubernetes Service (EKS) spread tasks across AZ subnets."
+            },
+            {
+              "title": "Load balance",
+              "body": "Application Load Balancer listens in multiple AZ public subnets."
+            },
+            {
+              "title": "Protect data",
+              "body": "RDS Multi-AZ, ElastiCache replication, or application-level quorum across AZs."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Multi-AZ application layout",
+            "source": "flowchart TB\n  subgraph AZa[\"AZ ap-south-1a\"]\n    ALBa[ALB node]\n    EC2a[EC2 instances]\n  end\n  subgraph AZb[\"AZ ap-south-1b\"]\n    ALBb[ALB node]\n    EC2b[EC2 instances]\n  end\n  User[Users] --> ALBa\n  User --> ALBb\n  ALBa --> EC2a\n  ALBb --> EC2b\n  EC2a --> RDS[(RDS Multi-AZ)]\n  EC2b --> RDS"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "List AZs in a Region",
+            "code": "aws ec2 describe-availability-zones \\\n  --region ap-south-1 \\\n  --query \"AvailabilityZones[].{Name:ZoneName,Id:ZoneId,State:State}\" \\\n  --output table",
+            "explanation": "Verify three or more AZs before designing triple-AZ layout. State must be available."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Auto Scaling across AZs",
+            "code": "AppAutoScalingGroup:\n  Type: AWS::AutoScaling::AutoScalingGroup\n  Properties:\n    VPCZoneIdentifier:\n      - !Ref PublicSubnetAzA\n      - !Ref PublicSubnetAzB\n    MinSize: \"2\"\n    MaxSize: \"6\"\n    DesiredCapacity: \"4\"\n    HealthCheckType: ELB\n    TargetGroupARNs:\n      - !Ref AppTargetGroup",
+            "explanation": "VPCZoneIdentifier pins instances to subnets in distinct AZs. Combined with ALB, losing one AZ drops capacity but service stays up."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "RDS Multi-AZ status",
+            "code": "aws rds describe-db-instances \\\n  --db-instance-identifier prod-api \\\n  --query \"DBInstances[0].{MultiAZ:MultiAZ,AZ:AvailabilityZone,Secondary:SecondaryAvailabilityZone}\"",
+            "explanation": "MultiAZ true confirms synchronous standby in another AZ. Read replicas are a separate HA/scale mechanism."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "AZ isolation vs dual-rack on-prem",
+          "headers": ["Aspect", "AWS AZs", "On-premises / C# stack"],
+          "rows": [
+            ["Failure domain", "Separate data center in Region", "Dual rack or dual hall you design"],
+            ["Networking", "Managed cross-AZ links", "Your fiber between halls"],
+            ["ASP.NET Core", "Identical deploy to EC2/ECS in each AZ", "NLB/ARR affinity across nodes you place"],
+            ["Cost", "Cross-AZ data transfer per GB", "Internal bandwidth you already paid for"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Running production RDS single-AZ to save money. One NAT Gateway serving all AZs — AZ outage kills egress for everyone. Assuming ap-south-1a in two accounts is the same physical AZ without checking AZ IDs."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "AZs are isolated data centers within a Region — design for at least two AZs for production.",
+    "Subnets are AZ-scoped; spread ALB, compute, and Multi-AZ data tiers accordingly.",
+    "Cross-AZ traffic costs money — still cheaper than downtime from single-AZ.",
+    "60s: Multi-AZ = survive one data center loss. Subnet per AZ. RDS Multi-AZ and ALB across AZs. Not the same as multi-Region.",
+    "Follow-up: difference between RDS Multi-AZ and read replica?"
+  ],
+  "commonPitfalls": [
+    "Saying 'we are HA because we use AWS' without naming AZ spread gets you rejected.",
+    "Strong answer: list tiers, which are multi-AZ, and what fails when one AZ dies.",
+    "Single NAT Gateway for the whole VPC — AZ failure becomes company-wide egress outage.",
+    "Treating read replica as Multi-AZ failover without promotion runbook."
+  ],
+  "relatedTopicIds": [
+    "aws-02-aws-regions-isolation",
+    "aws-02-aws-choosing-region-az",
+    "aws-05-aws-multi-az-vpc-patterns"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Stateless Node workers across AZs",
+      "note": "PM2 cluster on one VM is not multi-AZ. ECS/Fargate spread across AZ subnets matches how you would run multiple Kestrel instances behind a load balancer on-prem.",
+      "futureTopicSlug": "aws/compute/multi-az-deployment"
+    },
+    {
+      "language": "typescript",
+      "concept": "Health checks and AZ drain",
+      "note": "ALB deregisters unhealthy targets per AZ during outage — similar to taking an IIS server out of Application Request Routing rotation in a C# farm without redeploying code.",
+      "futureTopicSlug": "aws/elb/target-health"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Amazon RDS Multi-AZ",
+      "url": "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZ.html"
+    },
+    {
+      "title": "AWS Fault Isolation Boundaries — AZs",
+      "url": "https://docs.aws.amazon.com/whitepapers/latest/aws-fault-isolation-boundaries/availability-zones.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "high-concurrency"
+}

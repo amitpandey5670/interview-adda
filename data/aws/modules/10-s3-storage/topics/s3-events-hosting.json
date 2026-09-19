@@ -1,0 +1,277 @@
+{
+  "id": "aws-10-s3-events-hosting",
+  "slug": "s3-events-hosting",
+  "title": "S3 event notifications and static website hosting",
+  "moduleId": "aws-10-s3-storage",
+  "order": 5,
+  "hook": "S3 can notify Lambda, SNS, or SQS on object events and serve static sites — pair website hosting with CloudFront for HTTPS production SPAs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon S3 event notifications fire on s3:ObjectCreated:*, s3:ObjectRemoved:*, and other events to AWS Lambda, Amazon SNS, Amazon SQS, or EventBridge. Filters by prefix and suffix. Static website hosting serves index.html and error document from bucket website endpoint — HTTP only; production uses CloudFront. Event delivery is at-least-once."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Event notification",
+              "longForm": "S3 event notification",
+              "plainDefinition": "Configuration sending events to Lambda, SNS, or SQS.",
+              "example": "uploads/*.csv ObjectCreated → Lambda."
+            },
+            {
+              "term": "Website endpoint",
+              "longForm": "S3 static website hosting",
+              "plainDefinition": "Bucket configured with IndexDocument and ErrorDocument.",
+              "example": "index.html + error.html for SPA routing helper."
+            },
+            {
+              "term": "EventBridge",
+              "longForm": "Amazon EventBridge S3 integration",
+              "plainDefinition": "Alternative to legacy notifications with filtering and replay.",
+              "example": "Rule matches Object Created for audit bus."
+            },
+            {
+              "term": "Suffix filter",
+              "longForm": "S3 notification suffix filter",
+              "plainDefinition": "Limit events to keys ending with pattern like .csv.",
+              "example": ".json suffix only for config processor."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "CSV upload pipelines trigger Lambda ETL. Duplicate events require idempotent handlers. Public website endpoint without CloudFront lacks HTTPS and WAF."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: event notification prefix/suffix filter, async Lambda with DLQ, static site behind CloudFront OAC not public bucket."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Event-driven upload pipeline",
+          "items": [
+            {
+              "title": "Configure notification",
+              "body": "Prefix uploads/, suffix .csv, event s3:ObjectCreated:Put."
+            },
+            {
+              "title": "Grant Lambda permission",
+              "body": "S3 invokes Lambda — resource policy on function allows s3.amazonaws.com."
+            },
+            {
+              "title": "Idempotent handler",
+              "body": "Dedup on bucket+key+versionId or etag in DynamoDB."
+            },
+            {
+              "title": "Static site optional",
+              "body": "Website hosting for lab; CloudFront OAC for prod HTTPS SPA."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "S3 event to Lambda",
+            "source": "flowchart LR\n  User[User upload] --> S3[S3 PutObject uploads/data.csv]\n  S3 -->|ObjectCreated| L[Lambda processor]\n  L --> DB[(DynamoDB)]\n  L --> DLQ[DLQ on failure]\n  S3 --> CF[CloudFront OAC static assets]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Notification configuration",
+            "code": "{\n  \"LambdaFunctionConfigurations\": [{\n    \"Id\": \"CsvUpload\",\n    \"LambdaFunctionArn\": \"arn:aws:lambda:ap-south-1:123456789012:function:ProcessCsv\",\n    \"Events\": [\"s3:ObjectCreated:Put\"],\n    \"Filter\": {\n      \"Key\": {\n        \"FilterRules\": [\n          { \"Name\": \"prefix\", \"Value\": \"uploads/\" },\n          { \"Name\": \"suffix\", \"Value\": \".csv\" }\n        ]\n      }\n    }\n  }]\n}",
+            "explanation": "Apply with put-bucket-notification-configuration. One config per bucket replaces previous."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Allow S3 to invoke Lambda",
+            "code": "aws lambda add-permission \\\n  --function-name ProcessCsv \\\n  --statement-id s3-invoke \\\n  --action lambda:InvokeFunction \\\n  --principal s3.amazonaws.com \\\n  --source-arn arn:aws:s3:::my-app-data \\\n  --source-account 123456789012",
+            "explanation": "Required before notification succeeds — otherwise configuration errors."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Static website hosting bucket",
+            "code": "WebsiteBucket:\n  Type: AWS::S3::Bucket\n  Properties:\n    WebsiteConfiguration:\n      IndexDocument: index.html\n      ErrorDocument: error.html\n    PublicAccessBlockConfiguration:\n      BlockPublicAcls: true\n      BlockPublicPolicy: true\n      IgnorePublicAcls: true\n      RestrictPublicBuckets: true",
+            "explanation": "Website config without public access — serve via CloudFront OAC instead of public policy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Put notification from CLI",
+            "code": "aws s3api put-bucket-notification-configuration \\\n  --bucket my-app-data \\\n  --notification-configuration file://notification.json",
+            "explanation": "Test with sample upload to prefix and watch CloudWatch Logs for Lambda."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Trigger",
+              "S3 event push to Lambda",
+              "Express POST /upload receives file — synchronous"
+            ],
+            [
+              "Delivery",
+              "At-least-once events",
+              "HTTP once unless client retries"
+            ],
+            [
+              "Static hosting",
+              "S3 website + CloudFront",
+              "nginx serve dist/ on EC2"
+            ],
+            [
+              "Filter",
+              "Prefix and suffix on key",
+              "Route path in Express router"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Missing Lambda permission for S3 invoke. Assuming exactly-once S3 events. Public website bucket for production SPA without CloudFront HTTPS."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "EventBridge replaces multiple notification configs with central routing and replay. SQS buffer between S3 and Lambda smooths bursts. How to prove it in production: Lambda Errors metric, DLQ depth, duplicate processing rate via idempotency table."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "S3 → Lambda direct",
+              "Simple ETL trigger",
+              "Burst throttles Lambda concurrency"
+            ],
+            [
+              "S3 → SQS → Lambda",
+              "Buffer and backpressure",
+              "Extra component latency"
+            ],
+            [
+              "EventBridge",
+              "Filtering and multi-target",
+              "Slightly more setup"
+            ],
+            [
+              "CloudFront OAC site",
+              "HTTPS private bucket",
+              "Invalidation or versioned assets on deploy"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Public S3 website for prod React app gets rejected. Strong answer: CloudFront OAC, event-driven idempotent Lambda, DLQ."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "S3 events are at-least-once — idempotent Lambda handlers required.",
+    "Configure prefix/suffix filters to reduce noise and cost.",
+    "Static website hosting is HTTP — use CloudFront OAC for production HTTPS.",
+    "60s: ObjectCreated to Lambda with filter. Add permission. Idempotent handler. CloudFront for static site.",
+    "Follow-up: S3 notification vs EventBridge?"
+  ],
+  "commonPitfalls": [
+    "Exactly-once assumption from S3 events — rejected.",
+    "Strong answer: idempotent on key+etag; DLQ for failures.",
+    "Forgot lambda add-permission for S3 principal.",
+    "No DLQ on async Lambda processing uploads."
+  ],
+  "relatedTopicIds": [
+    "aws-10-s3-security-policies",
+    "aws-11-lambda-triggers",
+    "aws-11-lambda-concurrency-dlq"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Multer upload vs S3 presigned",
+      "note": "Direct S3 upload via presigned URL + S3 event replaces multer memory storage — scales without API server bytes.",
+      "futureTopicSlug": "aws/s3/upload-patterns"
+    },
+    {
+      "language": "typescript",
+      "concept": "S3Event handler type",
+      "note": "Lambda S3Event from @types/aws-lambda — iterate Records array; batch may contain multiple objects.",
+      "futureTopicSlug": "aws/lambda/s3-trigger"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Event notifications",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/EventNotifications.html"
+    },
+    {
+      "title": "Static website hosting",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteHosting.html"
+    }
+  ],
+  "animationHint": "flow",
+  "scenarioTag": "csv-import"
+}

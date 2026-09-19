@@ -1,0 +1,237 @@
+{
+  "id": "aws-08-cdn-fundamentals",
+  "slug": "cdn-fundamentals",
+  "title": "What a CDN solves (latency, scale, and origin shielding)",
+  "moduleId": "aws-08-edge-and-cdn",
+  "order": 1,
+  "hook": "When a user in Tokyo loads your app hosted in Virginia, every asset crosses the Pacific unless something caches it closer. A Content Delivery Network (CDN) stores copies at edge locations so repeat requests never reach your origin region.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "A Content Delivery Network (CDN) is a geographically distributed set of caches — Points of Presence (PoPs) — that sit between users and your origin servers. On a cache hit the edge responds locally. On a miss the edge fetches from origin once, stores the response, and serves subsequent users from that PoP. Amazon CloudFront is AWS's CDN; Akamai, Cloudflare, and Fastly solve the same class of problem on other clouds."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "CDN",
+              "longForm": "Content Delivery Network",
+              "plainDefinition": "Distributed cache network that serves content from locations near the user.",
+              "example": "CloudFront edge in Mumbai serves app.js without a round trip to us-east-1."
+            },
+            {
+              "term": "PoP",
+              "longForm": "Point of Presence",
+              "plainDefinition": "A physical edge site where the CDN keeps caches and serves traffic.",
+              "example": "CloudFront has 600+ PoPs worldwide as of AWS documentation."
+            },
+            {
+              "term": "Origin",
+              "longForm": "origin server",
+              "plainDefinition": "The authoritative source the CDN fetches from on a cache miss.",
+              "example": "Private S3 bucket, ALB, or API Gateway behind the distribution."
+            },
+            {
+              "term": "Cache hit",
+              "longForm": "cache hit",
+              "plainDefinition": "Edge already has the object and returns it without contacting origin.",
+              "example": "Second user in Singapore gets main.a3f2.js from local edge — X-Cache: Hit."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Latency is distance plus round trips. A 200 ms cross-ocean hop per asset multiplies across dozens of files. CDNs also absorb traffic spikes — viral posts hit edge caches instead of melting your single-region ALB. They add a DDoS absorption layer (especially with AWS Shield on CloudFront). The tradeoff: you must only cache responses that are safe to repeat — static assets, public GETs — never personalized POST bodies or auth-gated JSON unless the cache key includes the user identity."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: CDN moves bytes closer and reduces origin load. It is not a database, not a load balancer replacement for stateful writes, and not magic — cacheability rules still apply."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "First request vs repeat request",
+          "items": [
+            {
+              "title": "DNS resolves to nearest edge",
+              "body": "User requests https://app.example.com/assets/logo.png. DNS returns a CloudFront edge IP based on latency routing."
+            },
+            {
+              "title": "Edge checks local cache",
+              "body": "CloudFront computes a cache key from path, query string, and configured headers/cookies."
+            },
+            {
+              "title": "Cache miss fetches origin",
+              "body": "Edge contacts S3 or your custom origin in the home region, streams the object, stores it, returns to user."
+            },
+            {
+              "title": "Cache hit on repeat",
+              "body": "Another user in the same PoP region gets the object from edge RAM/disk — origin sees zero additional requests."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "CDN cache hit and miss",
+            "source": "sequenceDiagram\n  participant U as User\n  participant E as Edge PoP\n  participant O as Origin S3\n  U->>E: GET /assets/app.js\n  alt cache HIT\n    E-->>U: 200 from edge\n  else cache MISS\n    E->>O: GET object\n    O-->>E: 200 + body\n    E-->>U: 200 + store copy\n  end"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — measure latency with and without CDN",
+            "code": "# Direct to S3 website endpoint (no CDN) — note Server and timing\ncurl -o /dev/null -s -w 'time_total: %{time_total}s\\n' \\\n  https://my-bucket.s3.us-east-1.amazonaws.com/assets/app.js\n\n# Through CloudFront distribution domain\ncurl -o /dev/null -s -w 'time_total: %{time_total}s\\n' \\\n  https://d111111abcdef8.cloudfront.net/assets/app.js\n\n# Second request — should show X-Cache: Hit from cloudfront\ncurl -sI https://d111111abcdef8.cloudfront.net/assets/app.js | grep -i x-cache",
+            "explanation": "First curl hits origin region directly. Second goes through edge DNS. Repeat request inspects X-Cache header — Hit means CDN saved an origin round trip."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — minimal CloudFront distribution skeleton",
+            "code": "Resources:\n  AppDistribution:\n    Type: AWS::CloudFront::Distribution\n    Properties:\n      DistributionConfig:\n        Enabled: true\n        Comment: SPA static assets\n        DefaultCacheBehavior:\n          TargetOriginId: S3Origin\n          ViewerProtocolPolicy: redirect-to-https\n          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized managed\n        Origins:\n          - Id: S3Origin\n            DomainName: !GetAtt AppBucket.RegionalDomainName\n            S3OriginConfig:\n              OriginAccessIdentity: ''  # use OAC in production — see cloudfront-s3 topic\n        PriceClass: PriceClass_100  # US, Canada, Europe — cheaper than global",
+            "explanation": "Distribution ties a default cache behavior to an S3 origin. PriceClass limits PoP regions for cost. Production adds OAC, custom domain, and path behaviors."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — create invalidation when you must purge (prefer versioning instead)",
+            "code": "aws cloudfront create-invalidation \\\n  --distribution-id E1234567890ABC \\\n  --paths '/assets/*' '/index.html'\n\n# Check invalidation status\naws cloudfront get-invalidation \\\n  --distribution-id E1234567890ABC \\\n  --id I2J3K4L5M6N7O8",
+            "explanation": "Invalidation removes objects from all edge caches. Costs apply after free tier. Versioned filenames (app.v2.js) avoid needing this on every deploy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — CloudWatch alarm on low cache hit rate",
+            "code": "Resources:\n  LowCacheHitAlarm:\n    Type: AWS::CloudWatch::Alarm\n    Properties:\n      AlarmName: cloudfront-low-cache-hit-rate\n      MetricName: CacheHitRate\n      Namespace: AWS/CloudFront\n      Statistic: Average\n      Period: 300\n      EvaluationPeriods: 2\n      Threshold: 70\n      ComparisonOperator: LessThanThreshold\n      Dimensions:\n        - Name: DistributionId\n          Value: !Ref AppDistribution\n      AlarmActions:\n        - !Ref OpsTopic",
+            "explanation": "CacheHitRate below 70% on a static site often means TTL misconfiguration, query-string cache busting, or missing compression. Alarm before origin costs spike."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "CDN vs browser and framework caching",
+          "headers": ["Aspect", "CloudFront CDN", "Browser / Next.js / Vercel"],
+          "rows": [
+            ["Scope", "Shared across all users at edge PoP", "Per-user browser cache or platform edge"],
+            ["Control", "Cache behaviors, TTL, invalidation API", "Cache-Control headers, ISR revalidate in Next.js"],
+            ["Auth risk", "Wrong cache key leaks responses between users", "Same risk if CDN caches Set-Cookie responses"],
+            ["Deploy purge", "Invalidation or versioned asset URLs", "next build hashes filenames automatically"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Caching POST responses or API JSON with TTL > 0 and no user in the cache key. Making S3 public instead of OAC because 'CDN needs access.' Running /* invalidation on every deploy instead of content-hashed bundles. Assuming CDN replaces horizontal scaling for write-heavy APIs."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Edge caches are eventually consistent — a deploy in us-east-1 does not instantly disappear from every PoP until TTL expires or you invalidate. Origin Shield (optional per origin) adds a regional mid-tier cache so 400+ edges do not all hammer S3 on a cold start. How to prove it in production: CloudWatch CacheHitRate and OriginRequests on the distribution; access logs with x-edge-result-type Hit vs Miss; curl -sI from multiple regions. PriceClass and geo restriction trade cost against coverage."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["Global PriceClass All", "Lowest latency worldwide", "Higher CloudFront bill"],
+            ["Versioned asset URLs", "No invalidation, long immutable TTL", "Build pipeline must hash filenames"],
+            ["Origin Shield", "Protects S3/ALB from miss storms", "Extra per-GB charge in shield region"],
+            ["CDN in front of API", "WAF + TLS at edge", "TTL 0 means no origin offload for dynamic paths"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying 'CDN makes everything faster' without naming cacheability, TTL, or cache keys. Strong answer: CDN reduces latency and origin load for cacheable GET/HEAD content; dynamic and authenticated paths need explicit TTL 0 and correct forwarded headers."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "A CDN caches responses at edge PoPs near users; on a miss it fetches from origin once and reuses the copy.",
+    "Do not cache personalized or authenticated responses unless the cache key includes the distinguishing header or cookie.",
+    "In production, watch CloudFront CacheHitRate and OriginRequests; versioned filenames beat mass invalidation.",
+    "60s: CDN = closer bytes + origin shield. Cache only safe GETs. OAC for private S3. TTL and cache keys matter more than PoP count.",
+    "Follow-up: how does Origin Shield change the miss path, and when is CloudFront the wrong tool?"
+  ],
+  "commonPitfalls": [
+    "Saying CDN speeds up databases or POST APIs — that gets you rejected because writes and dynamic auth responses are not CDN problems.",
+    "Strong answer: name cache hit rate, TTL, cache key components, and what stays origin-only.",
+    "Making S3 public 'for CloudFront' instead of using Origin Access Control.",
+    "Invalidating /* on every deploy when webpack/vite already emit hashed chunk names."
+  ],
+  "relatedTopicIds": [
+    "aws-08-cloudfront-distributions",
+    "aws-08-cloudfront-caching",
+    "aws-08-cloudfront-s3"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Browser cache vs CDN",
+      "note": "fetch() respects Cache-Control in the browser only for that user. CloudFront is a shared cache — one user's hit can serve the next user unless Vary or cache key includes their auth header.",
+      "futureTopicSlug": "javascript/runtime/caching"
+    },
+    {
+      "language": "typescript",
+      "concept": "Next.js static export on S3 + CloudFront",
+      "note": "next build emits hashed _next/static chunks ideal for long CDN TTL. HTML pages need shorter TTL or stale-while-revalidate. Same pattern as Angular prerender output to S3.",
+      "futureTopicSlug": "nextjs/deployment/cdn"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "How CloudFront delivers content",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/HowCloudFrontWorks.html"
+    },
+    {
+      "title": "CloudFront metrics in CloudWatch",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/programming-cloudwatch-metrics.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "cloudfront-origin"
+}

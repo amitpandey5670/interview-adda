@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-09-ec2-compute",
+  "title": "ec2-compute interview drills",
+  "items": [
+    {
+      "question": "Your ASG keeps replacing healthy-looking instances. What do you investigate?",
+      "answer": "Check ASG health check type (EC2 vs ELB). If ELB, failing target group health checks trigger replacement even when the OS is up. Verify security group allows health check port from ALB, application listens on registered port, grace period is long enough for boot, and status checks versus custom health. CloudWatch alarms on UnHealthyHostCount confirm. Strong answer: distinguish EC2 status check failure from load balancer health failure.",
+      "followUps": [
+        "What is a lifecycle hook used for?",
+        "How does instance refresh differ from rolling ASG update?"
+      ],
+      "sixtySeconds": "ELB health check failing → ASG cycles instances. Check TG port, SG, grace period, app readiness. EC2 status check is separate from ALB health."
+    },
+    {
+      "question": "When would you choose instance store over EBS for a database on EC2?",
+      "answer": "Instance store NVMe gives lowest latency and highest IOPS for scratch, cache, or sharded workloads where replication handles durability (Cassandra, Kafka). Never for sole copy of data. EBS gp3/io2 when you need snapshots, resize, survive stop/start, or Multi-Attach (io2 only). Production proof: CloudWatch VolumeQueueLength and instance store metrics; benchmark with fio before committing.",
+      "followUps": [
+        "What happens to instance store on stop versus terminate?",
+        "Can you snapshot instance store?"
+      ],
+      "sixtySeconds": "Instance store = fast ephemeral. EBS = durable network disk. DB on instance store only with replication. Snapshots are EBS-only."
+    },
+    {
+      "question": "Walk through attaching a secondary ENI for a multi-homed security appliance.",
+      "answer": "Create ENI in management subnet and data subnet, attach as device index 1+, assign security groups per role, disable source/dest check on the appliance ENI, route tables send inspection traffic through appliance private IP. Primary ENI keeps SSH/management path. Document MAC and device names in user data. Compare to on-prem dual-NIC firewall — same routing intent.",
+      "followUps": [
+        "Can you move an ENI between instances?",
+        "How many ENIs per instance type?"
+      ],
+      "sixtySeconds": "Secondary ENI in target subnet, SG per role, source/dest check off for routing appliance. Primary ENI for management."
+    },
+    {
+      "question": "New EC2 in a private subnet cannot pull container images from ECR. Debug layers.",
+      "answer": "Private subnet needs NAT or VPC interface endpoint for ECR API and ECR DKR (docker pull). Security group egress 443. Route 0.0.0.0/0 to NAT or endpoints in route table. IAM instance profile with ecr:GetAuthorizationToken and ecr:BatchGetImage. DNS resolves ECR — use VPC DNS. SSM session for shell: curl ECR endpoint. Flow logs show REJECT on NACL or SG.",
+      "followUps": [
+        "Which endpoints replace NAT for ECR?",
+        "Does Lambda in VPC share this problem?"
+      ],
+      "sixtySeconds": "ECR needs API + DKR endpoints or NAT. IAM role for pull. SG egress 443. Route table and DNS. Same pattern for Lambda in VPC."
+    },
+    {
+      "question": "How do launch templates improve on launch configurations?",
+      "answer": "Launch templates are versioned, support mixed instances policy in ASG, carry advanced networking (ENI specs), IMDSv2 defaults, tag propagation, and latest features. Launch configurations are legacy and immutable — change requires new LC. Production uses templates with default version and explicit $Latest/$Default in ASG. Infrastructure as Code: CloudFormation/AWS::EC2::LaunchTemplate.",
+      "followUps": [
+        "How do you roll out a new AMI with zero downtime?",
+        "What is a capacity reservation?"
+      ],
+      "sixtySeconds": "Launch templates = versioned, full feature set. LC is legacy. ASG instance refresh or blue/green with new template version."
+    },
+    {
+      "question": "An instance has a public IP but SSH times out. Ordered checklist?",
+      "answer": "Internet Gateway attached, subnet route 0.0.0.0/0 → igw, instance auto-assign public IP or Elastic IP, security group inbound 22 from your IP (not 0.0.0.0/0 in prod — use SSM), NACL allows ephemeral return, host firewall, correct key pair, no accidental private-only subnet. VPC Reachability Analyzer documents path. Prefer SSM Session Manager over SSH in interviews.",
+      "followUps": [
+        "Does a security group on the ALB affect EC2 SSH?",
+        "What do flow logs show for SG reject?"
+      ],
+      "sixtySeconds": "IGW + public route + public IP + SG/NACL + key. Use SSM not SSH in prod. Flow logs and Reachability Analyzer prove the path."
+    },
+    {
+      "question": "Design ASG for a stateful session web app on EC2.",
+      "answer": "Do not rely on instance stickiness alone — externalize sessions to ElastiCache or DynamoDB. ASG across AZs behind ALB, target group with health check on /health, deregistration delay for connection drain, warm pool optional for scale-out latency. EBS per instance for local cache only. Strong rejection: sticky sessions without shared store fails when instance terminates.",
+      "followUps": [
+        "When is warm pool worth the cost?",
+        "How does connection draining work?"
+      ],
+      "sixtySeconds": "External session store. Multi-AZ ASG + ALB. Health checks and drain delay. No sticky-only state on disk."
+    },
+    {
+      "question": "What gets you rejected drawing EC2 architecture on a whiteboard?",
+      "answer": "Single AZ ASG, public IP on every app server instead of ALB, database on instance store without replication, security group 0.0.0.0/0 SSH, ignoring IMDSv2, and ASG health check type mismatch. Strong diagram: private subnets, ALB public, NAT per AZ, EBS encrypted, instance profile not long-lived keys.",
+      "followUps": [
+        "How does Systems Manager replace SSH?",
+        "When is Nitro Enclaves relevant?"
+      ],
+      "sixtySeconds": "Reject: single AZ, SSH open world, DB on ephemeral disk. Draw ALB, private ASG, NAT per AZ, EBS encrypt, IMDSv2."
+    }
+  ]
+}

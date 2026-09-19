@@ -1,0 +1,267 @@
+{
+  "id": "aws-16-pillar-reliability",
+  "slug": "pillar-reliability",
+  "title": "Reliability pillar (recover from failure)",
+  "moduleId": "aws-16-well-architected",
+  "order": 4,
+  "hook": "Reliability means a workload performs its intended function correctly and consistently — including when components fail. Design for failure across Availability Zones (AZs), regions, and dependencies.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Principles: automatically recover from failure, test recovery procedures, scale horizontally, stop guessing capacity, manage change through automation, and anticipate failure. Patterns: Multi-AZ RDS, Auto Scaling groups, health checks, backups with tested restore, chaos engineering, and defined Recovery Time Objective (RTO) / Recovery Point Objective (RPO)."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "RTO",
+              "longForm": "Recovery Time Objective",
+              "plainDefinition": "Max acceptable downtime after failure",
+              "example": "4 hours for billing API"
+            },
+            {
+              "term": "RPO",
+              "longForm": "Recovery Point Objective",
+              "plainDefinition": "Max acceptable data loss window",
+              "example": "15 minutes of transactions"
+            },
+            {
+              "term": "Multi-AZ",
+              "longForm": "Multi-Availability Zone",
+              "plainDefinition": "Resources span isolated AZs within a region",
+              "example": "RDS Multi-AZ synchronous standby"
+            },
+            {
+              "term": "Chaos",
+              "longForm": "Chaos engineering",
+              "plainDefinition": "Inject failures to validate resilience",
+              "example": "Terminate random ECS task in Game Day"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers ask \"what happens when an AZ goes down?\" and \"have you tested backup restore?\" Reliability HRIs — single-AZ databases, no auto scaling, untested DR — fail enterprise due diligence."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: design for failure, Multi-AZ, auto scaling, backup/restore tested, defined RTO/RPO."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Eliminate single points of failure",
+              "body": "Multi-AZ for data and compute; no one NAT gateway for all egress if critical."
+            },
+            {
+              "title": "Auto scale and health check",
+              "body": "Replace unhealthy targets; scale on demand metrics."
+            },
+            {
+              "title": "Backup and restore",
+              "body": "Automated backups; quarterly restore drill with documented RTO."
+            },
+            {
+              "title": "Plan for region failure",
+              "body": "Active-passive or active-active multi-region if RTO requires it."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Failure domains",
+            "source": "flowchart TB\n  REG[Region] --> AZ1[AZ-a app]\n  REG --> AZ2[AZ-b app]\n  AZ1 --> RDS[(Multi-AZ RDS)]\n  AZ2 --> RDS"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Multi-AZ RDS",
+            "code": "Database:\n  Type: AWS::RDS::DBInstance\n  Properties:\n    MultiAZ: true\n    BackupRetentionPeriod: 14\n    DeletionProtection: true",
+            "explanation": "Automatic failover to standby AZ on primary failure."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "ASG across AZs",
+            "code": "AutoScalingGroup:\n  Properties:\n    MinSize: 2\n    MaxSize: 10\n    VPCZoneIdentifier:\n      - !Ref Az1Subnet\n      - !Ref Az2Subnet\n    HealthCheckType: ELB",
+            "explanation": "Horizontal scale across AZs with ELB health checks."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Restore test",
+            "code": "aws rds restore-db-instance-from-db-snapshot \\\n  --db-instance-identifier restore-drill-$(date +%Y%m%d) \\\n  --db-snapshot-identifier prod-snapshot-latest",
+            "explanation": "Prove RTO — untested backups are wishful thinking."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Route53 failover",
+            "code": "PrimaryRecord:\n  Type: AWS::Route53::RecordSet\n  Properties:\n    Failover: PRIMARY\n    HealthCheckId: !Ref PrimaryHealthCheck\n    SetIdentifier: primary",
+            "explanation": "DNS-level failover for multi-region active-passive."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "HA",
+              "Multi-AZ ASG + RDS",
+              "PM2 cluster on one VM — weaker"
+            ],
+            [
+              "DR",
+              "Route53 failover + snapshot restore",
+              "Database replica in another DC"
+            ],
+            [
+              "Testing",
+              "Game Day AZ failure",
+              "Integration tests only"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single-AZ production database. Backups enabled but never restored. One NAT Gateway for all private subnets — AZ failure blocks egress."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: last successful restore drill date; AZ failure Game Day results; SLO burn rate alerts; chaos experiment pass rate."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Multi-AZ everything",
+              "High availability",
+              "2x cost for some services"
+            ],
+            [
+              "Active-active multi-region",
+              "Lowest RTO",
+              "Data consistency complexity"
+            ],
+            [
+              "Single-region + good backups",
+              "Simpler",
+              "Region outage exceeds RTO"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying \"we are in the cloud so it is reliable\" — rejected. Strong answer: explicit failure modes, Multi-AZ, tested restore, defined RTO/RPO."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Reliability = perform correctly under failure; design for AZ/region/dependency loss.",
+    "Untested backups are not backups — schedule restore drills.",
+    "Multi-AZ RDS fails over automatically; apps must handle DNS/cache staleness.",
+    "60s: Multi-AZ, auto scaling, health checks, backup with tested restore, RTO/RPO. Chaos Game Days prove it. Cloud does not auto-heal bad design.",
+    "Follow-up: RTO 15 min — active-active or failover?"
+  ],
+  "commonPitfalls": [
+    "Single-AZ prod DB — classic HRI and interview fail.",
+    "Strong answer: Multi-AZ, ASG, tested restore, defined RTO/RPO with tradeoff cost.",
+    "One NAT GW for all AZs — AZ outage kills egress.",
+    "No health checks on custom app port."
+  ],
+  "relatedTopicIds": [
+    "aws-16-well-architected-overview",
+    "aws-16-pillar-operational-excellence",
+    "aws-16-pillar-performance"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Retry with backoff",
+      "note": "aws-sdk v3 retry strategy handles transient failures — app must still handle throttling.",
+      "futureTopicSlug": "javascript/cloud/resilience"
+    },
+    {
+      "language": "typescript",
+      "concept": "Circuit breaker",
+      "note": "opossum or similar pattern for dependency failure — Reliability at app layer.",
+      "futureTopicSlug": "typescript/cloud/resilience"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html"
+    },
+    {
+      "title": "Reliability pillar",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/framework/reliability.html"
+    }
+  ],
+  "animationHint": "region-map",
+  "scenarioTag": "lambda-vpc"
+}

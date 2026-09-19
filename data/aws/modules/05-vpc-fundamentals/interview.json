@@ -1,0 +1,78 @@
+{
+  "moduleId": "aws-05-vpc-fundamentals",
+  "title": "VPC fundamentals interview drills",
+  "items": [
+    {
+      "question": "Private subnet EC2 instances cannot reach the internet to patch packages. Walk through what must exist.",
+      "answer": "NAT Gateway in a public subnet in the same AZ, Elastic IP attached to the NAT, public subnet route 0.0.0.0/0 → Internet Gateway, private subnet route 0.0.0.0/0 → NAT Gateway, and security group egress allowing HTTPS. Missing any hop breaks the path. Verify with VPC Reachability Analyzer or a curl from the instance.",
+      "followUps": [
+        "What breaks if the NAT is in a different AZ than the instance?",
+        "When is a NAT instance still justified?"
+      ],
+      "sixtySeconds": "Private egress chain: instance → NAT in public subnet → IGW → internet. Route tables and SG egress must allow it."
+    },
+    {
+      "question": "You have 10.0.0.0/16 and three AZs. How do you subnet for a production web app?",
+      "answer": "Reserve /24 public subnets per AZ for ALB and NAT (10.0.1.0/24, 10.0.2.0/24, 10.0.3.0/24) and /24 private subnets per AZ for app and data tiers (10.0.10.0/24, 10.0.20.0/24, 10.0.30.0/24). Leave unused /24 blocks for future services (EKS, Lambda ENIs). Associate each subnet with the correct route table. RDS subnet group spans private subnets only.",
+      "followUps": [
+        "Why not use /28 subnets to save addresses?",
+        "How does IPv6 change this layout?"
+      ],
+      "sixtySeconds": "One public + one private /24 per AZ minimum. ALB and NAT public. App and RDS private. Reserve growth space."
+    },
+    {
+      "question": "An instance in a public subnet still cannot be reached on port 443 from the internet. What do you check?",
+      "answer": "Internet Gateway attached to VPC, subnet route 0.0.0.0/0 → igw, instance has public IPv4 or Elastic IP, security group allows 443 inbound, network ACL allows ephemeral return traffic, and OS firewall listening on 443. 'Public subnet' is routing intent — without IGW route and public IP there is no inbound path. Compare to on-prem: publishing a service requires firewall DNAT and routing, same logical checks.",
+      "followUps": [
+        "Does assignPublicIp on launch replace an Elastic IP?",
+        "How do network ACLs differ from security groups for this case?"
+      ],
+      "sixtySeconds": "Inbound checklist: IGW, public route, public IP, SG 443, NACL, app listening. Public subnet name alone is not enough."
+    },
+    {
+      "question": "NAT Gateway in ap-south-1a fails. What happens to private instances in other AZs?",
+      "answer": "If each AZ has its own NAT and private route table pointing to local NAT, only ap-south-1a private subnets lose egress. If one NAT serves all AZs via a single private route table, entire VPC egress dies — a common production outage. Fix: NAT per AZ, subnet-specific route tables, monitor NAT Gateway metrics (ErrorPortAllocation, BytesOut).",
+      "followUps": [
+        "How expensive is three NAT Gateways versus one?",
+        "Can VPC endpoints reduce NAT traffic?"
+      ],
+      "sixtySeconds": "One NAT for all AZs = single point of failure. NAT per AZ + per-AZ private route tables. Endpoints cut NAT bill."
+    },
+    {
+      "question": "Explain VPC DNS resolution for an internal C# API calling RDS by endpoint hostname.",
+      "answer": "EnableDnsSupport (default on) lets instances use AmazonProvidedDNS at VPC+2 to resolve aws rds endpoint hostnames to private IPs inside the VPC. EnableDnsHostnames gives public DNS names to instances with public IPs. Route 53 private hosted zones add custom internal names (api.internal.corp). On-prem analogy: internal DNS forwarders — except AWS provides the resolver automatically at the VPC base+2 address.",
+      "followUps": [
+        "What is enableDnsHostnames used for on an ALB?",
+        "How do you override DNS for hybrid on-premises?"
+      ],
+      "sixtySeconds": "DNS at VPC+2 resolves AWS service endpoints privately. Custom zones via Route 53 private hosted zone. Hostnames need EnableDnsHostnames for EC2 public DNS."
+    },
+    {
+      "question": "When do you need an Elastic IP versus relying on the ephemeral public IP?",
+      "answer": "Elastic IP when the public address must survive stop/start or be whitelisted by a partner — NAT Gateway always needs one. Ephemeral public IP is fine for short-lived bastions behind Session Manager instead of SSH. Elastic IPs cost when allocated but unassociated. Strong interview answer: default to no public IP on app servers; use load balancers and NAT.",
+      "followUps": [
+        "What happens to Elastic IP when you terminate the instance?",
+        "How does IPv6 avoid NAT for outbound?"
+      ],
+      "sixtySeconds": "EIP for stable address or NAT. Ephemeral changes on stop. Avoid public IPs on app tier — ALB + private subnets."
+    },
+    {
+      "question": "Trace an HTTPS request from a user to an ASP.NET Core app on EC2 in a private subnet behind an ALB.",
+      "answer": "User → Route 53 → ALB public DNS → ALB node in public subnet (IGW inbound) → target group to private EC2 on port 5000 → security group allows ALB SG inbound → response returns via ALB (connection terminated at ALB). EC2 never needs a public IP. Outbound patches from EC2 use NAT Gateway route. Same pattern as Node or Java behind ALB — security groups reference ALB SG, not 0.0.0.0/0 on app tier.",
+      "followUps": [
+        "Where does TLS terminate?",
+        "How would Lambda in VPC differ?"
+      ],
+      "sixtySeconds": "Internet → IGW → ALB public → private EC2 via SG. App has no public IP. Outbound via NAT. TLS usually at ALB."
+    },
+    {
+      "question": "What gets you rejected when drawing a VPC on a whiteboard?",
+      "answer": "Single NAT for all AZs, database in a public subnet, private subnet with 0.0.0.0/0 → IGW on app servers, forgetting that subnet route table association is what makes a subnet public or private, and security group 0.0.0.0/0 on SSH for 'convenience.' Strong diagram: IGW, per-AZ public/private pairs, per-AZ NAT, ALB spanning AZs, RDS in private subnet group.",
+      "followUps": [
+        "How do flow logs help prove your diagram?",
+        "When is a gateway endpoint better than NAT for S3?"
+      ],
+      "sixtySeconds": "Reject: one NAT, DB public, app with IGW route. Draw per-AZ NAT, private app tier, ALB only public entry."
+    }
+  ]
+}

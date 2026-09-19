@@ -1,0 +1,277 @@
+{
+  "id": "aws-10-s3-security-policies",
+  "slug": "s3-security-policies",
+  "title": "S3 security — bucket policies, ACLs, and encryption",
+  "moduleId": "aws-10-s3-storage",
+  "order": 4,
+  "hook": "Block Public Access is the default guardrail; bucket policies and IAM grant access; server-side encryption protects data at rest — avoid legacy ACLs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Amazon S3 security layers: Block Public Access settings, Identity and Access Management (IAM) identity policies, bucket policies (resource-based), optional Access Points, and legacy Access Control Lists (ACLs). Server-side encryption uses SSE-S3, SSE-KMS, or SSE-C. Presigned URLs grant time-limited access without making bucket public."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Block Public Access",
+              "longForm": "S3 Block Public Access",
+              "plainDefinition": "Account/bucket setting overriding public ACLs and policies.",
+              "example": "All four blocks enabled on new buckets."
+            },
+            {
+              "term": "Bucket policy",
+              "longForm": "S3 bucket policy",
+              "plainDefinition": "JSON resource policy on bucket for cross-account and service principals.",
+              "example": "Allow CloudFront OAC distribution ARN s3:GetObject."
+            },
+            {
+              "term": "SSE-KMS",
+              "longForm": "Server-side encryption with KMS",
+              "plainDefinition": "Encryption using AWS KMS key — audit trail per decrypt.",
+              "example": "aws:kms with customer managed CMK."
+            },
+            {
+              "term": "Presigned URL",
+              "longForm": "S3 presigned URL",
+              "plainDefinition": "Temporary signed URL for GetObject or PutObject.",
+              "example": "Browser direct upload without proxying through API."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Public bucket data breaches dominate headlines. CloudFront Origin Access Control (OAC) requires bucket policy allowing distribution. KMS key policies add audit but throttling risk on hot buckets."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Block Public Access on, bucket policy for services and cross-account, IAM for users/roles, SSE-KMS for audit, presigned URLs for uploads."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Secure bucket access",
+          "items": [
+            {
+              "title": "Enable Block Public Access",
+              "body": "All four settings at account and bucket level."
+            },
+            {
+              "title": "Encrypt default",
+              "body": "Default encryption SSE-S3 or SSE-KMS on bucket."
+            },
+            {
+              "title": "Bucket policy least privilege",
+              "body": "Specific principal, action, prefix condition."
+            },
+            {
+              "title": "IAM for identities",
+              "body": "Role for app/Lambda with s3:GetObject on needed prefix only."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "S3 access decision path",
+            "source": "flowchart TB\n  Req[Request] --> BPA{Block Public Access?}\n  BPA -->|public denied| Deny[Deny]\n  BPA --> IAM[IAM policy]\n  IAM --> BP[Bucket policy]\n  BP --> ACL[ACL legacy optional]\n  BP --> Allow[Allow if all pass + encryption OK]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "Deny unencrypted uploads",
+            "code": "{\n  \"Sid\": \"DenyUnencrypted\",\n  \"Effect\": \"Deny\",\n  \"Principal\": \"*\",\n  \"Action\": \"s3:PutObject\",\n  \"Resource\": \"arn:aws:s3:::my-bucket/*\",\n  \"Condition\": {\n    \"StringNotEquals\": {\n      \"s3:x-amz-server-side-encryption\": \"aws:kms\"\n    }\n  }\n}",
+            "explanation": "Bucket policy guardrail — rejects PutObject without KMS encryption header."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "json",
+            "label": "CloudFront OAC bucket policy",
+            "code": "{\n  \"Effect\": \"Allow\",\n  \"Principal\": { \"Service\": \"cloudfront.amazonaws.com\" },\n  \"Action\": \"s3:GetObject\",\n  \"Resource\": \"arn:aws:s3:::my-bucket/*\",\n  \"Condition\": {\n    \"StringEquals\": {\n      \"AWS:SourceArn\": \"arn:aws:cloudfront::123456789012:distribution/E1234567890\"\n    }\n  }\n}",
+            "explanation": "Only that CloudFront distribution reads objects — bucket stays private."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Generate presigned upload URL",
+            "code": "aws s3 presign s3://my-bucket/uploads/file.csv \\\n  --expires-in 3600",
+            "explanation": "Client PUTs directly to S3 — API does not proxy bytes. Validate content type in app."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Default KMS encryption on bucket",
+            "code": "SecureBucket:\n  Type: AWS::S3::Bucket\n  Properties:\n    BucketEncryption:\n      ServerSideEncryptionConfiguration:\n        - ServerSideEncryptionByDefault:\n            SSEAlgorithm: aws:kms\n            KMSMasterKeyID: !Ref DataKey\n          BucketKeyEnabled: true",
+            "explanation": "Bucket Key reduces KMS API calls and cost for high throughput."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Runtime and deployment parallels",
+          "headers": [
+            "Aspect",
+            "AWS pattern",
+            "JavaScript / TypeScript"
+          ],
+          "rows": [
+            [
+              "Public access",
+              "Block Public Access + private bucket",
+              "Express static files from public dir — different risk"
+            ],
+            [
+              "Auth",
+              "IAM + bucket policy + presigned URL",
+              "JWT auth middleware before file read"
+            ],
+            [
+              "Encryption at rest",
+              "SSE-S3/KMS automatic",
+              "App-level crypto before upload if client-side needed"
+            ],
+            [
+              "ACLs",
+              "Legacy — avoid",
+              "N/A"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Public Read bucket ACL for static site — use CloudFront OAC instead. Wildcard Principal * in bucket policy. KMS key policy missing for Lambda role causing AccessDenied on GetObject."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Access Points simplify policy for shared buckets with per-prefix IAM. Object Lambda for transform at read time. How to prove it in production: S3 server access logs or CloudTrail data events, IAM Access Analyzer findings on public buckets."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "SSE-S3",
+              "Simple default encryption",
+              "No per-object KMS audit"
+            ],
+            [
+              "SSE-KMS CMK",
+              "Audit and key rotation control",
+              "KMS quota throttling hot buckets"
+            ],
+            [
+              "Bucket policy Deny",
+              "Guardrails on encryption/VPC",
+              "Policy size limit 20KB"
+            ],
+            [
+              "Presigned URL",
+              "Direct client upload/download",
+              "URL leak = temporary breach window"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Making bucket public for CloudFront gets rejected — use OAC. Strong answer: Block Public Access, OAC policy, SSE-KMS, presigned for uploads."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Enable Block Public Access — default for new buckets.",
+    "Bucket policy for cross-account and service principals; IAM for roles.",
+    "Prefer SSE-KMS with bucket key for audit and cost balance.",
+    "60s: Block public. OAC for CloudFront. IAM least privilege prefix. SSE-KMS. Presigned URLs for direct upload.",
+    "Follow-up: SSE-S3 vs SSE-KMS tradeoff?"
+  ],
+  "commonPitfalls": [
+    "Public bucket for static assets — rejected.",
+    "Strong answer: private bucket + CloudFront OAC + bucket policy on distribution ARN.",
+    "Principal * without condition — overly broad.",
+    "Forgetting KMS key policy for Lambda execution role."
+  ],
+  "relatedTopicIds": [
+    "aws-10-s3-buckets-keys-prefixes",
+    "aws-10-s3-events-hosting",
+    "aws-11-lambda-triggers"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Presigned URL in Express",
+      "note": "API returns presigned PUT URL — browser uploads direct to S3 like signed upload token pattern.",
+      "futureTopicSlug": "aws/s3/presigned"
+    },
+    {
+      "language": "typescript",
+      "concept": "getSignedUrl from SDK v3",
+      "note": "S3Client + getSignedUrl — type-safe expiry and command; validate file type server-side after upload via S3 event.",
+      "futureTopicSlug": "aws/s3/sdk-signing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Blocking public access",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+    },
+    {
+      "title": "Bucket policies",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-policies.html"
+    }
+  ],
+  "animationHint": "request-path",
+  "scenarioTag": "auth-token"
+}

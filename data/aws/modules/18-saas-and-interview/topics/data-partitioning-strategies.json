@@ -1,0 +1,267 @@
+{
+  "id": "aws-18-data-partitioning-strategies",
+  "slug": "data-partitioning-strategies",
+  "title": "Data partitioning strategies (row, schema, database)",
+  "moduleId": "aws-18-saas-and-interview",
+  "order": 4,
+  "hook": "Data partitioning decides how tenant data coexists in storage. Row-level (shared tables), schema-per-tenant, or database-per-tenant each trade isolation, cost, and query complexity differently.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Row-level pooling: one schema, tenant_id column on every table — simplest, highest leak risk if queries miss filter. Schema-per-tenant: separate PostgreSQL schema per tenant — better isolation, migration complexity. Database-per-tenant: separate RDS instance or DynamoDB table per tenant — silo model, enterprise tier. DynamoDB partition key design can embed tenant_id for natural isolation."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Row-level",
+              "longForm": "Row-level partitioning",
+              "plainDefinition": "tenant_id column filters all queries",
+              "example": "WHERE tenant_id = $1"
+            },
+            {
+              "term": "Schema-per-tenant",
+              "longForm": "Schema per tenant",
+              "plainDefinition": "Separate PG schema per customer",
+              "example": "tenant_acme.orders table"
+            },
+            {
+              "term": "Database-per-tenant",
+              "longForm": "Database per tenant",
+              "plainDefinition": "Dedicated RDS per enterprise",
+              "example": "acme-prod-db instance"
+            },
+            {
+              "term": "Partition key",
+              "longForm": "DynamoDB partition key",
+              "plainDefinition": "Hash key including tenant_id",
+              "example": "pk = TENANT#42#ORDER#99"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Interviewers ask \"how do you prevent cross-tenant data leaks in a pooled database?\" and \"when move enterprise customer to dedicated DB?\" Partitioning strategy is the answer."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: row pool for scale, schema/db per tenant for isolation, DynamoDB tenant in partition key."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Mechanism",
+          "items": [
+            {
+              "title": "Choose default strategy",
+              "body": "Row-level pool for freemium; document upgrade triggers."
+            },
+            {
+              "title": "Enforce query scoping",
+              "body": "ORM global filter, Row Level Security (RLS) in PostgreSQL, code review rules."
+            },
+            {
+              "title": "Plan silo migration",
+              "body": "pg_dump tenant schema → restore to dedicated RDS; dual-write cutover."
+            },
+            {
+              "title": "Design DynamoDB keys",
+              "body": "Tenant prefix in pk: TENANT#<id>#ENTITY#<id> for natural isolation."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Partitioning levels",
+            "source": "flowchart TB\n  ROW[Row-level pool\\ntenant_id column] --> SCHEMA[Schema per tenant]\n  SCHEMA --> DB[Database per tenant]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "sql",
+            "label": "PostgreSQL Row Level Security",
+            "code": "ALTER TABLE orders ENABLE ROW LEVEL SECURITY;\nCREATE POLICY tenant_isolation ON orders\n  USING (tenant_id = current_setting('app.tenant_id')::uuid);",
+            "explanation": "DB-enforced isolation even if app forgets WHERE clause."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "sql",
+            "label": "Schema per tenant",
+            "code": "CREATE SCHEMA tenant_acme;\nCREATE TABLE tenant_acme.orders (order_id UUID, amount DECIMAL);",
+            "explanation": "Namespace isolation — migration scripts run per schema."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "typescript",
+            "label": "DynamoDB tenant partition key",
+            "code": "const item = {\n  pk: `TENANT#${tenantId}#ORDER#${orderId}`,\n  sk: 'METADATA',\n  amount: 99.00\n};",
+            "explanation": "Tenant in pk prevents cross-tenant GetItem without knowing key."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Export tenant schema for silo migration",
+            "code": "pg_dump -h pooled-db -n tenant_acme -Fc -f acme.dump\npg_restore -h acme-dedicated-db -d acme acme.dump",
+            "explanation": "Bridge model: migrate enterprise from pool schema to dedicated DB."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Cloud vs app patterns",
+          "headers": [
+            "Aspect",
+            "AWS",
+            "JS/TS"
+          ],
+          "rows": [
+            [
+              "Isolation",
+              "RLS + tenant_id",
+              "Separate MongoDB database per customer"
+            ],
+            [
+              "Scale",
+              "Row pool single DB",
+              "DB per tenant ops at 10k tenants"
+            ],
+            [
+              "Migration",
+              "Schema export to silo DB",
+              "ETL to new cluster"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "ORM query without tenant filter — classic data leak. Database-per-tenant for 50k free users. No RLS backup when relying only on application code."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: automated tests inject wrong tenant_id and assert  zero rows returned; RLS enabled on all pooled tables; migration runbook tested quarterly."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": [
+            "Pattern",
+            "Win",
+            "Cost / risk"
+          ],
+          "rows": [
+            [
+              "Row + RLS",
+              "Scale + DB-enforced safety",
+              "RLS performance overhead"
+            ],
+            [
+              "Schema per tenant",
+              "Middle isolation",
+              "Connection pool per schema costly"
+            ],
+            [
+              "DB per tenant",
+              "Maximum isolation",
+              "Ops and cost per customer"
+            ]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Trusting developers to always add WHERE tenant_id — rejected. Strong answer: RLS + middleware + integration tests + code review."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Row pool default; schema or DB per tenant for enterprise silo.",
+    "PostgreSQL RLS enforces tenant isolation at database layer.",
+    "DynamoDB: embed tenant_id in partition key design.",
+    "60s: Row-level for scale with RLS safety net. Schema/DB per tenant for silo. Test cross-tenant access fails. Migration runbook for tier upgrades.",
+    "Follow-up: RLS performance impact at scale?"
+  ],
+  "commonPitfalls": [
+    "No tenant filter in ORM query — data leak, interview failure.",
+    "Strong answer: RLS, middleware tenant context, automated isolation tests.",
+    "DB per tenant for all free users — cost kill.",
+    "RLS not enabled — single bug leaks all data."
+  ],
+  "relatedTopicIds": [
+    "aws-18-tenancy-models-silo-pool-bridge",
+    "aws-18-vpc-per-tenant-vs-pool",
+    "aws-18-noisy-neighbor-fairness"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Prisma middleware",
+      "note": "Prisma $use middleware injects tenant_id filter on every query — app-layer RLS equivalent.",
+      "futureTopicSlug": "javascript/orm/prisma"
+    },
+    {
+      "language": "typescript",
+      "concept": "Type-safe queries",
+      "note": "Repository pattern requiring TenantId parameter prevents unscoped queries at compile time.",
+      "futureTopicSlug": "typescript/saas/data"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "SaaS Lens — AWS Well-Architected Framework",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/saas-lens.html"
+    },
+    {
+      "title": "Data partitioning",
+      "url": "https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/data-partitioning.html"
+    }
+  ],
+  "animationHint": "compare",
+  "scenarioTag": "redis-cache"
+}

@@ -1,0 +1,198 @@
+{
+  "id": "aws-06-vpn-direct-connect",
+  "slug": "vpn-direct-connect",
+  "title": "Site-to-Site VPN and Direct Connect (overview)",
+  "moduleId": "aws-06-vpc-connectivity",
+  "order": 4,
+  "hook": "Site-to-Site VPN encrypts traffic over the public internet between your data center and AWS. AWS Direct Connect (DX) provides a private network path with consistent latency — production hybrid designs almost always pair DX primary with VPN backup and BGP routing.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Site-to-Site VPN creates two redundant IPsec tunnels between a Customer Gateway (your router) and AWS — terminating on a Virtual Private Gateway (VGW) or Transit Gateway. Direct Connect is a dedicated or hosted Layer 2/3 circuit at an AWS Direct Connect location; Private Virtual Interface (VIF) reaches VPC or TGW, Public VIF reaches AWS public services without traversing the internet."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            { "term": "CGW", "longForm": "Customer Gateway", "plainDefinition": "AWS resource describing your on-premises VPN endpoint and BGP ASN.", "example": "cgw-dc1 with public IP 203.0.113.10." },
+            { "term": "VGW", "longForm": "Virtual Private Gateway", "plainDefinition": "AWS-side VPN termination on a VPC — legacy; TGW preferred for multi-VPC.", "example": "vgw-prod attached to single VPC." },
+            { "term": "Private VIF", "longForm": "Direct Connect Private Virtual Interface", "plainDefinition": "DX logical interface carrying private RFC1918 traffic to VPC or TGW.", "example": "VIF VLAN 100 to Direct Connect Gateway." },
+            { "term": "BGP", "longForm": "Border Gateway Protocol", "plainDefinition": "Dynamic routing protocol exchanging prefixes between on-prem and AWS.", "example": "Advertise 172.16.0.0/12 from data center; AWS advertises 10.0.0.0/8." }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Hybrid workloads — Active Directory, Oracle RAC stretch, mainframe batch — need predictable connectivity. VPN is quick to deploy; DX is the steady-state pipe. Senior interviews expect dual-tunnel VPN redundancy, BGP failover, and why DX plus VPN beats VPN-only for production."
+        },
+        {
+          "type": "callout",
+          "variant": "remember",
+          "title": "HA pattern",
+          "body": "Two VPN tunnels per connection; DX as primary with VPN backup; monitor BGP and tunnel telemetry, not just ping."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Hybrid attachment paths",
+          "items": [
+            { "title": "VPN setup", "body": "Create CGW → VPN connection → configure router with AWS-provided IPsec → BGP or static routes." },
+            { "title": "DX setup", "body": "Order port or hosted connection → create Private VIF → attach Direct Connect Gateway to TGW." },
+            { "title": "Centralize on TGW", "body": "Modern designs terminate VPN and DX on TGW, not per-VPC VGW." },
+            { "title": "Failover", "body": "BGP withdraws failed path; backup tunnel or VPN carries traffic after convergence." }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "DX primary, VPN backup",
+            "source": "flowchart LR\n  DC[Data center] -->|IPsec| VPN[Site-to-Site VPN]\n  DC -->|Private circuit| DX[Direct Connect]\n  VPN --> TGW[Transit Gateway]\n  DX --> TGW\n  TGW --> VPC[VPC workloads]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — VPN to Transit Gateway with BGP",
+            "code": "aws ec2 create-customer-gateway \\\n  --type ipsec.1 --public-ip 203.0.113.10 --bgp-asn 65000\n\naws ec2 create-vpn-connection \\\n  --type ipsec.1 \\\n  --customer-gateway-id cgw-0abc \\\n  --transit-gateway-id tgw-0abc \\\n  --options StaticRoutesOnly=false",
+            "explanation": "StaticRoutesOnly=false enables BGP. AWS creates two tunnels automatically for redundancy."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "CloudFormation — Direct Connect Private VIF",
+            "code": "DxPrivateVif:\n  Type: AWS::DirectConnect::VirtualInterface\n  Properties:\n    ConnectionId: !Ref DxConnection\n    VirtualInterfaceType: private\n    Vlan: 100\n    AddressFamily: ipv4\n    BgpAsn: 64512\n    AmazonAddress: 169.254.10.1/30\n    CustomerAddress: 169.254.10.2/30\n    DirectConnectGatewayId: !Ref DxGateway",
+            "explanation": "Private VIF pairs with Direct Connect Gateway for attachment to TGW or multiple VPC CIDRs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — VPN tunnel telemetry",
+            "code": "aws ec2 describe-vpn-connections \\\n  --vpn-connection-ids vpn-0abc \\\n  --query 'VpnConnections[0].VgwTelemetry[*].[OutsideIpAddress,Status,LastStatusChange]'",
+            "explanation": "Check UP/DOWN per tunnel before blaming application timeouts during maintenance."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "CLI — DX connection health",
+            "code": "aws directconnect describe-connections \\\n  --connection-id dxcon-0abc \\\n  --query 'connections[0].{State:connectionState,Bandwidth:bandwidth,Location:location}'",
+            "explanation": "Verify available state before troubleshooting BGP on the Private VIF."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with JavaScript and TypeScript",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Hybrid application paths",
+          "headers": ["Aspect", "VPN / Direct Connect", "Node.js / TypeScript on-prem"],
+          "rows": [
+            ["AWS SDK from data center", "Public VIF or VPN path to AWS APIs", "SDK retries during BGP convergence matter"],
+            ["Latency to VPC ALB", "DX stable; VPN variable over internet", "Keep-alive pools benefit from DX"],
+            ["Bulk transfer", "DX committed bandwidth", "VPN may throttle large S3 uploads"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "NAT on-prem breaking IPsec identity. MTU/MSS mismatch causing silent TCP hangs. Static routes without monitoring backup tunnel during DX maintenance."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Accelerated Site-to-Site VPN uses AWS edge POPs for lower latency than standard VPN. DX has physical lead time — order early. True DX HA needs separate connections, not just dual VIFs on one port. How to prove it in production: CloudWatch VPN TunnelState metrics; DX ConnectionErrorCount; traceroute from on-prem shows DX path; capture BGP table during failover drill."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Win", "Cost / risk"],
+          "rows": [
+            ["VPN only", "Fast hybrid MVP", "Internet jitter; not for 10G steady state"],
+            ["DX primary + VPN backup", "Production HA hybrid", "DX provisioning lead time and cost"],
+            ["VGW per VPC", "Simple single-VPC link", "Does not scale; TGW is modern hub"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Saying VPN and Direct Connect are interchangeable for production bulk transfer. Strong answer: VPN is IPsec over internet with variable path; DX is private circuit with committed bandwidth — combine for HA."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Site-to-Site VPN: dual IPsec tunnels, terminates on VGW or TGW, BGP or static routes.",
+    "Direct Connect: Private VIF to VPC/TGW; Public VIF to AWS public endpoints — not the same as VPN.",
+    "Production hybrid: DX primary, VPN backup, BGP preference, quarterly failover drills.",
+    "60s: VPN = encrypted internet. DX = private line. Both attach to TGW in modern designs. BGP for failover. Monitor tunnel telemetry.",
+    "Follow-up: what breaks if only one VPN tunnel is UP?"
+  ],
+  "commonPitfalls": [
+    "Calling VPN just as good as DX for steady 10G replication — interviewers reject that; name latency and bandwidth commitments.",
+    "Strong answer: DX private path plus VPN backup with BGP; monitor both layers.",
+    "Single VPN tunnel treated as HA — AWS provides two tunnels; on-prem must use both.",
+    "Static routing without tested failover — silent outage when DX maintenance window starts."
+  ],
+  "relatedTopicIds": [
+    "aws-06-transit-gateway",
+    "aws-06-hybrid-scenario",
+    "aws-06-vpc-peering",
+    "aws-07-security-groups"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "On-prem Node to AWS SDK",
+      "note": "JavaScript workers in a data center may reach AWS APIs over Public VIF while application traffic uses Private VIF to VPC — different paths like split-horizon DNS in corporate networks.",
+      "futureTopicSlug": "javascript/cloud/aws-networking"
+    },
+    {
+      "language": "typescript",
+      "concept": "Migration batch jobs",
+      "note": "TypeScript DataSync or custom upload scripts should prefer DX path; implement retry with backoff during VPN failover when BGP converges.",
+      "futureTopicSlug": "typescript/cloud/aws-networking"
+    }
+  ],
+  "officialSources": [
+    { "title": "Site-to-Site VPN", "url": "https://docs.aws.amazon.com/vpn/latest/s2svpn/VPC_VPN.html" },
+    { "title": "Direct Connect User Guide", "url": "https://docs.aws.amazon.com/directconnect/latest/UserGuide/Welcome.html" }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "datasync-migration"
+}

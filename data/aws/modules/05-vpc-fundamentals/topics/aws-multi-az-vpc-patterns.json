@@ -1,0 +1,233 @@
+{
+  "id": "aws-05-aws-multi-az-vpc-patterns",
+  "slug": "aws-multi-az-vpc-patterns",
+  "title": "Multi-Availability Zone VPC design patterns",
+  "moduleId": "aws-05-vpc-fundamentals",
+  "order": 7,
+  "hook": "Production VPC design mirrors Availability Zone boundaries: public and private subnet pairs per AZ, NAT Gateway per AZ, Application Load Balancer spanning AZs, and databases in private subnets with Multi-AZ — one AZ can fail without taking down the entire application.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "The standard highly available VPC pattern places an Internet Gateway on the VPC, two or more public subnets (one per AZ) for ALB and NAT Gateway, and matching private subnets for compute and data. Each private subnet in an AZ routes 0.0.0.0/0 to a NAT Gateway in the public subnet of the same AZ. ALB registers targets across AZ private subnets. RDS subnet group spans private subnets; RDS Multi-AZ keeps synchronous standby in another AZ."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Subnet pair",
+              "longForm": "Public/private subnet pair per AZ",
+              "plainDefinition": "Matched public and private subnets in each Availability Zone.",
+              "example": "ap-south-1a: 10.0.1.0/24 public + 10.0.10.0/24 private."
+            },
+            {
+              "term": "Cross-zone load balancing",
+              "longForm": "Application Load Balancer cross-zone",
+              "plainDefinition": "ALB sends traffic to healthy targets in any enabled AZ.",
+              "example": "AZ-a outage — ALB serves from AZ-b targets only."
+            },
+            {
+              "term": "Subnet group",
+              "longForm": "DB subnet group",
+              "plainDefinition": "RDS requirement spanning subnets in at least two AZs.",
+              "example": "Private subnets in 1a and 1b for Multi-AZ PostgreSQL."
+            },
+            {
+              "term": "AZ impairment",
+              "longForm": "Availability Zone impairment",
+              "plainDefinition": "Partial or full loss of one AZ — design goal is continued service.",
+              "example": "Lost NAT in 1a affects only 1a private egress if isolated RTs."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "This is the VPC diagram interviewers ask you to draw from memory. Single-AZ VPC patterns fail real outages. Cost of three NAT Gateways is cheaper than hours of company-wide egress outage. C# ASP.NET Core on EC2, Node on ECS, or Java on EKS all sit in the same VPC skeleton."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Draw IGW, per-AZ public (ALB+NAT), per-AZ private (app+DB), per-AZ private RT to local NAT, RDS Multi-AZ, ALB cross-zone enabled."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Three-AZ production pattern",
+          "items": [
+            {
+              "title": "VPC /16 CIDR",
+              "body": "Plan three public /24 and three private /24 blocks across AZs."
+            },
+            {
+              "title": "Edge tier",
+              "body": "IGW attached; ALB in public subnets; security group allows 443 from internet to ALB only."
+            },
+            {
+              "title": "App tier",
+              "body": "EC2/ECS/EKS in private subnets; SG allows traffic from ALB SG only."
+            },
+            {
+              "title": "Data tier",
+              "body": "RDS Multi-AZ in private subnet group; no public accessibility."
+            },
+            {
+              "title": "Egress tier",
+              "body": "NAT Gateway + EIP in each public subnet; private RT per AZ points to local NAT."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Three-AZ VPC pattern",
+            "source": "flowchart TB\n  IGW[Internet Gateway]\n  subgraph AZa[\"AZ-a\"]\n    PubA[Public + NAT + ALB]\n    PrivA[Private app]\n  end\n  subgraph AZb[\"AZ-b\"]\n    PubB[Public + NAT + ALB]\n    PrivB[Private app]\n  end\n  subgraph AZc[\"AZ-c\"]\n    PubC[Public + NAT + ALB]\n    PrivC[Private app]\n  end\n  Internet((Internet)) --> IGW --> PubA\n  IGW --> PubB\n  IGW --> PubC\n  PubA --> PrivA\n  PubB --> PrivB\n  PubC --> PrivC\n  PrivA --> RDS[(RDS Multi-AZ)]\n  PrivB --> RDS\n  PrivC --> RDS"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Multi-AZ ALB and target group",
+            "code": "ApplicationLoadBalancer:\n  Type: AWS::ElasticLoadBalancingV2::LoadBalancer\n  Properties:\n    Scheme: internet-facing\n    Subnets:\n      - !Ref PublicSubnetA\n      - !Ref PublicSubnetB\n      - !Ref PublicSubnetC\n    SecurityGroups:\n      - !Ref AlbSecurityGroup\nAppTargetGroup:\n  Type: AWS::ElasticLoadBalancingV2::TargetGroup\n  Properties:\n    Port: 8080\n    Protocol: HTTP\n    VpcId: !Ref AppVpc\n    TargetType: instance\n    HealthCheckPath: /health",
+            "explanation": "ALB requires minimum two subnets in two AZs. Targets register from private subnets across AZs."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "RDS Multi-AZ in private subnet group",
+            "code": "DbSubnetGroup:\n  Type: AWS::RDS::DBSubnetGroup\n  Properties:\n    SubnetIds:\n      - !Ref PrivateSubnetA\n      - !Ref PrivateSubnetB\n      - !Ref PrivateSubnetC\nProdDatabase:\n  Type: AWS::RDS::DBInstance\n  Properties:\n    Engine: postgres\n    MultiAZ: true\n    DBSubnetGroupName: !Ref DbSubnetGroup\n    PubliclyAccessible: false",
+            "explanation": "MultiAZ true creates synchronous standby in another AZ. PubliclyAccessible false keeps database off internet path."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Validate subnet AZ spread",
+            "code": "aws ec2 describe-subnets \\\n  --filters Name=vpc-id,Values=vpc-0prod123 \\\n  --query \"Subnets[].{Subnet:SubnetId,Cidr:CidrBlock,AZ:AvailabilityZone}\" \\\n  --output table",
+            "explanation": "Confirm public and private subnets exist in each AZ before declaring HA complete."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Multi-AZ VPC vs dual-site on-prem",
+          "headers": ["Aspect", "Multi-AZ VPC", "On-premises / C# backend"],
+          "rows": [
+            ["HA scope", "Survive one AZ / data center loss in Region", "Survive one hall or site"],
+            ["Load balancing", "ALB across AZ subnets", "NLB/ARR across two halls"],
+            ["SQL HA", "RDS Multi-AZ failover", "SQL Server Always On AG"],
+            ["ASP.NET Core", "Same Docker image to ECS tasks in each AZ", "Same MSI deploy to both halls"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Single NAT shared across AZs. ALB in one public subnet only (needs two AZ minimum). RDS in one private subnet single-AZ. App SG allowing 0.0.0.0/0 instead of ALB SG reference. Forgetting VPC endpoints and overloading NAT."
+        }
+      ]
+    },
+    {
+      "heading": "Senior interview depth",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "How to prove it in production: GameDay AZ failure simulation — disable one AZ subnet route or use fault injection; verify ALB healthy target count and RDS failover time. CloudWatch alarms on NAT per AZ. Cost optimization: reduce to two AZs if third AZ adds little benefit for small workloads — but never one AZ for prod. EKS: pods spread with topologySpreadConstraints; Fargate: platform version across AZ subnets. Flow logs per tier prove traffic never hits IGW from database subnets."
+        },
+        {
+          "type": "comparisonTable",
+          "title": "Tradeoffs at senior level",
+          "headers": ["Pattern", "Benefit", "Cost / risk"],
+          "rows": [
+            ["3 AZ + 3 NAT", "Highest AZ fault tolerance", "3× NAT hourly cost"],
+            ["2 AZ + 2 NAT", "Common prod minimum", "Lose one AZ capacity slice on impairment"],
+            ["1 AZ lab", "Cheap dev/test", "Not production — say so explicitly in interview"],
+            ["Aurora cross-AZ cluster", "Storage replicated across AZs", "Writer in one AZ — readers in others for scale"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "What gets you rejected in interviews",
+          "body": "Whiteboard with one public subnet, one private subnet, one NAT, RDS public. Strong answer: labeled AZ columns, ALB only public entry, SG references not CIDRs, Multi-AZ RDS, NAT per AZ."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Production VPC = public + private subnet pair per AZ, NAT per AZ, ALB across public subnets, RDS Multi-AZ in private subnet group.",
+    "Route tables must isolate NAT failure to the affected AZ only.",
+    "Application security groups reference ALB security group — not open internet on app ports.",
+    "60s: Draw three AZ columns. IGW top. ALB+NAT public each AZ. App private. RDS Multi-AZ private. NAT per AZ RT.",
+    "Follow-up: when is two AZ enough versus three?"
+  ],
+  "commonPitfalls": [
+    "Single NAT diagram gets you rejected immediately in senior VPC interviews.",
+    "Strong answer: complete labeled multi-AZ diagram with SG relationships stated aloud.",
+    "ALB with one subnet — CloudFormation deploy failure or no HA.",
+    "Multi-AZ RDS but app tier single-AZ — DB fails over while all app capacity was in dead AZ."
+  ],
+  "relatedTopicIds": [
+    "aws-05-aws-vpc-cidr-subnets",
+    "aws-05-aws-nat-gateway",
+    "aws-05-aws-route-tables",
+    "aws-02-aws-availability-zones"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "ECS service AZ spread",
+      "note": "Fargate service desiredCount 3 across three AZ subnets — same as running three Node PM2 clusters in three on-prem halls behind a load balancer.",
+      "futureTopicSlug": "aws/ecs/multi-az"
+    },
+    {
+      "language": "typescript",
+      "concept": "Health check driven drain",
+      "note": "When AZ-a impaired, ALB drains unhealthy targets — TypeScript API pods in AZ-b absorb load like C# web farm losing one hall without DNS change.",
+      "futureTopicSlug": "aws/elb/az-failover"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "VPC with public and private subnets (NAT)",
+      "url": "https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Scenario2.html"
+    },
+    {
+      "title": "Application Load Balancer subnets",
+      "url": "https://docs.aws.amazon.com/elasticloadbalancing/latest/application/application-load-balancers.html#subnets-load-balancer"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "high-concurrency"
+}

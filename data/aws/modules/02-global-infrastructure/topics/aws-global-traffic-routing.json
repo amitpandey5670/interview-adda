@@ -1,0 +1,202 @@
+{
+  "id": "aws-02-aws-global-traffic-routing",
+  "slug": "aws-global-traffic-routing",
+  "title": "Global traffic routing overview (Route 53 and CloudFront)",
+  "moduleId": "aws-02-global-infrastructure",
+  "order": 6,
+  "hook": "Amazon Route 53 routes users to healthy endpoints by DNS policy. Amazon CloudFront caches and terminates TLS at edge. Together they form the global entry layer — while your compute and data still live in Regional VPCs.",
+  "sections": [
+    {
+      "heading": "What is this?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Route 53 is AWS DNS with routing policies: simple, weighted, latency-based, geolocation, geoproximity, and failover. Health checks remove unhealthy records. CloudFront sits in front of HTTP origins for static and dynamic content, using edge PoPs worldwide. Global Accelerator provides static anycast IPs for TCP/UDP with path optimization — complementary to Route 53 and CloudFront for different layers."
+        },
+        {
+          "type": "glossary",
+          "title": "Key terms",
+          "entries": [
+            {
+              "term": "Route 53",
+              "longForm": "Amazon Route 53",
+              "plainDefinition": "AWS scalable DNS and domain registration service.",
+              "example": "Latency routing to ap-south-1 ALB vs eu-west-1 ALB."
+            },
+            {
+              "term": "Failover routing",
+              "longForm": "Route 53 failover policy",
+              "plainDefinition": "Primary record when healthy; secondary when health check fails.",
+              "example": "DR ALB becomes active when primary health check fails."
+            },
+            {
+              "term": "CloudFront",
+              "longForm": "Amazon CloudFront",
+              "plainDefinition": "Content delivery network caching at edge PoPs.",
+              "example": "Global users fetch SPA assets from nearest PoP."
+            },
+            {
+              "term": "Health check",
+              "longForm": "Route 53 health check",
+              "plainDefinition": "HTTP/HTTPS/TCP probe that drives DNS failover decisions.",
+              "example": "Check https://api.example.com/health every 30 seconds."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Why does it matter?",
+      "blocks": [
+        {
+          "type": "prose",
+          "text": "Users experience your product through DNS and edge first. Misconfigured routing sends Mumbai users to Virginia. Failover without health checks prolongs outages. Caching APIs at CloudFront without careful TTL leaks data across users. Senior designs separate static edge delivery from Regional API with explicit policies."
+        },
+        {
+          "type": "callout",
+          "variant": "tip",
+          "title": "Interview framing",
+          "body": "Say: Route 53 picks Region/endpoint; CloudFront caches safe static content at edge; origins stay in VPC. Failover needs health checks and runbooks."
+        }
+      ]
+    },
+    {
+      "heading": "How it works step by step",
+      "blocks": [
+        {
+          "type": "steps",
+          "title": "Global request path",
+          "items": [
+            {
+              "title": "User resolves DNS",
+              "body": "Route 53 returns CloudFront domain or Regional ALB based on policy."
+            },
+            {
+              "title": "Edge handles cacheable traffic",
+              "body": "CloudFront serves HIT from PoP; MISS fetches origin in Region."
+            },
+            {
+              "title": "API traffic to Region",
+              "body": "/api/* behavior forwards to ALB with low or zero TTL."
+            },
+            {
+              "title": "Failover on outage",
+              "body": "Health check fails primary; DNS shifts to secondary Region record."
+            }
+          ]
+        },
+        {
+          "type": "diagram",
+          "diagram": {
+            "type": "mermaid",
+            "title": "Route 53 and CloudFront together",
+            "source": "flowchart LR\n  U[Global users] --> R53[Route 53 DNS]\n  R53 --> CF[CloudFront]\n  CF -->|static HIT| U\n  CF -->|/api MISS| ALB1[ALB ap-south-1]\n  R53 -->|failover| ALB2[ALB eu-west-1 DR]\n  ALB1 --> APP[Private EC2 / ECS]"
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Code walkthrough",
+      "blocks": [
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "yaml",
+            "label": "Route 53 failover records",
+            "code": "PrimaryRecord:\n  Type: AWS::Route53::RecordSet\n  Properties:\n    HostedZoneId: !Ref HostedZone\n    Name: api.example.com\n    Type: A\n    SetIdentifier: primary\n    Failover: PRIMARY\n    AliasTarget:\n      DNSName: !GetAtt PrimaryAlb.DNSName\n      HostedZoneId: !GetAtt PrimaryAlb.CanonicalHostedZoneID\n    HealthCheckId: !Ref PrimaryHealthCheck\nSecondaryRecord:\n  Type: AWS::Route53::RecordSet\n  Properties:\n    SetIdentifier: secondary\n    Failover: SECONDARY\n    AliasTarget:\n      DNSName: !GetAtt DrAlb.DNSName\n      HostedZoneId: !GetAtt DrAlb.CanonicalHostedZoneID",
+            "explanation": "Secondary serves only when primary health check fails. TTL on alias records follows AWS defaults — plan DNS propagation in runbook."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Create HTTP health check",
+            "code": "aws route53 create-health-check \\\n  --health-check-config \\\n    IPAddress=203.0.113.10,Port=443,Type=HTTPS,ResourcePath=/health,FullyQualifiedDomainName=api.example.com",
+            "explanation": "Health check must reach a public endpoint or use CloudWatch alarm for private ALB patterns."
+          }
+        },
+        {
+          "type": "snippet",
+          "snippet": {
+            "language": "bash",
+            "label": "Latency-based routing policy test",
+            "code": "dig +short api.example.com @ns-123.awsdns-45.com\n# Repeat from different geographic vantage or Route 53 Resolver",
+            "explanation": "Latency policy returns different ALB aliases depending on resolver location — validate with probes, not assumption."
+          }
+        }
+      ]
+    },
+    {
+      "heading": "Compare with on-premises and C# backends",
+      "blocks": [
+        {
+          "type": "comparisonTable",
+          "title": "Global routing vs on-prem GSLB",
+          "headers": ["Aspect", "Route 53 + CloudFront", "On-premises / C# backend"],
+          "rows": [
+            ["DNS failover", "Health-checked records, weighted/latency policies", "Hardware GSLB or DNS provider you manage"],
+            ["Static content", "CloudFront edge cache globally", "Single CDN vendor or no CDN"],
+            ["API routing", "Alias to Regional ALB; TLS at ALB or CloudFront", "F5/NGINX in each datacenter"],
+            ["ASP.NET Core", "Same Kestrel app in each Region behind ALB", "Same binaries in primary and DR site"]
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Common mistakes",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Pitfalls to avoid",
+          "body": "Failover without testing secondary Region capacity. Caching authenticated API at edge. Health check hitting private subnet without CloudWatch alarm pattern. Expecting instant DNS failover worldwide — TTL and resolver cache matter. Active-active databases without conflict strategy."
+        }
+      ]
+    }
+  ],
+  "interviewTakeaways": [
+    "Route 53 routing policies direct users to healthy Regional endpoints; health checks drive failover.",
+    "CloudFront caches at edge; origins remain in Regions — separate behaviors for /assets vs /api.",
+    "Multi-Region DR needs runbooks, RPO/RTO, and tested secondary capacity — DNS alone is not enough.",
+    "60s: DNS policy + health checks for Regional failover. CloudFront for static edge. API to ALB with TTL 0.",
+    "Follow-up: how do you health-check a private ALB for Route 53?"
+  ],
+  "commonPitfalls": [
+    "Saying CloudFront replaces multi-AZ gets you rejected — edge does not host your database.",
+    "Strong answer: name routing policy, health check, what fails over, RPO/RTO for data.",
+    "Caching /api responses with shared cache key — user A sees user B data.",
+    "DR Region cold — failover succeeds in DNS but secondary cannot handle load."
+  ],
+  "relatedTopicIds": [
+    "aws-02-aws-edge-locations",
+    "aws-02-aws-choosing-region-az",
+    "aws-05-aws-internet-gateway"
+  ],
+  "jsTsCorrelations": [
+    {
+      "language": "javascript",
+      "concept": "Client-side API base URL",
+      "note": "Front-end fetch('https://api.example.com') relies on Route 53 resolution — same as Angular environment.ts apiUrl pointing at load-balanced C# API on-prem.",
+      "futureTopicSlug": "aws/route53/dns-policies"
+    },
+    {
+      "language": "typescript",
+      "concept": "Edge vs origin fetch",
+      "note": "Next.js static assets on CloudFront with SSR origin in Region mirrors ASP.NET Core static files on CDN plus API on Kestrel — two paths, two cache policies.",
+      "futureTopicSlug": "aws/cloudfront/dynamic-routing"
+    }
+  ],
+  "officialSources": [
+    {
+      "title": "Route 53 routing policies",
+      "url": "https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html"
+    },
+    {
+      "title": "CloudFront how it works",
+      "url": "https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/HowCloudFrontWorks.html"
+    }
+  ],
+  "animationHint": "network-flow",
+  "scenarioTag": "cloudfront-origin"
+}
