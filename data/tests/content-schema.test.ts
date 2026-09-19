@@ -62,20 +62,20 @@ function listModuleFolders(language: string): string[] {
     .sort();
 }
 
-function collectTopicIds(language: string): Set<string> {
-  const ids = new Set<string>();
-  for (const folder of listModuleFolders(language)) {
-    const topicsDir = path.join(folder, 'topics');
-    if (!existsSync(topicsDir)) {
-      continue;
-    }
-    for (const file of readdirSync(topicsDir).filter((name) => name.endsWith('.json'))) {
-      const topic = loadJson(path.join(topicsDir, file)) as Topic;
-      ids.add(topic.id);
-    }
-  }
-  return ids;
-}
+// function collectTopicIds(language: string): Set<string> {
+//   const ids = new Set<string>();
+//   for (const folder of listModuleFolders(language)) {
+//     const topicsDir = path.join(folder, 'topics');
+//     if (!existsSync(topicsDir)) {
+//       continue;
+//     }
+//     for (const file of readdirSync(topicsDir).filter((name) => name.endsWith('.json'))) {
+//       const topic = loadJson(path.join(topicsDir, file)) as Topic;
+//       ids.add(topic.id);
+//     }
+//   }
+//   return ids;
+// }
 
 function isUpgradedMindmap(mindmap: Mindmap): boolean {
   return Boolean(mindmap.overviewDiagram && (mindmap.conceptCards?.length ?? 0) >= 4);
